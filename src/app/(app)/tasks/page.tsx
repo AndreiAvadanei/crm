@@ -8,11 +8,15 @@ import {
   type DueWindow,
   type TaskStatusFilter,
 } from "@/lib/filter-helpers";
+import { LIST_FETCH_CAP } from "@/lib/app-constants";
 import { PageHeader } from "@/components/app/page-header";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { TaskRow, type TaskRowData } from "@/components/tasks/task-row";
+import { type TaskRowData } from "@/components/tasks/task-row";
 import { TasksFilterBar } from "@/components/tasks/tasks-filter-bar";
+import { TasksBoard } from "@/components/tasks/tasks-board";
+
+export const metadata = {
+  title: "Tasks",
+};
 
 export default async function TasksPage({
   searchParams,
@@ -51,8 +55,12 @@ export default async function TasksPage({
     prisma.task.findMany({
       where,
       include: { deal: { select: { salesId: true, title: true } }, assignee: true },
-      orderBy: [{ dueDate: "asc" }, { createdAt: "desc" }],
-      take: 200,
+      // Urgency first (CRITICAL -> LOW), then soonest due date, then newest.
+      orderBy: [{ urgency: "desc" }, { dueDate: "asc" }, { createdAt: "desc" }],
+      // Rows are split into overdue/upcoming in memory below; a cap under the
+      // real count would clip whole sections (MySQL clusters NULL due dates at
+      // the front), so load the full visible set (see LIST_FETCH_CAP).
+      take: LIST_FETCH_CAP,
     }),
     admin ? getOwners() : Promise.resolve([]),
   ]);
@@ -61,6 +69,7 @@ export default async function TasksPage({
     id: t.id,
     title: t.title,
     type: t.type,
+    urgency: t.urgency,
     dueDate: t.dueDate ? t.dueDate.toISOString().slice(0, 10) : null,
     overdue: !!(t.dueDate && t.dueDate < now),
     dealSalesId: t.deal.salesId,
@@ -78,34 +87,7 @@ export default async function TasksPage({
       <div className="px-4 pt-4 md:px-6">
         <TasksFilterBar owners={owners} showAssigneeFilter={admin} />
       </div>
-      <div className="grid gap-6 p-4 md:grid-cols-2 md:p-6">
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-destructive">
-              Overdue <Badge variant="destructive">{overdue.length}</Badge>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {overdue.map((t) => (
-              <TaskRow key={t.id} task={t} owners={owners} admin={admin} />
-            ))}
-            {overdue.length === 0 && <p className="text-sm text-muted-foreground">Nothing overdue. </p>}
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              Upcoming <Badge variant="secondary">{upcoming.length}</Badge>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {upcoming.map((t) => (
-              <TaskRow key={t.id} task={t} owners={owners} admin={admin} />
-            ))}
-            {upcoming.length === 0 && <p className="text-sm text-muted-foreground">No upcoming tasks.</p>}
-          </CardContent>
-        </Card>
-      </div>
+      <TasksBoard overdue={overdue} upcoming={upcoming} owners={owners} admin={admin} />
     </div>
   );
 }

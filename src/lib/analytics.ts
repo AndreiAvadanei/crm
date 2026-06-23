@@ -38,6 +38,8 @@ export type Kpis = {
   openCount: number;
   closedCount: number;
   totalCount: number;
+  /** Average days from creation to win (won deals with a closedAt only). */
+  avgDaysToClose: number;
 };
 
 export type StatusBucket = { count: number; value: number };
@@ -144,7 +146,12 @@ export type SellerStats = {
   name: string;
   avatarColor: string;
   role: string;
+  /** KPIs over the requested window (honours from/to + activeOnly). */
   kpis: Kpis;
+  /** Year × period (quarter/semester/year) win-rate & value matrix, all-time. */
+  scorecard: Scorecard;
+  /** Monthly created-vs-won trend across the window. */
+  series: TimePoint[];
 };
 
 // ---------------------------------------------------------------------------
@@ -256,12 +263,21 @@ function computeKpis(deals: DealLite[]): Kpis {
   let wonCount = 0;
   let lostCount = 0;
   let openCount = 0;
+  let cycleDaysSum = 0;
+  let cycleCount = 0;
 
   for (const d of deals) {
     const v = amt(d);
     if (d.stage.isWon) {
       wonCount += 1;
       totalWon += v;
+      if (d.closedAt) {
+        const days = (d.closedAt.getTime() - d.createdAt.getTime()) / 86_400_000;
+        if (days >= 0) {
+          cycleDaysSum += days;
+          cycleCount += 1;
+        }
+      }
     } else if (d.stage.isLost) {
       lostCount += 1;
       totalLost += v;
@@ -286,6 +302,7 @@ function computeKpis(deals: DealLite[]): Kpis {
     openCount,
     closedCount,
     totalCount: deals.length,
+    avgDaysToClose: cycleCount ? cycleDaysSum / cycleCount : 0,
   };
 }
 
@@ -522,16 +539,27 @@ export async function getSellerBreakdown(
   const all = await fetchScopedDeals(user);
   const windowed = applyWindow(all, resolved);
 
-  const groups = new Map<string, { meta: DealLite["owner"]; deals: DealLite[] }>();
-  for (const d of windowed) {
+  type Group = {
+    meta: DealLite["owner"];
+    /** Deals inside the active window — drives KPIs and the trend series. */
+    windowed: DealLite[];
+    /** All-time deals for this owner — drives the year × period scorecard. */
+    all: DealLite[];
+  };
+  const groups = new Map<string, Group>();
+  const ensure = (d: DealLite): Group => {
     const key = d.ownerId ?? "__unassigned__";
     let g = groups.get(key);
     if (!g) {
-      g = { meta: d.owner, deals: [] };
+      g = { meta: d.owner, windowed: [], all: [] };
       groups.set(key, g);
     }
-    g.deals.push(d);
-  }
+    // Prefer non-null owner metadata if we encounter it.
+    if (!g.meta && d.owner) g.meta = d.owner;
+    return g;
+  };
+  for (const d of all) ensure(d).all.push(d);
+  for (const d of windowed) ensure(d).windowed.push(d);
 
   const rows: SellerStats[] = [];
   for (const [ownerId, g] of groups) {
@@ -540,7 +568,9 @@ export async function getSellerBreakdown(
       name: g.meta?.name ?? "Unassigned",
       avatarColor: g.meta?.avatarColor ?? "#94a3b8",
       role: g.meta?.role ?? "—",
-      kpis: computeKpis(g.deals),
+      kpis: computeKpis(g.windowed),
+      scorecard: computeScorecard(g.all, resolved.granularity),
+      series: computeSeries(g.windowed, resolved.from, resolved.to),
     });
   }
 

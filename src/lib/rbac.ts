@@ -73,3 +73,17 @@ export async function canViewClient(user: User, clientId: string): Promise<boole
   });
   return !!found;
 }
+
+export async function canEditClient(user: User, clientId: string): Promise<boolean> {
+  if (isAdmin(user)) return true;
+  const found = await prisma.client.findFirst({
+    where: { id: clientId, ownerId: user.id },
+    select: { id: true },
+  });
+  return !!found;
+}
+
+export async function canLinkClientToDeal(user: User, clientId: string | null | undefined): Promise<boolean> {
+  if (!clientId) return true;
+  return canViewClient(user, clientId);
+}

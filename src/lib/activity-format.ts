@@ -55,7 +55,9 @@ export type ActivityAction =
   | "passkey_removed"
   // Branding
   | "branding_logo_updated"
-  | "branding_logo_removed";
+  | "branding_logo_removed"
+  // Admin: settings
+  | "settings_updated";
 
 type Meta = Record<string, unknown> | null | undefined;
 

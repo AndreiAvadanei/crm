@@ -15,6 +15,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
 import { formatDate } from "@/lib/utils";
 
@@ -80,17 +81,6 @@ export function SecurityFactors({ hasTotp, credentials }: { hasTotp: boolean; cr
     }
   }
 
-  async function removePasskey(id: string) {
-    try {
-      const res = await removePasskeyAction(id);
-      if (res.error) return toast({ title: res.error, variant: "error" });
-      toast({ title: "Passkey removed", variant: "success" });
-      router.refresh();
-    } catch {
-      toast({ title: STALE_ACTION_MESSAGE, variant: "error" });
-    }
-  }
-
   return (
     <Card>
       <CardHeader>
@@ -152,9 +142,17 @@ export function SecurityFactors({ hasTotp, credentials }: { hasTotp: boolean; cr
                     {c.lastUsedAt ? ` · Last used ${formatDate(c.lastUsedAt)}` : ""}
                   </div>
                 </div>
-                <Button size="icon" variant="ghost" onClick={() => removePasskey(c.id)}>
-                  <Trash2 className="h-4 w-4 text-destructive" />
-                </Button>
+                <ConfirmDialog
+                  onConfirm={() => removePasskeyAction(c.id)}
+                  title="Remove passkey?"
+                  description={`"${c.deviceName}" will no longer be able to sign in.`}
+                  confirmLabel="Remove"
+                  successMessage="Passkey removed"
+                >
+                  <Button size="icon" variant="ghost">
+                    <Trash2 className="h-4 w-4 text-destructive" />
+                  </Button>
+                </ConfirmDialog>
               </div>
             ))}
           </div>

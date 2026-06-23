@@ -5,6 +5,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { ChangePasswordForm } from "@/components/auth/change-password-form";
 import { SecurityFactors } from "@/components/auth/security-factors";
 
+export const metadata = {
+  title: "Security",
+};
+
 export default async function SecurityPage() {
   const user = await requireFullAuth();
   const credentials = await prisma.webAuthnCredential.findMany({

@@ -1,8 +1,9 @@
 "use client";
 
 import * as React from "react";
-import { useTheme } from "next-themes";
+import { useTheme } from "@/components/theme-provider";
 import { ShieldCheck } from "lucide-react";
+import { APP_NAME } from "@/lib/app-constants";
 
 export function SidebarLogo({
   lightVersion,
@@ -36,7 +37,7 @@ export function SidebarLogo({
   return (
     <>
       <ShieldCheck className="h-5 w-5 text-primary" />
-      CRM
+      {APP_NAME}
     </>
   );
 }

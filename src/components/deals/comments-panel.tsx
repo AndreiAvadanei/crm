@@ -8,9 +8,10 @@ import { addCommentAction, deleteCommentAction } from "@/server/deal-actions";
 import { Button } from "@/components/ui/button";
 import { Avatar } from "@/components/ui/avatar";
 import { Checkbox } from "@/components/ui/checkbox";
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
 import { relativeTime } from "@/lib/utils";
-import { sanitizeCommentHtml, htmlToPlainText } from "@/lib/sanitize";
+import { renderCommentHtml, commentHasContent } from "@/lib/sanitize";
 
 // Lazily load TinyMCE so it stays out of the initial bundle. ssr:false because
 // the editor is browser-only (and self-hosts its script at runtime).
@@ -45,12 +46,14 @@ export function CommentsPanel({
   const { toast } = useToast();
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
+  // True while one or more pasted/dropped images are still uploading.
+  const [uploading, setUploading] = useState(false);
   const [notifyIds, setNotifyIds] = useState<string[]>(() =>
     defaultNotifyIds.filter((id) => notifyCandidates.some((c) => c.id === id))
   );
   const [notifyOpen, setNotifyOpen] = useState(false);
 
-  const hasContent = htmlToPlainText(body).length > 0;
+  const hasContent = commentHasContent(body);
 
   function toggleNotify(id: string, on: boolean) {
     setNotifyIds((ids) => (on ? [...new Set([...ids, id])] : ids.filter((x) => x !== id)));
@@ -58,7 +61,7 @@ export function CommentsPanel({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!hasContent) return;
+    if (!hasContent || uploading) return;
     setBusy(true);
     const res = await addCommentAction(dealId, body, notifyIds);
     setBusy(false);
@@ -66,15 +69,18 @@ export function CommentsPanel({
     setBody("");
     router.refresh();
   }
-  async function remove(id: string) {
-    await deleteCommentAction(id);
-    router.refresh();
-  }
 
   return (
     <div className="space-y-4">
       <form onSubmit={submit} className="space-y-2">
-        <RichTextEditor value={body} onChange={setBody} placeholder="Write a comment…" disabled={busy} />
+        <RichTextEditor
+          value={body}
+          onChange={setBody}
+          placeholder="Write a comment… (paste or drop images to attach)"
+          disabled={busy}
+          uploadDealId={dealId}
+          onUploadingChange={setUploading}
+        />
         <div className="flex items-center justify-between gap-2">
           {notifyCandidates.length > 0 ? (
             <div className="relative">
@@ -112,8 +118,9 @@ export function CommentsPanel({
           ) : (
             <span />
           )}
-          <Button type="submit" disabled={busy || !hasContent}>
-            {busy && <Loader2 className="h-4 w-4 animate-spin" />} Comment
+          <Button type="submit" disabled={busy || uploading || !hasContent}>
+            {(busy || uploading) && <Loader2 className="h-4 w-4 animate-spin" />}
+            {uploading ? "Uploading…" : "Comment"}
           </Button>
         </div>
       </form>
@@ -128,17 +135,23 @@ export function CommentsPanel({
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-muted-foreground">{relativeTime(c.createdAt)}</span>
                   {c.canDelete && (
-                    <button onClick={() => remove(c.id)} className="text-muted-foreground hover:text-destructive">
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    <ConfirmDialog
+                      onConfirm={() => deleteCommentAction(c.id)}
+                      title="Delete comment?"
+                      successMessage="Comment deleted"
+                    >
+                      <button className="text-muted-foreground hover:text-destructive">
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </ConfirmDialog>
                   )}
                 </div>
               </div>
-              {/* Body is sanitized server-side on write; sanitize again here for
-                  defense in depth before rendering as HTML. */}
+              {/* Body is sanitized server-side on write; linkify (smart-links /
+                  bare URLs) and sanitize again here before rendering as HTML. */}
               <div
                 className="comment-html mt-1 text-sm"
-                dangerouslySetInnerHTML={{ __html: sanitizeCommentHtml(c.body) }}
+                dangerouslySetInnerHTML={{ __html: renderCommentHtml(c.body) }}
               />
             </div>
           </div>

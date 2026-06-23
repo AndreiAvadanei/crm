@@ -18,6 +18,12 @@ import {
   dueWindowRange,
   type DealStatus,
 } from "@/lib/filter-helpers";
+import { parseDealSort } from "@/lib/deal-sort";
+import { LIST_FETCH_CAP } from "@/lib/app-constants";
+
+export const metadata = {
+  title: "Deals",
+};
 
 export default async function DealsPage({
   searchParams,
@@ -29,6 +35,7 @@ export default async function DealsPage({
     tag?: string;
     stage?: string;
     status?: string;
+    sort?: string;
     amtMin?: string;
     amtMax?: string;
     dueFrom?: string;
@@ -89,6 +96,21 @@ export default async function DealsPage({
 
   const where: Prisma.DealWhereInput = { AND: filters };
 
+  // Sort applies within each status column on the board (deals are grouped by
+  // stage in array order) and across rows in the table view.
+  // NOTE: MySQL doesn't support `nulls: last`, and its implicit NULL ordering
+  // is easy to get wrong, so `date`/`size` are given an explicit JS nulls-last
+  // fixup below (undated / amount-less deals always fall to the bottom).
+  const sort = parseDealSort(sp.sort);
+  const orderBy: Prisma.DealOrderByWithRelationInput[] =
+    sort === "name"
+      ? [{ title: "asc" }]
+      : sort === "date"
+        ? [{ dueDate: "asc" }, { createdAt: "desc" }]
+        : sort === "size"
+          ? [{ amountEur: "desc" }, { createdAt: "desc" }]
+          : [{ boardOrder: "asc" }, { createdAt: "desc" }];
+
   const pipeline = await prisma.pipeline.findFirst({
     where: { isDefault: true },
     include: { stages: { orderBy: { order: "asc" } } },
@@ -100,14 +122,38 @@ export default async function DealsPage({
     prisma.deal.findMany({
       where,
       include: { client: true, owner: true, tags: true, _count: { select: { tasks: { where: { status: "OPEN" } } } } },
-      orderBy: [{ boardOrder: "asc" }, { createdAt: "desc" }],
-      take: view === "board" ? 500 : 200,
+      orderBy,
+      // Safety bound only — must exceed the real deal count so the sort never
+      // decides which deals are visible (see LIST_FETCH_CAP).
+      take: LIST_FETCH_CAP,
     }),
     getTagViews(),
     getFieldDefViews("DEAL"),
     admin ? getOwners() : Promise.resolve([]),
-    prisma.client.findMany({ where: clientVis, orderBy: { name: "asc" }, select: { id: true, name: true }, take: 500 }),
+    prisma.client.findMany({ where: clientVis, orderBy: { name: "asc" }, select: { id: true, name: true }, take: LIST_FETCH_CAP }),
   ]);
+
+  // Deterministic nulls-last ordering (MySQL's implicit NULL placement is
+  // unreliable here). Re-sort in JS so empty values never jump around:
+  //  - date: soonest due first, undated deals last
+  //  - size: largest amount first, amount-less deals last
+  if (sort === "date") {
+    deals.sort((a, b) => {
+      if (!a.dueDate && !b.dueDate) return 0;
+      if (!a.dueDate) return 1;
+      if (!b.dueDate) return -1;
+      return a.dueDate.getTime() - b.dueDate.getTime();
+    });
+  } else if (sort === "size") {
+    deals.sort((a, b) => {
+      const av = a.amountEur == null ? null : Number(a.amountEur);
+      const bv = b.amountEur == null ? null : Number(b.amountEur);
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      return bv - av;
+    });
+  }
 
   // Overdue = past due date AND still open (won/lost deals are never overdue).
   // Computed here because stage won/lost flags live on the pipeline stages.

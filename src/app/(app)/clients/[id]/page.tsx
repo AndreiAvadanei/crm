@@ -1,9 +1,10 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Pencil, Globe, Mail, Phone, MapPin } from "lucide-react";
 import { requireFullAuth } from "@/lib/auth/guards";
 import { prisma } from "@/lib/db";
-import { canViewClient, clientVisibilityWhere, isAdmin } from "@/lib/rbac";
+import { canViewClient, clientVisibilityWhere, dealVisibilityWhere, isAdmin } from "@/lib/rbac";
 import { loadValues } from "@/lib/custom-fields";
 import { getTagViews, getFieldDefViews, getOwners } from "@/lib/view-helpers";
 import { PageHeader } from "@/components/app/page-header";
@@ -17,18 +18,39 @@ import { NewDealButton } from "@/components/clients/new-deal-button";
 import { DeleteButton } from "@/components/shared/delete-button";
 import { deleteClientAction } from "@/server/client-actions";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { LIST_FETCH_CAP } from "@/lib/app-constants";
 
-export default async function ClientDetailPage({ params }: { params: Promise<{ id: string }> }) {
+type ClientDetailPageProps = {
+  params: Promise<{ id: string }>;
+};
+
+export async function generateMetadata({ params }: ClientDetailPageProps): Promise<Metadata> {
+  const user = await requireFullAuth();
+  const { id } = await params;
+  if (!(await canViewClient(user, id))) return { title: "Client" };
+
+  const client = await prisma.client.findUnique({
+    where: { id },
+    select: { name: true },
+  });
+
+  return {
+    title: client?.name ?? "Client",
+  };
+}
+
+export default async function ClientDetailPage({ params }: ClientDetailPageProps) {
   const user = await requireFullAuth();
   const { id } = await params;
   if (!(await canViewClient(user, id))) notFound();
+  const dealVis = await dealVisibilityWhere(user);
 
   const client = await prisma.client.findUnique({
     where: { id },
     include: {
       tags: true,
       owner: true,
-      deals: { include: { stage: true }, orderBy: { createdAt: "desc" } },
+      deals: { where: dealVis, include: { stage: true }, orderBy: { createdAt: "desc" } },
     },
   });
   if (!client) notFound();
@@ -63,7 +85,7 @@ export default async function ClientDetailPage({ params }: { params: Promise<{ i
       where: { isDefault: true },
       include: { stages: { orderBy: { order: "asc" } } },
     }),
-    prisma.client.findMany({ where: clientVis, orderBy: { name: "asc" }, select: { id: true, name: true }, take: 500 }),
+    prisma.client.findMany({ where: clientVis, orderBy: { name: "asc" }, select: { id: true, name: true }, take: LIST_FETCH_CAP }),
   ]);
   const dealStages = (pipeline?.stages ?? []).map((s) => ({ id: s.id, name: s.name }));
 

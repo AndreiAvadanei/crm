@@ -3,6 +3,10 @@ import { AuthShell } from "@/components/auth/auth-shell";
 import { getSession, authStage } from "@/lib/auth/session";
 import { ChangePasswordForm } from "@/components/auth/change-password-form";
 
+export const metadata = {
+  title: "Set a new password",
+};
+
 export default async function OnboardingPasswordPage() {
   const s = await getSession();
   if (!s) redirect("/login");

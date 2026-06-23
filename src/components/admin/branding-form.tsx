@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Loader2, Trash2, Upload } from "lucide-react";
 import { uploadBrandingLogoAction, deleteBrandingLogoAction } from "@/server/branding-actions";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 
@@ -33,15 +34,6 @@ export function BrandingForm({
     if (inputRef.current) inputRef.current.value = "";
     if (res.error) return toast({ title: res.error, variant: "error" });
     toast({ title: "Logo updated", variant: "success" });
-    router.refresh();
-  }
-
-  async function remove() {
-    setBusy(true);
-    const res = await deleteBrandingLogoAction(mode);
-    setBusy(false);
-    if (res.error) return toast({ title: res.error, variant: "error" });
-    toast({ title: "Logo removed", variant: "success" });
     router.refresh();
   }
 
@@ -81,9 +73,17 @@ export function BrandingForm({
           </label>
         </Button>
         {hasLogo && (
-          <Button variant="ghost" size="icon" onClick={remove} disabled={busy} title="Remove logo">
-            <Trash2 className="h-4 w-4 text-destructive" />
-          </Button>
+          <ConfirmDialog
+            onConfirm={() => deleteBrandingLogoAction(mode)}
+            title="Remove logo?"
+            description={`The ${mode} logo will be removed.`}
+            confirmLabel="Remove"
+            successMessage="Logo removed"
+          >
+            <Button variant="ghost" size="icon" disabled={busy} title="Remove logo">
+              <Trash2 className="h-4 w-4 text-destructive" />
+            </Button>
+          </ConfirmDialog>
         )}
       </div>
       <p className="text-xs text-muted-foreground">PNG only, up to 2&nbsp;MB. Transparent background recommended.</p>

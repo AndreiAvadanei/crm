@@ -1,5 +1,6 @@
 "use server";
 
+import { randomBytes } from "crypto";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth/guards";
@@ -7,8 +8,9 @@ import { isAdmin } from "@/lib/rbac";
 import { hashPassword, isStrongPassword } from "@/lib/auth/password";
 import { logActivity } from "@/lib/activity";
 import { changeList, diffText, diffPlain, diffBool, diffDate } from "@/lib/activity-diff";
+import { SETTING_KEYS, getSetting, setSetting } from "@/lib/settings";
 
-type Result = { ok?: boolean; error?: string; id?: string; tempPassword?: string };
+type Result = { ok?: boolean; error?: string; id?: string; tempPassword?: string; secret?: string };
 
 function str(fd: FormData, k: string) {
   const v = fd.get(k);
@@ -390,4 +392,73 @@ export async function deleteTagAction(id: string): Promise<Result> {
   await logActivity({ actorId: admin.id, action: "tag_deleted", entity: "Tag", entityId: id, meta: { name: tag?.name } });
   revalidatePath("/admin/pipeline");
   return { ok: true };
+}
+
+// --------------------------------------------------------------------------
+// App settings
+// --------------------------------------------------------------------------
+/**
+ * Set (or clear) the default deal assignee used when a deal is created without
+ * an explicit owner. An empty value clears the setting (reverts to assigning
+ * the creating admin).
+ */
+export async function setDefaultDealOwnerAction(formData: FormData): Promise<Result> {
+  const admin = await ensureAdmin();
+  const userId = str(formData, "userId");
+
+  let name: string | null = null;
+  if (userId) {
+    const target = await prisma.user.findFirst({
+      where: { id: userId, status: "ACTIVE" },
+      select: { name: true },
+    });
+    if (!target) return { error: "Selected user is not an active account." };
+    name = target.name;
+  }
+
+  const before = await getSetting(SETTING_KEYS.defaultDealOwnerId);
+  await setSetting(SETTING_KEYS.defaultDealOwnerId, userId ?? null);
+
+  await logActivity({
+    actorId: admin.id,
+    action: "settings_updated",
+    entity: "Setting",
+    entityId: SETTING_KEYS.defaultDealOwnerId,
+    meta: { setting: "Default deal owner", value: name ?? "Deal creator", changed: before !== (userId ?? null) },
+  });
+  revalidatePath("/admin/settings");
+  return { ok: true };
+}
+
+/**
+ * Set or regenerate the inbound-email webhook secret. When `regenerate` is set
+ * (or no explicit `secret` is provided) a new cryptographically-random token is
+ * generated. An empty `secret` with no regenerate flag clears it (disabling the
+ * webhook). The secret value itself is never written to the audit log.
+ */
+export async function setInboundWebhookSecretAction(formData: FormData): Promise<Result> {
+  const admin = await ensureAdmin();
+  const provided = str(formData, "secret");
+  const regenerate = str(formData, "regenerate") === "1";
+
+  let value: string | null;
+  if (regenerate) {
+    value = randomBytes(32).toString("base64url");
+  } else if (provided) {
+    if (provided.length < 16) return { error: "Secret must be at least 16 characters." };
+    value = provided;
+  } else {
+    value = null; // clear / disable
+  }
+
+  await setSetting(SETTING_KEYS.inboundWebhookSecret, value);
+  await logActivity({
+    actorId: admin.id,
+    action: "settings_updated",
+    entity: "Setting",
+    entityId: SETTING_KEYS.inboundWebhookSecret,
+    meta: { setting: "Inbound webhook secret", value: value ? "(updated)" : "(cleared)" },
+  });
+  revalidatePath("/admin/settings");
+  return { ok: true, secret: value ?? undefined };
 }

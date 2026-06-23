@@ -24,9 +24,11 @@ import {
 } from "lucide-react";
 import { moveDealStageAction } from "@/server/deal-actions";
 import { quickCreateDealAction } from "@/server/board-actions";
+import { quickUpdateDealAction } from "@/server/quick-actions";
 import { useToast } from "@/components/ui/toast";
 import { Avatar } from "@/components/ui/avatar";
 import { TagBadge, type TagView } from "@/components/shared/tag-badge";
+import { InlineInput, InlineTagEditor } from "@/components/shared/inline-edit";
 import { DealFormDialog } from "@/components/deals/deal-form-dialog";
 import type { FieldDefView } from "@/components/shared/custom-field-inputs";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
@@ -96,9 +98,35 @@ function hexAlpha(hex: string, alpha: number): string | undefined {
 // ---------------------------------------------------------------------------
 // Deal card
 // ---------------------------------------------------------------------------
-function DealCard({ deal, overlay = false }: { deal: KanbanDeal; overlay?: boolean }) {
+function DealCard({
+  deal,
+  overlay = false,
+  stageColor,
+  stageOptions,
+  allTags,
+  onStageChange,
+  onTagsChange,
+  onAmountChange,
+}: {
+  deal: KanbanDeal;
+  overlay?: boolean;
+  // Color of the deal's current stage (used for the status dot).
+  stageColor?: string;
+  // Full stage list for the inline status selector.
+  stageOptions?: { id: string; name: string }[];
+  // Full tag list for the inline tag editor.
+  allTags?: TagView[];
+  // Optimistic local-state callbacks owned by the board.
+  onStageChange?: (dealId: string, stageId: string) => void;
+  onTagsChange?: (dealId: string, tags: TagView[]) => void;
+  onAmountChange?: (dealId: string, amount: number | null) => void;
+}) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: deal.id });
   const overdue = deal.overdue;
+  // Inline editors are interactive; only render them on real cards (not the
+  // drag overlay) and when the board supplied the necessary data.
+  const interactive = !overlay && !!stageOptions && !!onStageChange;
+
   return (
     <div
       ref={setNodeRef}
@@ -133,18 +161,85 @@ function DealCard({ deal, overlay = false }: { deal: KanbanDeal; overlay?: boole
         {deal.title}
       </Link>
       {deal.clientName && <div className="mt-0.5 truncate text-xs text-muted-foreground">{deal.clientName}</div>}
-      {deal.tags.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1">
-          {deal.tags.slice(0, 3).map((t) => (
-            <TagBadge key={t.id} tag={t} />
-          ))}
-          {deal.tags.length > 3 && (
-            <span className="text-[10px] text-muted-foreground">+{deal.tags.length - 3}</span>
-          )}
+
+      {/* Inline status (stage) selector — changes the deal's status without DnD. */}
+      {interactive ? (
+        <CardStageSelect
+          dealId={deal.id}
+          stageId={deal.stageId}
+          stageColor={stageColor}
+          options={stageOptions!}
+          onStageChange={onStageChange!}
+        />
+      ) : (
+        deal.tags.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-1">
+            {deal.tags.slice(0, 3).map((t) => (
+              <TagBadge key={t.id} tag={t} />
+            ))}
+            {deal.tags.length > 3 && (
+              <span className="text-[10px] text-muted-foreground">+{deal.tags.length - 3}</span>
+            )}
+          </div>
+        )
+      )}
+
+      {/* Inline tag editor (only on real cards). */}
+      {interactive && allTags && (
+        <div
+          className="mt-2"
+          // Prevent the drag sensor from hijacking clicks on the tag popover.
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <InlineTagEditor
+            allTags={allTags}
+            value={deal.tags.map((t) => t.id)}
+            onSave={async (tagIds) => {
+              const res = await quickUpdateDealAction(deal.id, { tagIds });
+              if (!res.error) {
+                onTagsChange?.(
+                  deal.id,
+                  tagIds.map((id) => allTags.find((t) => t.id === id)!).filter(Boolean)
+                );
+              }
+              return res;
+            }}
+          />
         </div>
       )}
+
       <div className="mt-2.5 flex items-center justify-between border-t pt-2 text-xs text-muted-foreground">
-        <span className="text-sm font-semibold text-foreground tabular-nums">{formatCurrency(deal.amountEur)}</span>
+        {interactive ? (
+          <span
+            // Keep the drag sensor from hijacking clicks on the amount field.
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <InlineInput
+              type="number"
+              align="right"
+              value={deal.amountEur != null ? String(deal.amountEur) : ""}
+              display={
+                <span className="text-sm font-semibold text-foreground tabular-nums">
+                  {formatCurrency(deal.amountEur)}
+                </span>
+              }
+              inputClassName="text-sm font-semibold tabular-nums"
+              triggerClassName="w-auto"
+              onSave={async (next) => {
+                const trimmed = next.trim();
+                const amount = trimmed === "" ? null : Number(trimmed);
+                if (amount != null && Number.isNaN(amount)) return { error: "Invalid amount." };
+                const res = await quickUpdateDealAction(deal.id, { amountEur: amount });
+                if (!res.error) onAmountChange?.(deal.id, amount);
+                return res;
+              }}
+            />
+          </span>
+        ) : (
+          <span className="text-sm font-semibold text-foreground tabular-nums">{formatCurrency(deal.amountEur)}</span>
+        )}
         <div className="flex items-center gap-2.5">
           {deal.openTasks > 0 && (
             <span className="flex items-center gap-0.5" title={`${deal.openTasks} open tasks`}>
@@ -165,6 +260,50 @@ function DealCard({ deal, overlay = false }: { deal: KanbanDeal; overlay?: boole
         </div>
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Inline status selector used on a card. Optimistically moves the card to the
+// chosen stage's column via the board callback, then persists the change.
+// ---------------------------------------------------------------------------
+function CardStageSelect({
+  dealId,
+  stageId,
+  stageColor,
+  options,
+  onStageChange,
+}: {
+  dealId: string;
+  stageId: string;
+  stageColor?: string;
+  options: { id: string; name: string }[];
+  onStageChange: (dealId: string, stageId: string) => void;
+}) {
+  return (
+    <span
+      className="mt-2 flex items-center gap-1.5"
+      // Stop drag/click from firing while interacting with the native select.
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: stageColor }} />
+      <select
+        value={stageId}
+        onChange={(e) => {
+          const next = e.target.value;
+          if (next !== stageId) onStageChange(dealId, next);
+        }}
+        title="Change status"
+        className="form-control h-7 w-full cursor-pointer px-1.5 text-xs transition-colors hover:bg-accent/60"
+      >
+        {options.map((o) => (
+          <option key={o.id} value={o.id}>
+            {o.name}
+          </option>
+        ))}
+      </select>
+    </span>
   );
 }
 
@@ -232,31 +371,52 @@ function StageColumn({
   deals,
   newDeal,
   stageOptions,
+  allTags,
   onCollapse,
   onCreated,
+  onStageChange,
+  onTagsChange,
+  onAmountChange,
 }: {
   stage: KanbanStage;
   deals: KanbanDeal[];
   newDeal?: NewDealProps;
   stageOptions: { id: string; name: string }[];
+  allTags: TagView[];
   onCollapse: () => void;
   onCreated: (deal: KanbanDeal) => void;
+  onStageChange: (dealId: string, stageId: string) => void;
+  onTagsChange: (dealId: string, tags: TagView[]) => void;
+  onAmountChange: (dealId: string, amount: number | null) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage.id });
   const [adding, setAdding] = useState(false);
   const total = deals.reduce((s, d) => s + (d.amountEur ?? 0), 0);
+  // Stage-color tints used to make each column clearly distinguishable.
+  const headerTint = hexAlpha(stage.color, 0.16);
+  const listTint = hexAlpha(stage.color, 0.07);
+  const colBorder = hexAlpha(stage.color, 0.45);
 
   return (
-    <div className="flex w-72 shrink-0 flex-col">
+    <div className="flex h-full w-72 shrink-0 flex-col">
       <div
-        className="mb-2 rounded-lg border bg-card/60 px-2.5 py-2"
-        style={{ borderTop: `3px solid ${stage.color}` }}
+        className="mb-2 rounded-lg border px-2.5 py-2"
+        style={{
+          borderTop: `4px solid ${stage.color}`,
+          borderColor: colBorder,
+          backgroundColor: headerTint,
+        }}
       >
         <div className="flex items-center justify-between gap-1">
           <div className="flex min-w-0 items-center gap-2">
             <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: stage.color }} />
             <span className="truncate text-sm font-semibold">{stage.name}</span>
-            <span className="rounded-full bg-muted px-1.5 text-xs text-muted-foreground">{deals.length}</span>
+            <span
+              className="rounded-full px-1.5 text-xs font-semibold text-white"
+              style={{ backgroundColor: stage.color }}
+            >
+              {deals.length}
+            </span>
           </div>
           <div className="flex shrink-0 items-center">
             {newDeal && (
@@ -302,13 +462,27 @@ function StageColumn({
       <div
         ref={setNodeRef}
         className={cn(
-          "flex min-h-[60vh] flex-1 flex-col gap-2 rounded-xl border border-dashed p-2 transition-colors",
-          isOver ? "border-primary bg-primary/5" : "border-transparent bg-muted/40"
+          "flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto rounded-xl border p-2 transition-colors",
+          isOver && "border-primary bg-primary/5"
         )}
+        style={
+          isOver
+            ? undefined
+            : { backgroundColor: listTint, borderColor: colBorder }
+        }
       >
         {adding && <QuickAdd stageId={stage.id} onCreated={onCreated} />}
         {deals.map((d) => (
-          <DealCard key={d.id} deal={d} />
+          <DealCard
+            key={d.id}
+            deal={d}
+            stageColor={stage.color}
+            stageOptions={stageOptions}
+            allTags={allTags}
+            onStageChange={onStageChange}
+            onTagsChange={onTagsChange}
+            onAmountChange={onAmountChange}
+          />
         ))}
         {deals.length === 0 && !adding && (
           <button
@@ -343,13 +517,26 @@ function CollapsedStage({
       onClick={onExpand}
       title={`${stage.name} — expand`}
       className={cn(
-        "flex h-full min-h-[60vh] w-11 shrink-0 flex-col items-center gap-2 rounded-xl border py-2 transition-colors",
-        isOver ? "border-primary bg-primary/5" : "bg-card/60 hover:bg-muted"
+        "flex h-full min-h-[60vh] w-11 shrink-0 flex-col items-center gap-2 rounded-xl border py-2 transition-colors hover:brightness-105",
+        isOver && "border-primary bg-primary/5"
       )}
-      style={{ borderTop: `3px solid ${stage.color}` }}
+      style={
+        isOver
+          ? { borderTop: `4px solid ${stage.color}` }
+          : {
+              borderTop: `4px solid ${stage.color}`,
+              borderColor: hexAlpha(stage.color, 0.45),
+              backgroundColor: hexAlpha(stage.color, 0.12),
+            }
+      }
     >
       <ChevronRight className="h-4 w-4 text-muted-foreground" />
-      <span className="rounded-full bg-muted px-1.5 text-[10px] text-muted-foreground">{deals.length}</span>
+      <span
+        className="rounded-full px-1.5 text-[10px] font-semibold text-white"
+        style={{ backgroundColor: stage.color }}
+      >
+        {deals.length}
+      </span>
       <span
         className="flex-1 text-xs font-semibold [writing-mode:vertical-rl]"
         style={{ textOrientation: "mixed" }}
@@ -374,20 +561,28 @@ function PhaseGroup({
   collapsedStages,
   newDeal,
   stageOptions,
+  allTags,
   collapsed,
   onTogglePhase,
   onToggleStage,
   onCreated,
+  onStageChange,
+  onTagsChange,
+  onAmountChange,
 }: {
   group: PhaseGroupData;
   byStage: Record<string, KanbanDeal[]>;
   collapsedStages: Set<string>;
   newDeal?: NewDealProps;
   stageOptions: { id: string; name: string }[];
+  allTags: TagView[];
   collapsed: boolean;
   onTogglePhase: () => void;
   onToggleStage: (stageId: string) => void;
   onCreated: (deal: KanbanDeal) => void;
+  onStageChange: (dealId: string, stageId: string) => void;
+  onTagsChange: (dealId: string, tags: TagView[]) => void;
+  onAmountChange: (dealId: string, amount: number | null) => void;
 }) {
   const groupDeals = group.stages.flatMap((s) => byStage[s.id] ?? []);
   const total = groupDeals.reduce((s, d) => s + (d.amountEur ?? 0), 0);
@@ -420,7 +615,7 @@ function PhaseGroup({
 
   return (
     <div
-      className="flex shrink-0 flex-col rounded-xl border p-2"
+      className="flex h-full min-h-0 shrink-0 flex-col rounded-xl border p-2"
       style={{ backgroundColor: tint, borderColor: borderTint }}
     >
       <div className="mb-2 flex items-center justify-between gap-3 px-1">
@@ -438,7 +633,7 @@ function PhaseGroup({
           <span className="font-medium text-foreground">{formatCurrency(total)}</span>
         </div>
       </div>
-      <div className="flex gap-3">
+      <div className="flex min-h-0 flex-1 gap-3">
         {group.stages.map((stage) =>
           collapsedStages.has(stage.id) ? (
             <CollapsedStage
@@ -454,8 +649,12 @@ function PhaseGroup({
               deals={byStage[stage.id] ?? []}
               newDeal={newDeal}
               stageOptions={stageOptions}
+              allTags={allTags}
               onCollapse={() => onToggleStage(stage.id)}
               onCreated={onCreated}
+              onStageChange={onStageChange}
+              onTagsChange={onTagsChange}
+              onAmountChange={onAmountChange}
             />
           )
         )}
@@ -492,6 +691,7 @@ export function KanbanBoard({
   }, []);
 
   const stageOptions = useMemo(() => stages.map((s) => ({ id: s.id, name: s.name })), [stages]);
+  const allTags = newDeal?.tags ?? [];
 
   const byStage = useMemo(() => {
     const map: Record<string, KanbanDeal[]> = {};
@@ -543,6 +743,30 @@ export function KanbanBoard({
     setDeals((ds) => [deal, ...ds]);
   }
 
+  // Inline status change from a card: optimistically move the card to the new
+  // stage's column, persist via quick-update, and revert on failure.
+  async function changeStage(dealId: string, stageId: string) {
+    const prev = deals;
+    setDeals((ds) => ds.map((d) => (d.id === dealId ? { ...d, stageId } : d)));
+    const res = await quickUpdateDealAction(dealId, { stageId });
+    if (res.error) {
+      setDeals(prev);
+      toast({ title: res.error, variant: "error" });
+    }
+  }
+
+  // Inline tag change from a card: keep local state in sync (server persistence
+  // is handled by InlineTagEditor's onSave before this fires).
+  function changeTags(dealId: string, tags: TagView[]) {
+    setDeals((ds) => ds.map((d) => (d.id === dealId ? { ...d, tags } : d)));
+  }
+
+  // Inline amount change from a card: keep local state in sync (server
+  // persistence is handled by InlineInput's onSave before this fires).
+  function changeAmount(dealId: string, amount: number | null) {
+    setDeals((ds) => ds.map((d) => (d.id === dealId ? { ...d, amountEur: amount } : d)));
+  }
+
   function onDragStart(e: DragStartEvent) {
     setActiveId(String(e.active.id));
   }
@@ -565,8 +789,8 @@ export function KanbanBoard({
   }
 
   return (
-    <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
-      <div className="flex h-full items-start gap-4 overflow-x-auto px-4 pb-4 md:px-6">
+    <DndContext id="deals-kanban" sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
+      <div className="flex h-full items-stretch gap-4 overflow-x-auto px-4 pb-4 md:px-6">
         {phaseGroups.map((group) => (
           <PhaseGroup
             key={group.key}
@@ -575,14 +799,26 @@ export function KanbanBoard({
             collapsedStages={collapsedStages}
             newDeal={newDeal}
             stageOptions={stageOptions}
+            allTags={allTags}
             collapsed={collapsedPhases.has(group.key)}
             onTogglePhase={() => togglePhase(group.key)}
             onToggleStage={toggleStage}
             onCreated={addDeal}
+            onStageChange={changeStage}
+            onTagsChange={changeTags}
+            onAmountChange={changeAmount}
           />
         ))}
       </div>
-      <DragOverlay>{activeDeal ? <DealCard deal={activeDeal} overlay /> : null}</DragOverlay>
+      <DragOverlay>
+        {activeDeal ? (
+          <DealCard
+            deal={activeDeal}
+            overlay
+            stageColor={stages.find((s) => s.id === activeDeal.stageId)?.color}
+          />
+        ) : null}
+      </DragOverlay>
     </DndContext>
   );
 }

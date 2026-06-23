@@ -131,6 +131,8 @@ async function main() {
     { key: "deal_details", label: "Deal Details", type: "TEXTAREA", order: 3 },
     { key: "source", label: "Source", type: "TEXT", order: 4 },
     { key: "is_public_institution", label: "Public institution?", type: "BOOLEAN", order: 5 },
+    { key: "contractare_google_drive", label: "Contractare Google Drive", type: "URL", order: 6 },
+    { key: "ofertare_google_drive", label: "Ofertare Google Drive", type: "URL", order: 7 },
   ];
   const clientFields: { key: string; label: string; type: any; order: number }[] = [
     { key: "company_website", label: "Company Website", type: "URL", order: 0 },

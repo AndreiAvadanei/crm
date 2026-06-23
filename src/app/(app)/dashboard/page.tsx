@@ -12,10 +12,15 @@ import {
   XCircle,
 } from "lucide-react";
 import { requireFullAuth } from "@/lib/auth/guards";
+import { prisma } from "@/lib/db";
+import { isAdmin } from "@/lib/rbac";
+import { getOwners } from "@/lib/view-helpers";
 import { getAnalytics, getIntervalComparison, type Granularity, type KpiDelta } from "@/lib/analytics";
 import { PageHeader } from "@/components/app/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { DashboardFilters } from "@/components/dashboard/dashboard-filters";
+import { MyWork } from "@/components/dashboard/my-overdue";
+import type { TaskRowData } from "@/components/tasks/task-row";
 import { ScorecardTable } from "@/components/dashboard/scorecard-table";
 import {
   FunnelChart,
@@ -24,6 +29,10 @@ import {
   ComparisonChart,
 } from "@/components/dashboard/dashboard-charts";
 import { formatCurrency } from "@/lib/utils";
+
+export const metadata = {
+  title: "Dashboard",
+};
 
 function parseDate(v?: string): Date | null {
   if (!v) return null;
@@ -152,11 +161,88 @@ export default async function DashboardPage({
   const k = analytics.kpis;
   const s = analytics.status;
 
+  // "My work" panel: overdue + next-7-days lists for tasks and deals (mine).
+  const admin = isAdmin(user);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const in7Days = new Date(today);
+  in7Days.setDate(in7Days.getDate() + 7);
+  const HOME_CAP = 100;
+
+  const taskInclude = { deal: { select: { salesId: true, title: true } }, assignee: true } as const;
+  const dealInclude = { stage: { select: { name: true } } } as const;
+
+  const [overdueTaskRows, upcomingTaskRows, overdueDealRows, upcomingDealRows, owners] =
+    await Promise.all([
+      prisma.task.findMany({
+        where: { assigneeId: user.id, status: "OPEN", dueDate: { lt: today } },
+        include: taskInclude,
+        orderBy: [{ urgency: "desc" }, { dueDate: "asc" }, { createdAt: "desc" }],
+        take: HOME_CAP,
+      }),
+      prisma.task.findMany({
+        where: { assigneeId: user.id, status: "OPEN", dueDate: { gte: today, lt: in7Days } },
+        include: taskInclude,
+        orderBy: [{ urgency: "desc" }, { dueDate: "asc" }, { createdAt: "desc" }],
+        take: HOME_CAP,
+      }),
+      prisma.deal.findMany({
+        // Open deals (not won/lost closed) that I own.
+        where: { ownerId: user.id, closedAt: null, dueDate: { lt: today } },
+        include: dealInclude,
+        orderBy: { dueDate: "asc" },
+        take: HOME_CAP,
+      }),
+      prisma.deal.findMany({
+        where: { ownerId: user.id, closedAt: null, dueDate: { gte: today, lt: in7Days } },
+        include: dealInclude,
+        orderBy: { dueDate: "asc" },
+        take: HOME_CAP,
+      }),
+      admin ? getOwners() : Promise.resolve([] as { id: string; name: string }[]),
+    ]);
+
+  const toTaskRow = (t: (typeof overdueTaskRows)[number], overdue: boolean): TaskRowData => ({
+    id: t.id,
+    title: t.title,
+    type: t.type,
+    urgency: t.urgency,
+    dueDate: t.dueDate ? t.dueDate.toISOString().slice(0, 10) : null,
+    overdue,
+    dealSalesId: t.deal.salesId,
+    dealTitle: t.deal.title,
+    assigneeId: t.assigneeId,
+    assigneeName: t.assignee?.name ?? null,
+    assigneeColor: t.assignee?.avatarColor ?? null,
+  });
+  const toDealRow = (dl: (typeof overdueDealRows)[number]) => ({
+    id: dl.id,
+    salesId: dl.salesId,
+    title: dl.title,
+    dueDate: dl.dueDate!.toISOString().slice(0, 10),
+    amountEur: dl.amountEur != null ? Number(dl.amountEur) : null,
+    stageName: dl.stage.name,
+  });
+
+  const myOverdueTasks = overdueTaskRows.map((t) => toTaskRow(t, true));
+  const myUpcomingTasks = upcomingTaskRows.map((t) => toTaskRow(t, false));
+  const myOverdueDeals = overdueDealRows.map(toDealRow);
+  const myUpcomingDeals = upcomingDealRows.map(toDealRow);
+
   return (
     <div className="pb-10">
       <PageHeader title="Dashboard" description={`Welcome back, ${user.name.split(" ")[0]}.`} />
       <div className="space-y-6 p-4 md:p-6">
         <DashboardFilters />
+
+        <MyWork
+          overdueTasks={myOverdueTasks}
+          upcomingTasks={myUpcomingTasks}
+          overdueDeals={myOverdueDeals}
+          upcomingDeals={myUpcomingDeals}
+          owners={owners}
+          admin={admin}
+        />
 
         {/* KPI row */}
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">

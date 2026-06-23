@@ -11,6 +11,10 @@ import { CustomFieldDialog } from "@/components/admin/custom-field-dialog";
 import { DeleteButton } from "@/components/shared/delete-button";
 import { deleteFieldDefAction } from "@/server/admin-actions";
 
+export const metadata = {
+  title: "Custom fields",
+};
+
 function FieldList({ entity, defs }: { entity: CustomEntity; defs: CustomFieldDefinition[] }) {
   return (
     <Card>

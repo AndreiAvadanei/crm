@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Loader2, Upload, FileIcon, Trash2, Download, ExternalLink } from "lucide-react";
 import { uploadAttachmentAction, deleteAttachmentAction } from "@/server/deal-actions";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
 import { formatDate } from "@/lib/utils";
 
@@ -49,11 +50,6 @@ export function FilesPanel({ dealId, attachments }: { dealId: string; attachment
     router.refresh();
   }
 
-  async function remove(id: string) {
-    await deleteAttachmentAction(id);
-    router.refresh();
-  }
-
   return (
     <div className="space-y-4">
       <div>
@@ -81,9 +77,16 @@ export function FilesPanel({ dealId, attachments }: { dealId: string; attachment
                 <ExternalLink className="h-4 w-4" />
               </a>
             ) : null}
-            <button onClick={() => remove(a.id)} className="text-muted-foreground hover:text-destructive">
-              <Trash2 className="h-4 w-4" />
-            </button>
+            <ConfirmDialog
+              onConfirm={() => deleteAttachmentAction(a.id)}
+              title="Delete file?"
+              description={`"${a.filename}" will be permanently removed.`}
+              successMessage="File deleted"
+            >
+              <button className="text-muted-foreground hover:text-destructive">
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </ConfirmDialog>
           </div>
         ))}
         {attachments.length === 0 && <p className="text-sm text-muted-foreground">No files attached.</p>}

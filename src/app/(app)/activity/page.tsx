@@ -13,6 +13,10 @@ import {
 } from "@/lib/activity-format";
 import { formatDateTime, relativeTime } from "@/lib/utils";
 
+export const metadata = {
+  title: "Activity",
+};
+
 export default async function ActivityPage() {
   // Admin-only: a full cross-system audit feed.
   await requireAdmin();

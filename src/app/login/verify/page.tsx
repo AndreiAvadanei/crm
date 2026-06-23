@@ -4,6 +4,10 @@ import { getSession, authStage } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { TwoFactorVerify } from "@/components/auth/two-factor-verify";
 
+export const metadata = {
+  title: "Verify it's you",
+};
+
 export default async function VerifyPage() {
   const s = await getSession();
   if (!s) redirect("/login");

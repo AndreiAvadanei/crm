@@ -3,6 +3,10 @@ import { AuthShell } from "@/components/auth/auth-shell";
 import { getSession, authStage } from "@/lib/auth/session";
 import { LoginForm } from "./login-form";
 
+export const metadata = {
+  title: "Sign in",
+};
+
 export default async function LoginPage() {
   const stage = authStage(await getSession());
   if (stage === "need-password") redirect("/onboarding/password");

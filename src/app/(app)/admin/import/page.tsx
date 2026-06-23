@@ -7,6 +7,10 @@ import { PageHeader } from "@/components/app/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
+export const metadata = {
+  title: "Import from Jira",
+};
+
 function CodeBlock({ children }: { children: string }) {
   return (
     <pre className="overflow-x-auto rounded-lg border bg-muted px-4 py-3 text-xs">
@@ -35,7 +39,7 @@ export default async function ImportPage() {
 
   return (
     <div className="pb-10">
-      <PageHeader title="Import from Jira" description="Bring your existing Jira Sales data into the CRM." />
+      <PageHeader title="Import from Jira" description="Bring your existing Jira Sales data into Bit Sentinel." />
       <div className="grid gap-6 p-4 md:grid-cols-3 md:p-6">
         <div className="space-y-6 md:col-span-2">
           <Card className="border-warning/40">
@@ -71,7 +75,7 @@ export default async function ImportPage() {
                 <CodeBlock>npm run import:jira -- --file ./jira.csv --commit</CodeBlock>
               </div>
               <div>
-                <div className="mb-1 font-medium">Apply and copy Jira files into CRM storage</div>
+                <div className="mb-1 font-medium">Apply and copy Jira files into Bit Sentinel storage</div>
                 <CodeBlock>JIRA_EMAIL="you@example.com" JIRA_API_TOKEN="..." npm run import:jira -- --file ./jira.csv --commit --download-files</CodeBlock>
               </div>
               <p className="text-muted-foreground">
@@ -89,7 +93,7 @@ export default async function ImportPage() {
               <p>• <strong>Subtask</strong> issues become <strong>Tasks</strong> on their parent deal; subtask descriptions, comments, and files are preserved on the parent deal with the subtask key/title.</p>
               <p>• <code>Status</code> maps to a pipeline stage (missing stages are created), <code>Labels</code> to tags.</p>
               <p>• Selected <code>Custom field (...)</code> columns map to deal fields and custom field values.</p>
-              <p>• <code>Comment</code> columns become deal comments; <code>Attachment</code> columns become attachment records linking the original Jira file URL, or downloaded CRM files when <code>--download-files</code> is used.</p>
+              <p>• <code>Comment</code> columns become deal comments; <code>Attachment</code> columns become attachment records linking the original Jira file URL, or downloaded Bit Sentinel files when <code>--download-files</code> is used.</p>
             </CardContent>
           </Card>
         </div>

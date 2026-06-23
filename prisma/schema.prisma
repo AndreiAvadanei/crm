@@ -36,6 +36,15 @@ enum TaskStatus {
   DONE
 }
 
+// Declared low -> high so `orderBy: { urgency: "desc" }` surfaces CRITICAL first
+// (Prisma/MySQL sort enums by declaration order).
+enum TaskUrgency {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
 enum CustomEntity {
   DEAL
   CLIENT
@@ -232,8 +241,9 @@ model Task {
   dealId      String
   deal        Deal       @relation(fields: [dealId], references: [id], onDelete: Cascade)
   title       String
-  type        TaskType   @default(TASK)
-  status      TaskStatus @default(OPEN)
+  type        TaskType    @default(TASK)
+  status      TaskStatus  @default(OPEN)
+  urgency     TaskUrgency @default(MEDIUM)
   assigneeId  String?
   assignee    User?      @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
   dueDate     DateTime?
@@ -244,6 +254,7 @@ model Task {
   @@index([dealId])
   @@index([assigneeId])
   @@index([status])
+  @@index([urgency])
 }
 
 model Comment {
@@ -268,6 +279,9 @@ model Attachment {
   size         Int      @default(0)
   mimeType     String?
   sourceUrl    String?  @db.Text // original Jira URL when imported
+  // Inline images pasted/uploaded inside rich-text (comments). Kept out of the
+  // Files list UI but served through the same access-checked attachments route.
+  inline       Boolean  @default(false)
   uploadedById String?
   uploadedBy   User?    @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
   createdAt    DateTime @default(now())
@@ -355,4 +369,30 @@ model AuditLog {
 model Counter {
   name  String @id
   value Int    @default(0)
+}
+
+// Generic app-level key/value settings (admin configurable, single-tenant).
+// e.g. key="default_deal_owner_id" -> value=<userId>.
+model AppSetting {
+  key       String   @id
+  value     String   @db.Text
+  updatedAt DateTime @updatedAt
+}
+
+// Audit + idempotency log for inbound lead emails received via webhook.
+// `messageId` (e.g. the Gmail message id) is unique so retried/duplicate
+// deliveries are recognized and skipped instead of creating duplicate deals.
+model InboundLead {
+  id        String   @id @default(cuid())
+  messageId String   @unique
+  fromAddr  String?
+  subject   String?
+  status    String // "created" | "duplicate" | "ignored" | "error"
+  dealId    String?
+  clientId  String?
+  error     String?  @db.Text
+  payload   String   @db.Text // raw JSON body as received
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
 }

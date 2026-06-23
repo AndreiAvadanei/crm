@@ -3,13 +3,14 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth/guards";
-import { isAdmin, canViewDeal, canEditDeal } from "@/lib/rbac";
+import { isAdmin, canViewDeal, canEditDeal, canLinkClientToDeal } from "@/lib/rbac";
 import { nextSalesId } from "@/lib/sequence";
 import { saveCustomFieldsFromForm } from "@/lib/custom-fields";
 import { saveFile, deleteFile } from "@/lib/storage";
 import { logActivity } from "@/lib/activity";
-import { sanitizeCommentHtml, htmlToPlainText } from "@/lib/sanitize";
+import { sanitizeCommentHtml, htmlToPlainText, commentHasContent } from "@/lib/sanitize";
 import { notifyNewDeal, notifyNewComment } from "@/lib/notifications";
+import { getDefaultDealOwnerId } from "@/lib/settings";
 import {
   changeList,
   diffText,
@@ -66,7 +67,15 @@ export async function createDealAction(formData: FormData): Promise<Result> {
   const stage = await prisma.stage.findUnique({ where: { id: stageId } });
   const pipelineId = stage?.pipelineId ?? def.pipelineId;
 
-  const ownerId = isAdmin(user) ? str(formData, "ownerId") ?? user.id : user.id;
+  // Admins may pick an owner; when they leave it blank, fall back to the
+  // configured default assignee (if any active user is set) and finally to the
+  // creating admin. Sales users always own the deals they create.
+  let ownerId: string;
+  if (isAdmin(user)) {
+    ownerId = str(formData, "ownerId") ?? (await getDefaultDealOwnerId()) ?? user.id;
+  } else {
+    ownerId = user.id;
+  }
   const tagIds = formData.getAll("tagIds").map(String).filter(Boolean);
 
   // Inline new-customer creation: when no existing client is picked but a
@@ -74,6 +83,7 @@ export async function createDealAction(formData: FormData): Promise<Result> {
   let clientId = str(formData, "clientId");
   const newClientName = str(formData, "newClientName");
   let createdClientId: string | undefined;
+  if (clientId && !(await canLinkClientToDeal(user, clientId))) return { error: "Not allowed." };
 
   const deal = await prisma.$transaction(async (tx) => {
     if (!clientId && newClientName) {
@@ -170,6 +180,7 @@ export async function updateDealAction(dealId: string, formData: FormData): Prom
   const newClientId = str(formData, "clientId") ?? null;
   const newOwnerId = isAdmin(user) ? str(formData, "ownerId") ?? null : undefined;
   const newDueDate = date(formData, "dueDate") ?? null;
+  if (!(await canLinkClientToDeal(user, newClientId))) return { error: "Not allowed." };
 
   await prisma.deal.update({
     where: { id: dealId },
@@ -309,11 +320,17 @@ export async function createTaskAction(dealId: string, formData: FormData): Prom
   if (!(await canEditDeal(user, dealId))) return { error: "Not allowed." };
   const title = str(formData, "title");
   if (!title) return { error: "Task title required." };
+  const urgencyRaw = str(formData, "urgency");
+  const urgency =
+    urgencyRaw && ["LOW", "MEDIUM", "HIGH", "CRITICAL"].includes(urgencyRaw)
+      ? (urgencyRaw as "LOW" | "MEDIUM" | "HIGH" | "CRITICAL")
+      : "MEDIUM";
   await prisma.task.create({
     data: {
       dealId,
       title,
       type: (str(formData, "type") as never) ?? "TASK",
+      urgency,
       assigneeId: str(formData, "assigneeId") ?? user.id,
       dueDate: date(formData, "dueDate"),
     },
@@ -379,7 +396,7 @@ export async function addCommentAction(
   // Comment body is rich HTML from the editor — sanitize to a safe allowlist
   // before persisting, and reject comments with no visible content.
   const clean = sanitizeCommentHtml(body);
-  if (!htmlToPlainText(clean)) return { error: "Comment is empty." };
+  if (!commentHasContent(clean)) return { error: "Comment is empty." };
 
   // Persist only ids that resolve to real ACTIVE users, so the stored list can
   // be safely re-used to pre-select recipients on the next comment.
@@ -416,6 +433,22 @@ export async function deleteCommentAction(commentId: string): Promise<Result> {
   const comment = await prisma.comment.findUnique({ where: { id: commentId } });
   if (!comment) return { error: "Not found." };
   if (!isAdmin(user) && comment.authorId !== user.id) return { error: "Not allowed." };
+
+  // Remove inline images that were embedded only in this comment so their
+  // files/rows don't linger on disk after the comment is gone.
+  const referencedIds = [...comment.body.matchAll(/\/api\/attachments\/([A-Za-z0-9_-]+)/g)].map(
+    (m) => m[1]
+  );
+  if (referencedIds.length) {
+    const inlineAtts = await prisma.attachment.findMany({
+      where: { id: { in: referencedIds }, dealId: comment.dealId, inline: true },
+    });
+    await Promise.all(inlineAtts.map((a) => deleteFile(a.storageKey)));
+    if (inlineAtts.length) {
+      await prisma.attachment.deleteMany({ where: { id: { in: inlineAtts.map((a) => a.id) } } });
+    }
+  }
+
   await prisma.comment.delete({ where: { id: commentId } });
   await logActivity({
     actorId: user.id,
@@ -435,6 +468,9 @@ export async function uploadAttachmentAction(dealId: string, formData: FormData)
   const file = formData.get("file");
   if (!(file instanceof File) || file.size === 0) return { error: "No file selected." };
   if (file.size > 25 * 1024 * 1024) return { error: "File exceeds 25MB." };
+  if (file.type === "image/svg+xml" || file.name.toLowerCase().endsWith(".svg")) {
+    return { error: "SVG files are not allowed." };
+  }
   const buffer = Buffer.from(await file.arrayBuffer());
   const { storageKey, size } = await saveFile(buffer, file.name);
   await prisma.attachment.create({

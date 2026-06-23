@@ -12,6 +12,10 @@ import { AccessRulesDialog } from "@/components/admin/access-rules-dialog";
 import { UserRowActions } from "@/components/admin/user-row-actions";
 import { formatDate } from "@/lib/utils";
 
+export const metadata = {
+  title: "Users",
+};
+
 export default async function UsersAdminPage() {
   const me = await requireAdmin();
   const [users, tags] = await Promise.all([

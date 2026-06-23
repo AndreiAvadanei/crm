@@ -27,15 +27,25 @@ export async function requireAdmin(): Promise<User> {
   return user;
 }
 
-/** Returns the session user for actions, or null. Does not redirect. */
-export async function currentUser(): Promise<User | null> {
+/**
+ * Returns the fully authenticated session for actions/routes, or null. This
+ * intentionally rejects password-only sessions that have not passed onboarding
+ * and 2FA.
+ */
+export async function getFullyAuthenticatedSession(): Promise<SessionWithUser | null> {
   const s = await getSession();
+  return authStage(s) === "authenticated" ? (s as SessionWithUser) : null;
+}
+
+/** Returns the fully authenticated session user for actions, or null. */
+export async function currentUser(): Promise<User | null> {
+  const s = await getFullyAuthenticatedSession();
   return s?.user ?? null;
 }
 
 /** Like currentUser but throws (for server actions that must be authed). */
 export async function requireUser(): Promise<User> {
-  const s = await getSession();
+  const s = await getFullyAuthenticatedSession();
   if (!s) throw new Error("Unauthorized");
   return s.user;
 }

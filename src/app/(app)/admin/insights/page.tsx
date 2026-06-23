@@ -14,7 +14,13 @@ import {
 } from "@/components/ui/table";
 import { DashboardFilters } from "@/components/dashboard/dashboard-filters";
 import { SellerCompareChart } from "@/components/dashboard/dashboard-charts";
+import { GranularityToggle } from "@/components/dashboard/scorecard-table";
+import { SellerInsights } from "@/components/dashboard/seller-insights";
 import { formatCurrency } from "@/lib/utils";
+
+export const metadata = {
+  title: "Seller insights",
+};
 
 function parseDate(v?: string): Date | null {
   if (!v) return null;
@@ -113,6 +119,7 @@ export default async function AdminInsightsPage({
                       <TableHead className="text-right">Win rate</TableHead>
                       <TableHead className="text-right">Loss rate</TableHead>
                       <TableHead className="text-right">Avg won</TableHead>
+                      <TableHead className="text-right">Avg cycle</TableHead>
                       <TableHead className="text-right">W / L / Open</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -145,6 +152,9 @@ export default async function AdminInsightsPage({
                         <TableCell className="text-right tabular-nums">
                           {formatCurrency(s.kpis.avgWonDeal)}
                         </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {s.kpis.avgDaysToClose ? `${Math.round(s.kpis.avgDaysToClose)}d` : "—"}
+                        </TableCell>
                         <TableCell className="text-right tabular-nums text-xs text-muted-foreground">
                           {s.kpis.wonCount} / {s.kpis.lostCount} / {s.kpis.openCount}
                         </TableCell>
@@ -154,6 +164,19 @@ export default async function AdminInsightsPage({
                 </Table>
               </CardContent>
             </Card>
+
+            <div className="flex flex-col gap-3 pt-2 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <h2 className="text-lg font-semibold">Per-seller breakdown</h2>
+                <p className="text-sm text-muted-foreground">
+                  Yearly statistics with trimestrial, semestrial &amp; anual win
+                  rate and value per seller.
+                </p>
+              </div>
+              <GranularityToggle granularity={granularity} />
+            </div>
+
+            <SellerInsights sellers={sellers} />
           </>
         )}
       </div>

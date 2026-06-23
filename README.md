@@ -1,6 +1,6 @@
-# CRM
+# Bit Sentinel
 
-A modern, self-hosted HubSpot-style sales CRM: clients, deals (with `SAL-####` ids), kanban pipelines, tasks/next-actions, comments, file uploads, admin-configurable custom fields, role-based access with tag/date-scoped visibility and explicit sharing, mandatory password-change + 2FA/passkey auth, and a professional analytics dashboard.
+A modern, self-hosted HubSpot-style sales workspace: clients, deals (with `SAL-####` ids), kanban pipelines, tasks/next-actions, comments, file uploads, admin-configurable custom fields, role-based access with tag/date-scoped visibility and explicit sharing, mandatory password-change + 2FA/passkey auth, and a professional analytics dashboard.
 
 ## Stack
 
@@ -68,11 +68,12 @@ npm run db:migrate -- --name <describe_change>     # prisma migrate dev
 
 ## Jira import
 
-The importer maps the exported `jira.csv` (Sales project) into the CRM:
+The importer maps the exported `jira.csv` (Sales project) into Bit Sentinel:
 
-- `Customer` issues -> **Deals** (+ auto-created **Clients**), `Issue key` -> `salesId`, `Status` -> stage, `Labels` -> tags, `Custom field (...)` -> custom field values.
+- `Customer` issues -> **Deals** (+ auto-created **Clients**), `Issue key` -> `salesId`, `Status` -> stage, `Labels` + `Tip proiect` -> tags, selected non-duplicative `Custom field (...)` columns -> deal custom field values.
 - `Subtask` issues -> **Tasks** linked to their parent deal; subtask descriptions/comments/files are preserved on the parent deal with the subtask key/title.
-- `Comment` columns -> deal **comments**; `Attachment` columns -> **attachment** records. By default attachments keep the original Jira URL; use `--download-files` to copy them into CRM storage.
+- `Comment` columns -> deal **comments**; `Attachment` columns -> **attachment** records. By default attachments keep the original Jira URL; use `--download-files` to copy them into Bit Sentinel storage.
+- Jira users from assignee/reporter/creator/comment/file fields -> Bit Sentinel `SALES` users and `JiraUserMap` records. Jira exports do not include real user emails, so imported users get deterministic placeholder emails like `jira-<account>@import.local` unless `IMPORT_USER_EMAIL_DOMAIN` is set.
 
 It is **idempotent** and defaults to a **dry run**:
 
@@ -80,11 +81,17 @@ It is **idempotent** and defaults to a **dry run**:
 # Preview only (no writes):
 npm run import:jira -- --file ./jira.csv --dry-run
 
+# Preview only the first 5 Customer deals plus their subtasks:
+npm run import:jira -- --file ./jira.csv --dry-run --max-deals 5
+
 # Preview and verify the first 2 Jira attachment downloads (no writes):
 npm run import:jira -- --file ./jira.csv --dry-run --verify-downloads 2
 
 # Apply (only run when you are satisfied with the preview):
 npm run import:jira -- --file ./jira.csv --commit
+
+# Delete existing clients/deals/tasks/comments/files first, then import fresh:
+npm run import:jira -- --file ./jira.csv --commit --reset-crm-data --yes-delete-crm-data
 
 # Apply and download Jira attachments into UPLOADS_DIR:
 JIRA_EMAIL="you@example.com" JIRA_API_TOKEN="..." npm run import:jira -- --file ./jira.csv --commit --download-files
@@ -92,7 +99,7 @@ JIRA_EMAIL="you@example.com" JIRA_API_TOKEN="..." npm run import:jira -- --file 
 
 > The import is guarded and never runs automatically.
 
-The import is designed for retry after interruption. Deals are upserted by exact Jira `SAL-` id, comments/files are de-duplicated, and file downloads create an attachment marker before downloading so a rerun can fill any partially imported file records.
+The import is designed for retry after interruption. Deals are upserted by exact Jira `SAL-` id, comments/files are de-duplicated, and file downloads create an attachment marker before downloading so a rerun can fill any partially imported file records. Use `--reset-crm-data --yes-delete-crm-data` only when you intentionally want to delete existing clients/deals/tasks/comments/files and start the import from an empty Bit Sentinel dataset.
 
 ## Roles & visibility
 

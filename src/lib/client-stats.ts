@@ -1,9 +1,10 @@
 import "server-only";
 import { prisma } from "@/lib/db";
-import { clientVisibilityWhere } from "@/lib/rbac";
+import { clientVisibilityWhere, dealVisibilityWhere } from "@/lib/rbac";
 import { Prisma, type User } from "@/generated/prisma";
 import type { ClientSort } from "@/lib/client-sort";
 import { recencyCutoff } from "@/lib/filter-helpers";
+import { LIST_FETCH_CAP } from "@/lib/app-constants";
 
 export type { ClientSort } from "@/lib/client-sort";
 export { CLIENT_SORT_OPTIONS } from "@/lib/client-sort";
@@ -93,6 +94,7 @@ export async function getClientsWithStats(
 ): Promise<ClientWithStats[]> {
   const { search, sort = "recent" } = opts;
   const visibility = await clientVisibilityWhere(user);
+  const dealVisibility = await dealVisibilityWhere(user);
 
   const searchWhere: Prisma.ClientWhereInput = search
     ? {
@@ -117,8 +119,18 @@ export async function getClientsWithStats(
 
   const clients = await prisma.client.findMany({
     where: { AND: [visibility, searchWhere, ...filterWhere] },
-    ...clientStatsArgs,
-    take: 500,
+    include: {
+      ...clientStatsArgs.include,
+      deals: {
+        ...clientStatsArgs.include.deals,
+        where: dealVisibility,
+      },
+    },
+    // Filtering + sorting happen in memory below, so the whole visible set must
+    // load — a cap below the real count would silently drop clients regardless
+    // of the chosen sort. Stable id order keeps the (capped) window deterministic.
+    orderBy: { id: "asc" },
+    take: LIST_FETCH_CAP,
   });
 
   // Collect every visible deal id so activity lookups stay RBAC-scoped.
@@ -242,7 +254,7 @@ export async function getClientFilterFacets(
   const rows = await prisma.client.findMany({
     where: visibility,
     select: { size: true, country: true },
-    take: 2000,
+    take: LIST_FETCH_CAP,
   });
   const sizes = new Set<string>();
   const countries = new Set<string>();
@@ -263,6 +275,8 @@ function sortClients(clients: ClientWithStats[], sort: ClientSort): ClientWithSt
   switch (sort) {
     case "name":
       return clients.sort((a, b) => a.name.localeCompare(b.name));
+    case "added":
+      return clients.sort((a, b) => byTimeDesc(a.createdAt, b.createdAt));
     case "deals":
       return clients.sort(
         (a, b) =>

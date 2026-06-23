@@ -1,12 +1,13 @@
 import { generateSecret, generateURI, verify } from "otplib";
 import QRCode from "qrcode";
+import { APP_NAME } from "@/lib/app-constants";
 
 export function generateTotpSecret(): string {
   return generateSecret();
 }
 
 export function totpKeyUri(email: string, secret: string): string {
-  const issuer = process.env.WEBAUTHN_RP_NAME || "CRM";
+  const issuer = process.env.WEBAUTHN_RP_NAME || APP_NAME;
   return generateURI({ strategy: "totp", issuer, label: email, secret });
 }
 

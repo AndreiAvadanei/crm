@@ -4,6 +4,10 @@ import { PageHeader } from "@/components/app/page-header";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { BrandingForm } from "@/components/admin/branding-form";
 
+export const metadata = {
+  title: "Branding",
+};
+
 export default async function BrandingPage() {
   await requireAdmin();
   const [light, dark] = await Promise.all([

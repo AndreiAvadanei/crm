@@ -14,6 +14,7 @@ import {
   useFilterUrl,
 } from "@/components/shared/filter-bar";
 import { DEAL_STATUS_OPTIONS } from "@/lib/filter-helpers";
+import { DealSortSelect } from "@/components/deals/deal-sort-select";
 import type { TagView } from "@/components/shared/tag-badge";
 
 // Query params owned by this toolbar (used for the Clear-filters affordance).
@@ -23,6 +24,7 @@ const DEAL_FILTER_KEYS = [
   "tag",
   "stage",
   "status",
+  "sort",
   "amtMin",
   "amtMax",
   "dueFrom",
@@ -73,6 +75,8 @@ export function DealsToolbar({
       )}
 
       <FilterTagMulti tags={tags} />
+
+      <DealSortSelect />
 
       <FilterNumberRange minParam="amtMin" maxParam="amtMax" minPlaceholder="€ min" maxPlaceholder="€ max" />
 

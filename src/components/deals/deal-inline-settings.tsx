@@ -6,6 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Avatar } from "@/components/ui/avatar";
 import { type TagView } from "@/components/shared/tag-badge";
 import {
+  InlineCombobox,
   InlineInput,
   InlineSelect,
   InlineTagEditor,
@@ -113,7 +114,7 @@ export function DealInlineSettings({
                 <ExternalLink className="h-3.5 w-3.5" />
               </Link>
             )}
-            <InlineSelect
+            <InlineCombobox
               value={clientId ?? ""}
               placeholder="No client"
               options={clients.map((c) => ({ value: c.id, label: c.name }))}

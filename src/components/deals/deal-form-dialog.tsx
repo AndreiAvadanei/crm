@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { cloneElement, isValidElement, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import {
@@ -10,7 +10,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,6 +17,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import { TagPicker } from "@/components/shared/tag-picker";
+import { ClientCombobox } from "@/components/shared/client-combobox";
 import { CustomFieldInputs, type FieldDefView } from "@/components/shared/custom-field-inputs";
 import type { TagView } from "@/components/shared/tag-badge";
 import { createDealAction, updateDealAction } from "@/server/deal-actions";
@@ -32,6 +32,11 @@ type DealData = {
   ownerId: string | null;
   dueDate: string | null;
   tagIds: string[];
+};
+
+type TriggerProps = {
+  onClick?: React.MouseEventHandler<HTMLElement>;
+  type?: "button" | "submit" | "reset";
 };
 
 export function DealFormDialog({
@@ -69,8 +74,22 @@ export function DealFormDialog({
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [newClient, setNewClient] = useState(false);
+  const [clientId, setClientId] = useState(deal?.clientId ?? defaultClientId ?? "");
   const editing = !!deal;
   const locked = !editing && !!lockClient && !!defaultClientId;
+  const triggerEl = isValidElement<TriggerProps>(trigger)
+    ? cloneElement(trigger, {
+        type: trigger.props.type ?? "button",
+        onClick: (e) => {
+          trigger.props.onClick?.(e);
+          if (!e.defaultPrevented) setOpen(true);
+        },
+      })
+    : (
+        <span className="inline-flex" onClick={() => setOpen(true)}>
+          {trigger}
+        </span>
+      );
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -88,7 +107,7 @@ export function DealFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>{trigger}</DialogTrigger>
+      {triggerEl}
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>{editing ? "Edit deal" : "New deal"}</DialogTitle>
@@ -141,24 +160,17 @@ export function DealFormDialog({
                   </p>
                 </div>
               ) : (
-                <select
-                  id="clientId"
-                  name="clientId"
-                  defaultValue={deal?.clientId ?? defaultClientId ?? ""}
-                  disabled={locked}
-                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm disabled:cursor-not-allowed disabled:opacity-70"
-                >
-                  <option value="">No client</option>
-                  {clients.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-              )}
-              {/* A disabled select submits no value, so mirror it as hidden. */}
-              {locked && !newClient && (
-                <input type="hidden" name="clientId" value={defaultClientId} />
+                <>
+                  <ClientCombobox
+                    value={clientId}
+                    onChange={setClientId}
+                    options={clients.map((c) => ({ value: c.id, label: c.name }))}
+                    placeholder="No client"
+                    disabled={locked}
+                  />
+                  {/* The combobox is not a form control, so submit via hidden input. */}
+                  <input type="hidden" name="clientId" value={clientId} />
+                </>
               )}
             </div>
             <div className="space-y-2">

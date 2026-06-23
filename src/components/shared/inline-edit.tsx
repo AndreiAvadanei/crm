@@ -17,6 +17,7 @@ import {
   DropdownMenuCheckboxItem,
 } from "@/components/ui/dropdown-menu";
 import { TagBadge, type TagView } from "@/components/shared/tag-badge";
+import { ClientCombobox, type ComboOption } from "@/components/shared/client-combobox";
 import { cn } from "@/lib/utils";
 
 export type SaveResult = { ok?: boolean; error?: string };
@@ -266,6 +267,47 @@ export function InlineSelect({
       </select>
       {busy && <Loader2 className="pointer-events-none ml-1 h-3.5 w-3.5 animate-spin text-muted-foreground" />}
     </span>
+  );
+}
+
+/** Inline searchable combobox that commits immediately on selection. */
+export function InlineCombobox({
+  value,
+  options,
+  onSave,
+  placeholder,
+  align = "end",
+}: {
+  value: string;
+  options: ComboOption[];
+  onSave: (next: string) => Promise<SaveResult>;
+  placeholder?: string;
+  align?: "start" | "end" | "center";
+}) {
+  const router = useRouter();
+  const { toast } = useToast();
+  const [busy, setBusy] = React.useState(false);
+
+  async function onChange(next: string) {
+    if (next === value) return;
+    setBusy(true);
+    const res = await onSave(next);
+    setBusy(false);
+    if (res.error) return toast({ title: res.error, variant: "error" });
+    router.refresh();
+  }
+
+  return (
+    <ClientCombobox
+      value={value}
+      options={options}
+      onChange={onChange}
+      busy={busy}
+      placeholder={placeholder ?? "—"}
+      align={align}
+      triggerClassName="h-7 max-w-[11rem] px-1.5"
+      matchTriggerWidth={false}
+    />
   );
 }
 

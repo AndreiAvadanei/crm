@@ -5,6 +5,7 @@ import { clientVisibilityWhere, isAdmin } from "@/lib/rbac";
 import { getClientsWithStats, getClientFilterFacets, type ClientSort } from "@/lib/client-stats";
 import { getTagViews, getFieldDefViews, getOwners } from "@/lib/view-helpers";
 import { parseCsvIds, parseNumber } from "@/lib/filter-helpers";
+import { LIST_FETCH_CAP } from "@/lib/app-constants";
 import { PageHeader } from "@/components/app/page-header";
 import { Button } from "@/components/ui/button";
 import { SearchInput } from "@/components/shared/search-input";
@@ -12,6 +13,10 @@ import { ClientSortSelect } from "@/components/clients/client-sort-select";
 import { ClientsFilterBar } from "@/components/clients/clients-filter-bar";
 import { ClientFormDialog } from "@/components/clients/client-form-dialog";
 import { ClientsTable, type ClientRow } from "@/components/clients/clients-table";
+
+export const metadata = {
+  title: "Clients",
+};
 
 export default async function ClientsPage({
   searchParams,
@@ -52,7 +57,7 @@ export default async function ClientsPage({
     admin ? getOwners() : Promise.resolve([]),
     getFieldDefViews("DEAL"),
     prisma.pipeline.findFirst({ where: { isDefault: true }, include: { stages: { orderBy: { order: "asc" } } } }),
-    prisma.client.findMany({ where: clientVis, orderBy: { name: "asc" }, select: { id: true, name: true }, take: 500 }),
+    prisma.client.findMany({ where: clientVis, orderBy: { name: "asc" }, select: { id: true, name: true }, take: LIST_FETCH_CAP }),
   ]);
   const dealStages = (pipeline?.stages ?? []).map((s) => ({ id: s.id, name: s.name }));
 

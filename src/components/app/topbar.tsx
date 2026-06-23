@@ -6,6 +6,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { logoutAction } from "@/server/auth-actions";
+import { APP_NAME } from "@/lib/app-constants";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -29,7 +30,7 @@ export function Topbar({
   return (
     <header className="flex h-14 shrink-0 items-center justify-between border-b bg-background px-4 md:px-6">
       <div className="md:hidden flex items-center gap-2 font-semibold">
-        <ShieldCheck className="h-5 w-5 text-primary" /> CRM
+        <ShieldCheck className="h-5 w-5 text-primary" /> {APP_NAME}
       </div>
       <div className="flex-1" />
       <div className="flex items-center gap-2">

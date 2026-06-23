@@ -10,6 +10,10 @@ import { DeleteButton } from "@/components/shared/delete-button";
 import { deleteTagAction } from "@/server/admin-actions";
 import { TagBadge } from "@/components/shared/tag-badge";
 
+export const metadata = {
+  title: "Pipeline & tags",
+};
+
 export default async function PipelinePage() {
   await requireAdmin();
   const pipeline = await prisma.pipeline.findFirst({

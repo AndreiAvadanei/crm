@@ -3,6 +3,10 @@ import { AuthShell } from "@/components/auth/auth-shell";
 import { getSession, authStage } from "@/lib/auth/session";
 import { TwoFactorEnroll } from "@/components/auth/two-factor-enroll";
 
+export const metadata = {
+  title: "Secure your account",
+};
+
 export default async function Onboarding2faPage() {
   const s = await getSession();
   if (!s) redirect("/login");

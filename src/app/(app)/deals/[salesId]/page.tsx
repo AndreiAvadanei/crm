@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Pencil } from "lucide-react";
 import { requireFullAuth } from "@/lib/auth/guards";
@@ -5,6 +6,7 @@ import { prisma } from "@/lib/db";
 import { canViewDeal, isAdmin, clientVisibilityWhere } from "@/lib/rbac";
 import { loadValues } from "@/lib/custom-fields";
 import { getTagViews, getFieldDefViews, getOwners } from "@/lib/view-helpers";
+import { LIST_FETCH_CAP } from "@/lib/app-constants";
 import { PageHeader } from "@/components/app/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,7 +23,26 @@ import { deleteDealAction } from "@/server/deal-actions";
 import { formatDate, relativeTime } from "@/lib/utils";
 import { activityPhrase } from "@/lib/activity-format";
 
-export default async function DealDetailPage({ params }: { params: Promise<{ salesId: string }> }) {
+type DealDetailPageProps = {
+  params: Promise<{ salesId: string }>;
+};
+
+export async function generateMetadata({ params }: DealDetailPageProps): Promise<Metadata> {
+  const user = await requireFullAuth();
+  const { salesId } = await params;
+  const deal = await prisma.deal.findUnique({
+    where: { salesId },
+    select: { id: true, title: true, salesId: true },
+  });
+
+  if (!deal || !(await canViewDeal(user, deal.id))) return { title: "Deal" };
+
+  return {
+    title: `${deal.title} (${deal.salesId})`,
+  };
+}
+
+export default async function DealDetailPage({ params }: DealDetailPageProps) {
   const user = await requireFullAuth();
   const { salesId } = await params;
   const admin = isAdmin(user);
@@ -33,9 +54,14 @@ export default async function DealDetailPage({ params }: { params: Promise<{ sal
       owner: true,
       stage: true,
       tags: true,
-      tasks: { include: { assignee: true }, orderBy: [{ status: "asc" }, { createdAt: "desc" }] },
+      tasks: {
+        include: { assignee: true },
+        orderBy: [{ status: "asc" }, { urgency: "desc" }, { dueDate: "asc" }, { createdAt: "desc" }],
+      },
       comments: { include: { author: true }, orderBy: [{ createdAt: "desc" }, { id: "desc" }] },
-      attachments: { orderBy: [{ createdAt: "desc" }, { id: "desc" }] },
+      // Inline images embedded in comments are excluded — they're managed via
+      // the rich-text editor, not the Files list.
+      attachments: { where: { inline: false }, orderBy: [{ createdAt: "desc" }, { id: "desc" }] },
     },
   });
   if (!deal) notFound();
@@ -54,7 +80,7 @@ export default async function DealDetailPage({ params }: { params: Promise<{ sal
     getTagViews(),
     getFieldDefViews("DEAL"),
     admin ? getOwners() : Promise.resolve([]),
-    prisma.client.findMany({ where: clientVis, orderBy: { name: "asc" }, select: { id: true, name: true }, take: 500 }),
+    prisma.client.findMany({ where: clientVis, orderBy: { name: "asc" }, select: { id: true, name: true }, take: LIST_FETCH_CAP }),
     admin
       ? prisma.user.findMany({ where: { role: "SALES", status: "ACTIVE" }, orderBy: { name: "asc" } })
       : Promise.resolve([]),
@@ -99,6 +125,14 @@ export default async function DealDetailPage({ params }: { params: Promise<{ sal
     }
   }
 
+  // The visible-clients query is filtered + capped, so the deal's currently
+  // assigned client may be missing from it. Always include it so the picker
+  // shows (and keeps) the correct selection.
+  const clientOptions =
+    deal.client && !clients.some((c) => c.id === deal.client!.id)
+      ? [{ id: deal.client.id, name: deal.client.name }, ...clients]
+      : clients;
+
   const canDelete = admin || deal.ownerId === user.id;
   const fieldValues = Object.fromEntries(valuesMap.entries());
   const openTasks = deal.tasks.filter((t) => t.status === "OPEN").length;
@@ -108,6 +142,7 @@ export default async function DealDetailPage({ params }: { params: Promise<{ sal
     title: t.title,
     type: t.type,
     status: t.status,
+    urgency: t.urgency,
     dueDate: t.dueDate ? t.dueDate.toISOString().slice(0, 10) : null,
     assigneeId: t.assigneeId ?? null,
     assigneeName: t.assignee?.name ?? null,
@@ -120,7 +155,7 @@ export default async function DealDetailPage({ params }: { params: Promise<{ sal
         <DealFormDialog
           isAdmin={admin}
           stages={stages.map((s) => ({ id: s.id, name: s.name }))}
-          clients={clients}
+          clients={clientOptions}
           tags={tags}
           fieldDefs={fieldDefViews}
           owners={owners}
@@ -176,7 +211,7 @@ export default async function DealDetailPage({ params }: { params: Promise<{ sal
             stages={stages.map((s) => ({ id: s.id, name: s.name }))}
             amountEur={deal.amountEur ? Number(deal.amountEur) : null}
             clientId={deal.clientId}
-            clients={clients}
+            clients={clientOptions}
             dueDate={deal.dueDate ? deal.dueDate.toISOString().slice(0, 10) : null}
             ownerId={deal.ownerId}
             owner={deal.owner ? { name: deal.owner.name, color: deal.owner.avatarColor } : null}

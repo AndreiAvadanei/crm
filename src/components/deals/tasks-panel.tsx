@@ -11,6 +11,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Avatar } from "@/components/ui/avatar";
 import { useToast } from "@/components/ui/toast";
 import { InlineInput, InlineSelect } from "@/components/shared/inline-edit";
+import { ConfirmDialog } from "@/components/shared/confirm-dialog";
+import { TASK_URGENCY_OPTIONS, URGENCY_TEXT_CLASS, type TaskUrgency } from "@/lib/task-urgency";
 import { cn, formatDate } from "@/lib/utils";
 
 export type TaskView = {
@@ -18,6 +20,7 @@ export type TaskView = {
   title: string;
   type: string;
   status: string;
+  urgency: TaskUrgency;
   dueDate: string | null;
   assigneeId: string | null;
   assigneeName: string | null;
@@ -73,16 +76,6 @@ export function TasksPanel({
       toast({ title: "Action failed. Refresh and retry.", variant: "error" });
     }
   }
-  async function remove(id: string) {
-    try {
-      const res = await deleteTaskAction(id);
-      if (res.error) return toast({ title: res.error, variant: "error" });
-      router.refresh();
-    } catch {
-      toast({ title: "Action failed. Refresh and retry.", variant: "error" });
-    }
-  }
-
   const open = tasks.filter((t) => t.status === "OPEN");
   const done = tasks.filter((t) => t.status === "DONE");
 
@@ -96,6 +89,18 @@ export function TasksPanel({
           <option value="EMAIL">Email</option>
           <option value="MEETING">Meeting</option>
           <option value="NOTE">Note</option>
+        </select>
+        <select
+          name="urgency"
+          defaultValue="MEDIUM"
+          className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+          aria-label="Urgency"
+        >
+          {TASK_URGENCY_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
         </select>
         <Input name="dueDate" type="date" className="w-40" />
         <Button type="submit" disabled={busy}>
@@ -132,6 +137,14 @@ export function TasksPanel({
                   />
                 </div>
               </div>
+              <div className="w-24 shrink-0">
+                <InlineSelect
+                  value={t.urgency}
+                  options={TASK_URGENCY_OPTIONS}
+                  className={cn("font-medium", URGENCY_TEXT_CLASS[t.urgency], isDone && "opacity-60")}
+                  onSave={(urgency) => quickUpdateTaskAction(t.id, { urgency: urgency as TaskUrgency })}
+                />
+              </div>
               {admin ? (
                 <div className="w-32 shrink-0">
                   <InlineSelect
@@ -146,9 +159,15 @@ export function TasksPanel({
                   <Avatar name={t.assigneeName} color={t.assigneeColor} className="h-6 w-6 text-[10px]" />
                 )
               )}
-              <Button variant="ghost" size="icon" onClick={() => remove(t.id)}>
-                <Trash2 className="h-4 w-4 text-destructive" />
-              </Button>
+              <ConfirmDialog
+                onConfirm={() => deleteTaskAction(t.id)}
+                title="Delete task?"
+                successMessage="Task deleted"
+              >
+                <Button variant="ghost" size="icon">
+                  <Trash2 className="h-4 w-4 text-destructive" />
+                </Button>
+              </ConfirmDialog>
             </div>
           );
         })}

@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
 import { Checkbox } from "@/components/ui/checkbox";
 import { InlineInput, InlineSelect } from "@/components/shared/inline-edit";
+import { TASK_URGENCY_OPTIONS, URGENCY_TEXT_CLASS, type TaskUrgency } from "@/lib/task-urgency";
 import { useToast } from "@/components/ui/toast";
 import { useRouter } from "next/navigation";
 import { formatDate } from "@/lib/utils";
@@ -14,6 +15,7 @@ export type TaskRowData = {
   id: string;
   title: string;
   type: string;
+  urgency: TaskUrgency;
   dueDate: string | null; // yyyy-mm-dd
   overdue: boolean;
   dealSalesId: string;
@@ -27,13 +29,19 @@ export function TaskRow({
   task,
   owners,
   admin,
+  selected,
+  onSelectChange,
 }: {
   task: TaskRowData;
   owners: { id: string; name: string }[];
   admin: boolean;
+  /** When provided, the checkbox toggles selection instead of completing. */
+  selected?: boolean;
+  onSelectChange?: (checked: boolean) => void;
 }) {
   const router = useRouter();
   const { toast } = useToast();
+  const selectable = onSelectChange !== undefined;
 
   async function complete() {
     const res = await quickUpdateTaskAction(task.id, { status: "DONE" });
@@ -43,8 +51,18 @@ export function TaskRow({
   }
 
   return (
-    <div className="flex items-center gap-3 rounded-lg border px-3 py-2">
-      <Checkbox checked={false} onCheckedChange={complete} />
+    <div
+      className={`flex items-center gap-3 rounded-lg border px-3 py-2 ${
+        selected ? "border-primary bg-primary/5" : ""
+      }`}
+    >
+      <Checkbox
+        checked={selectable ? !!selected : false}
+        onCheckedChange={(c) =>
+          selectable ? onSelectChange?.(c === true) : complete()
+        }
+        aria-label={selectable ? "Select task" : "Complete task"}
+      />
       <div className="min-w-0 flex-1">
         <InlineInput
           value={task.title}
@@ -59,6 +77,18 @@ export function TaskRow({
         </Link>
       </div>
       <Badge variant="secondary">{task.type}</Badge>
+
+      {/* Urgency / criticality — inline editable, colored by level */}
+      <div className="w-24 shrink-0">
+        <InlineSelect
+          value={task.urgency}
+          options={TASK_URGENCY_OPTIONS}
+          className={`font-medium ${URGENCY_TEXT_CLASS[task.urgency]}`}
+          onSave={(urgency) =>
+            quickUpdateTaskAction(task.id, { urgency: urgency as TaskUrgency })
+          }
+        />
+      </div>
 
       {/* Due date — inline */}
       <div className="w-32 shrink-0">

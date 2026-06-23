@@ -13,7 +13,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { Prisma } from "@/generated/prisma";
 import { requireUser } from "@/lib/auth/guards";
-import { isAdmin, canEditDeal, canViewClient } from "@/lib/rbac";
+import { isAdmin, canEditDeal, canEditClient, canLinkClientToDeal } from "@/lib/rbac";
 import {
   changeList,
   diffText,
@@ -94,6 +94,7 @@ export async function quickUpdateDealAction(dealId: string, patch: DealPatch): P
     stageMoved = true;
   }
   if (patch.clientId !== undefined) {
+    if (!(await canLinkClientToDeal(user, patch.clientId))) return { error: "Not allowed." };
     data.clientId = patch.clientId || null;
   }
   if (patch.ownerId !== undefined) {
@@ -253,7 +254,7 @@ export type ClientPatch = {
 
 export async function quickUpdateClientAction(clientId: string, patch: ClientPatch): Promise<Result> {
   const user = await requireUser();
-  if (!(await canViewClient(user, clientId))) return { error: "Not allowed." };
+  if (!(await canEditClient(user, clientId))) return { error: "Not allowed." };
 
   const before = await prisma.client.findUnique({
     where: { id: clientId },
@@ -318,6 +319,7 @@ export type TaskPatch = {
   dueDate?: string | null;
   assigneeId?: string | null;
   status?: "OPEN" | "DONE";
+  urgency?: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
 };
 
 export async function quickUpdateTaskAction(taskId: string, patch: TaskPatch): Promise<Result> {
@@ -346,6 +348,9 @@ export async function quickUpdateTaskAction(taskId: string, patch: TaskPatch): P
     data.status = patch.status;
     data.completedAt = patch.status === "DONE" ? new Date() : null;
   }
+  if (patch.urgency !== undefined) {
+    data.urgency = patch.urgency;
+  }
 
   if (Object.keys(data).length === 0) return { ok: true };
 
@@ -357,6 +362,8 @@ export async function quickUpdateTaskAction(taskId: string, patch: TaskPatch): P
       ? await prisma.user.findUnique({ where: { id: patch.assigneeId }, select: { name: true } })
       : null;
     const statusLabel = (st?: string) => (st === "DONE" ? "Done" : st === "OPEN" ? "Open" : null);
+    const urgencyLabel = (u?: string) =>
+      u ? u.charAt(0) + u.slice(1).toLowerCase() : null;
     changes = changeList(
       patch.title !== undefined ? diffText("title", "Title", task.title, patch.title.trim()) : null,
       patch.dueDate !== undefined
@@ -365,7 +372,10 @@ export async function quickUpdateTaskAction(taskId: string, patch: TaskPatch): P
       patch.assigneeId !== undefined
         ? diffPlain("assignee", "Assignee", task.assignee?.name ?? null, patch.assigneeId ? newAssignee?.name ?? null : null)
         : null,
-      patch.status !== undefined ? diffPlain("status", "Status", statusLabel(task.status), statusLabel(patch.status)) : null
+      patch.status !== undefined ? diffPlain("status", "Status", statusLabel(task.status), statusLabel(patch.status)) : null,
+      patch.urgency !== undefined
+        ? diffPlain("urgency", "Urgency", urgencyLabel(task.urgency), urgencyLabel(patch.urgency))
+        : null
     );
   } catch {
     // best-effort
@@ -382,4 +392,51 @@ export async function quickUpdateTaskAction(taskId: string, patch: TaskPatch): P
   revalidatePath("/tasks");
   revalidatePath("/deals/[salesId]", "page");
   return { ok: true };
+}
+
+/**
+ * Mark multiple tasks DONE in one call (bulk-complete from the Tasks page).
+ * RBAC is enforced per task: only tasks already-open and on deals the user can
+ * edit are completed; others are silently skipped. Returns the completed count.
+ */
+export async function bulkCompleteTasksAction(
+  taskIds: string[]
+): Promise<Result & { completed?: number }> {
+  const user = await requireUser();
+  const ids = Array.from(new Set(taskIds.filter(Boolean)));
+  if (ids.length === 0) return { error: "No tasks selected." };
+
+  const tasks = await prisma.task.findMany({
+    where: { id: { in: ids }, status: "OPEN" },
+    include: { deal: { select: { id: true, salesId: true, title: true } } },
+  });
+
+  // Filter down to tasks the user is actually allowed to edit.
+  const editable: typeof tasks = [];
+  for (const t of tasks) {
+    if (await canEditDeal(user, t.dealId)) editable.push(t);
+  }
+  if (editable.length === 0) return { error: "Nothing to complete." };
+
+  const now = new Date();
+  await prisma.task.updateMany({
+    where: { id: { in: editable.map((t) => t.id) } },
+    data: { status: "DONE", completedAt: now },
+  });
+
+  // Best-effort audit log per task, against the parent deal for feed linking.
+  await Promise.all(
+    editable.map((t) =>
+      audit(user.id, "task_updated", "Deal", t.dealId, {
+        taskTitle: t.title,
+        salesId: t.deal?.salesId,
+        title: t.deal?.title,
+        changes: changeList(diffPlain("status", "Status", "Open", "Done")),
+      })
+    )
+  );
+
+  revalidatePath("/tasks");
+  revalidatePath("/deals/[salesId]", "page");
+  return { ok: true, completed: editable.length };
 }

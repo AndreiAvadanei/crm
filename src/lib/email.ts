@@ -1,5 +1,6 @@
 import "server-only";
 import { ServerClient } from "postmark";
+import { APP_NAME } from "@/lib/app-constants";
 
 type SendArgs = {
   to: string | string[];
@@ -7,8 +8,6 @@ type SendArgs = {
   html: string;
   text?: string;
 };
-
-const APP_NAME = "CRM";
 
 /** Strip tags to a readable plain-text body for the multipart fallback. */
 function htmlToText(html: string): string {

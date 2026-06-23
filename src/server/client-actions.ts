@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/auth/guards";
-import { isAdmin, canViewClient } from "@/lib/rbac";
+import { isAdmin, canEditClient } from "@/lib/rbac";
 import { saveCustomFieldsFromForm } from "@/lib/custom-fields";
 import { logActivity } from "@/lib/activity";
 import { changeList, diffText, diffPlain, diffList, type ActivityChange } from "@/lib/activity-diff";
@@ -62,7 +62,7 @@ export async function createClientAction(formData: FormData): Promise<Result> {
 
 export async function updateClientAction(clientId: string, formData: FormData): Promise<Result> {
   const user = await requireUser();
-  if (!(await canViewClient(user, clientId))) return { error: "Not allowed." };
+  if (!(await canEditClient(user, clientId))) return { error: "Not allowed." };
   const tagIds = formData.getAll("tagIds").map(String).filter(Boolean);
 
   const before = await prisma.client.findUnique({

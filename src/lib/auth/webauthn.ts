@@ -13,9 +13,10 @@ import type {
 } from "@simplewebauthn/server";
 import { prisma } from "@/lib/db";
 import type { User } from "@/generated/prisma";
+import { APP_NAME } from "@/lib/app-constants";
 
 const rpID = process.env.WEBAUTHN_RP_ID || "localhost";
-const rpName = process.env.WEBAUTHN_RP_NAME || "CRM";
+const rpName = process.env.WEBAUTHN_RP_NAME || APP_NAME;
 const origin = process.env.WEBAUTHN_ORIGIN || "http://localhost:3000";
 
 export async function buildRegistrationOptions(user: User) {

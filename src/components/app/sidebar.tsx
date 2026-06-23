@@ -14,6 +14,7 @@ import {
   Activity,
   BarChart3,
   Image as ImageIcon,
+  Settings,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SidebarLogo } from "@/components/app/sidebar-logo";
@@ -33,6 +34,7 @@ const adminNav: NavItem[] = [
   { href: "/admin/custom-fields", label: "Custom Fields", icon: SlidersHorizontal },
   { href: "/admin/pipeline", label: "Pipeline & Tags", icon: GitBranch },
   { href: "/admin/branding", label: "Branding", icon: ImageIcon },
+  { href: "/admin/settings", label: "Settings", icon: Settings },
   { href: "/admin/import", label: "Import", icon: Upload },
   { href: "/activity", label: "Activity", icon: Activity },
 ];
