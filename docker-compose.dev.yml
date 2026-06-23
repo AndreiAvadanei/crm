@@ -1,0 +1,30 @@
+# Dev override: live rebuilds / hot reload.
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+#
+# The host source tree is bind-mounted into the container and `next dev` watches
+# it, so code changes are picked up without rebuilding the image. node_modules
+# and .next are kept in named volumes so the host (macOS/arm) and container
+# (linux) artifacts don't clobber each other.
+services:
+  web:
+    build:
+      target: dev
+    environment:
+      NODE_ENV: development
+      # In dev, NEXT_PUBLIC_* is read at runtime by `next dev` (not baked at build time).
+      NEXT_PUBLIC_TINYMCE_API_KEY: ${NEXT_PUBLIC_TINYMCE_API_KEY:-}
+      # Enable polling-based file watching across the Docker VM boundary.
+      WATCHPACK_POLLING: "true"
+      CHOKIDAR_USEPOLLING: "true"
+    volumes:
+      # Live source mount for hot reload.
+      - .:/app
+      # Keep container-built deps/artifacts isolated from the host.
+      - node_modules:/app/node_modules
+      - next_cache:/app/.next
+      - uploads_data:/data/uploads
+
+volumes:
+  node_modules:
+  next_cache:

@@ -1,0 +1,10 @@
+node_modules
+.next
+.git
+data
+uploads
+*.log
+jira.csv
+.env
+.env*.local
+src/generated

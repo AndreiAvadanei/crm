@@ -1,0 +1,216 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --radius: 0.5rem;
+  --background: oklch(0.99 0.002 250);
+  --foreground: oklch(0.24 0.012 250);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.24 0.012 250);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.24 0.012 250);
+  --primary: oklch(0.44 0.09 250);
+  --primary-foreground: oklch(0.99 0.005 250);
+  --secondary: oklch(0.97 0.004 250);
+  --secondary-foreground: oklch(0.32 0.012 250);
+  --muted: oklch(0.965 0.005 250);
+  --muted-foreground: oklch(0.52 0.014 250);
+  --accent: oklch(0.955 0.006 250);
+  --accent-foreground: oklch(0.28 0.012 250);
+  --destructive: oklch(0.55 0.17 25);
+  --destructive-foreground: oklch(0.99 0.005 25);
+  --success: oklch(0.52 0.1 155);
+  --warning: oklch(0.62 0.11 75);
+  --border: oklch(0.915 0.006 250);
+  --input: oklch(0.915 0.006 250);
+  --ring: oklch(0.44 0.09 250);
+  --chart-1: oklch(0.5 0.09 250);
+  --chart-2: oklch(0.58 0.09 175);
+  --chart-3: oklch(0.64 0.1 75);
+  --chart-4: oklch(0.56 0.12 25);
+  --chart-5: oklch(0.56 0.1 310);
+  --sidebar: oklch(0.98 0.003 250);
+  --sidebar-foreground: oklch(0.24 0.012 250);
+  --sidebar-primary: oklch(0.44 0.09 250);
+  --sidebar-primary-foreground: oklch(0.99 0.005 250);
+  --sidebar-accent: oklch(0.955 0.006 250);
+  --sidebar-accent-foreground: oklch(0.28 0.012 250);
+  --sidebar-border: oklch(0.915 0.006 250);
+  --sidebar-ring: oklch(0.44 0.09 250);
+}
+
+.dark {
+  --background: oklch(0.2 0.008 250);
+  --foreground: oklch(0.92 0.006 250);
+  --card: oklch(0.24 0.009 250);
+  --card-foreground: oklch(0.92 0.006 250);
+  --popover: oklch(0.24 0.009 250);
+  --popover-foreground: oklch(0.92 0.006 250);
+  --primary: oklch(0.68 0.09 250);
+  --primary-foreground: oklch(0.18 0.02 250);
+  --secondary: oklch(0.29 0.009 250);
+  --secondary-foreground: oklch(0.92 0.006 250);
+  --muted: oklch(0.29 0.009 250);
+  --muted-foreground: oklch(0.68 0.012 250);
+  --accent: oklch(0.31 0.01 250);
+  --accent-foreground: oklch(0.92 0.006 250);
+  --destructive: oklch(0.62 0.15 25);
+  --destructive-foreground: oklch(0.98 0.005 25);
+  --success: oklch(0.68 0.1 155);
+  --warning: oklch(0.74 0.1 75);
+  --border: oklch(0.33 0.009 250);
+  --input: oklch(0.33 0.009 250);
+  --ring: oklch(0.68 0.09 250);
+  --chart-1: oklch(0.68 0.09 250);
+  --chart-2: oklch(0.7 0.09 175);
+  --chart-3: oklch(0.76 0.1 75);
+  --chart-4: oklch(0.66 0.12 25);
+  --chart-5: oklch(0.68 0.1 310);
+  --sidebar: oklch(0.22 0.008 250);
+  --sidebar-foreground: oklch(0.92 0.006 250);
+  --sidebar-primary: oklch(0.68 0.09 250);
+  --sidebar-primary-foreground: oklch(0.18 0.02 250);
+  --sidebar-accent: oklch(0.31 0.01 250);
+  --sidebar-accent-foreground: oklch(0.92 0.006 250);
+  --sidebar-border: oklch(0.33 0.009 250);
+  --sidebar-ring: oklch(0.68 0.09 250);
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 6px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+* {
+  border-color: var(--border);
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-feature-settings: "rlig" 1, "calt" 1;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Shared form-control focus — softer than ring-2 on saturated primary */
+@layer components {
+  .form-control {
+    @apply rounded-md border border-input bg-background text-sm transition-colors;
+    @apply focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/50;
+  }
+  .segment-active {
+    @apply bg-background text-foreground shadow-sm;
+  }
+  .segment-inactive {
+    @apply text-muted-foreground transition-colors hover:text-foreground;
+  }
+}
+
+/* Rendered comment HTML (sanitized rich text). Uses theme tokens so it reads
+   well in both light and dark mode. */
+.comment-html {
+  word-break: break-word;
+}
+.comment-html > :first-child {
+  margin-top: 0;
+}
+.comment-html > :last-child {
+  margin-bottom: 0;
+}
+.comment-html p {
+  margin: 0.375rem 0;
+}
+.comment-html a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.comment-html ul,
+.comment-html ol {
+  margin: 0.375rem 0;
+  padding-left: 1.25rem;
+}
+.comment-html ul {
+  list-style: disc;
+}
+.comment-html ol {
+  list-style: decimal;
+}
+.comment-html li {
+  margin: 0.125rem 0;
+}
+.comment-html blockquote {
+  margin: 0.5rem 0;
+  padding-left: 0.75rem;
+  border-left: 3px solid var(--border);
+  color: var(--muted-foreground);
+}
+.comment-html code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  padding: 0.1em 0.3em;
+  border-radius: var(--radius-sm);
+  background-color: var(--muted);
+}
+.comment-html pre {
+  margin: 0.5rem 0;
+  padding: 0.625rem 0.75rem;
+  border-radius: var(--radius-md);
+  background-color: var(--muted);
+  overflow-x: auto;
+}
+.comment-html pre code {
+  padding: 0;
+  background: transparent;
+}
+
+/* Thin, modern scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: var(--border);
+  border-radius: 9999px;
+}
