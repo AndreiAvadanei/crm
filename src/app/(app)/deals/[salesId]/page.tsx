@@ -19,6 +19,7 @@ import { TasksPanel } from "@/components/deals/tasks-panel";
 import { CommentsPanel } from "@/components/deals/comments-panel";
 import { FilesPanel } from "@/components/deals/files-panel";
 import { ShareControl } from "@/components/deals/share-control";
+import { InvoiceListCard } from "@/components/invoices/invoice-list-card";
 import { deleteDealAction } from "@/server/deal-actions";
 import { formatDate, relativeTime } from "@/lib/utils";
 import { activityPhrase } from "@/lib/activity-format";
@@ -62,6 +63,10 @@ export default async function DealDetailPage({ params }: DealDetailPageProps) {
       // Inline images embedded in comments are excluded — they're managed via
       // the rich-text editor, not the Files list.
       attachments: { where: { inline: false }, orderBy: [{ createdAt: "desc" }, { id: "desc" }] },
+      invoices: {
+        include: { organization: { select: { sourceName: true } } },
+        orderBy: [{ issueDate: "desc" }, { createdAt: "desc" }],
+      },
     },
   });
   if (!deal) notFound();
@@ -136,6 +141,28 @@ export default async function DealDetailPage({ params }: DealDetailPageProps) {
   const canDelete = admin || deal.ownerId === user.id;
   const fieldValues = Object.fromEntries(valuesMap.entries());
   const openTasks = deal.tasks.filter((t) => t.status === "OPEN").length;
+
+  // Billing organizations for this deal's client (invoice "Add" picker).
+  const dealOrgs = deal.clientId
+    ? await prisma.organization.findMany({
+        where: { clientId: deal.clientId },
+        orderBy: { sourceName: "asc" },
+        select: { id: true, sourceName: true },
+      })
+    : [];
+  const canManageInvoices = admin || deal.client?.ownerId === user.id;
+  const defaultOrgId = dealOrgs.find((o) => o.id)?.id;
+  const dealOptions = [{ salesId: deal.salesId, title: deal.title }];
+  const invoiceItems = deal.invoices.map((i) => ({
+    id: i.id,
+    number: i.number,
+    externalRef: i.externalRef,
+    organizationName: i.organization.sourceName,
+    status: i.status,
+    totalAmount: i.totalAmount == null ? null : Number(i.totalAmount),
+    currency: i.currency,
+    issueDate: i.issueDate ? i.issueDate.toISOString() : null,
+  }));
 
   const taskItems = deal.tasks.map((t) => ({
     id: t.id,
@@ -287,6 +314,15 @@ export default async function DealDetailPage({ params }: DealDetailPageProps) {
               />
             </CardContent>
           </Card>
+
+          <InvoiceListCard
+            invoices={invoiceItems}
+            add={
+              canManageInvoices
+                ? { organizations: dealOrgs.map((o) => ({ id: o.id, name: o.sourceName })), deals: dealOptions, defaultSalesId: deal.salesId, defaultOrganizationId: defaultOrgId }
+                : undefined
+            }
+          />
 
           <Card>
             <CardHeader>

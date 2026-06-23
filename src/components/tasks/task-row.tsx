@@ -52,75 +52,85 @@ export function TaskRow({
 
   return (
     <div
-      className={`flex items-center gap-3 rounded-lg border px-3 py-2 ${
+      className={`flex items-start gap-3 rounded-lg border px-3 py-2 ${
         selected ? "border-primary bg-primary/5" : ""
       }`}
     >
       <Checkbox
+        className="mt-1 shrink-0"
         checked={selectable ? !!selected : false}
         onCheckedChange={(c) =>
           selectable ? onSelectChange?.(c === true) : complete()
         }
         aria-label={selectable ? "Select task" : "Complete task"}
       />
-      <div className="min-w-0 flex-1">
-        <InlineInput
-          value={task.title}
-          triggerClassName="font-medium"
-          onSave={(title) => quickUpdateTaskAction(task.id, { title })}
-        />
-        <Link
-          href={`/deals/${task.dealSalesId}`}
-          className="block px-1.5 text-xs text-muted-foreground hover:text-primary"
-        >
-          <span className="font-mono">{task.dealSalesId}</span> · {task.dealTitle}
-        </Link>
-      </div>
-      <Badge variant="secondary">{task.type}</Badge>
-
-      {/* Urgency / criticality — inline editable, colored by level */}
-      <div className="w-24 shrink-0">
-        <InlineSelect
-          value={task.urgency}
-          options={TASK_URGENCY_OPTIONS}
-          className={`font-medium ${URGENCY_TEXT_CLASS[task.urgency]}`}
-          onSave={(urgency) =>
-            quickUpdateTaskAction(task.id, { urgency: urgency as TaskUrgency })
-          }
-        />
-      </div>
-
-      {/* Due date — inline */}
-      <div className="w-32 shrink-0">
-        <InlineInput
-          type="date"
-          value={task.dueDate ?? ""}
-          display={
-            task.dueDate ? (
-              <span className={task.overdue ? "text-xs font-medium text-destructive" : "text-xs text-muted-foreground"}>
-                {formatDate(task.dueDate)}
-              </span>
-            ) : (
-              <span className="text-xs text-muted-foreground">No date</span>
-            )
-          }
-          onSave={(dueDate) => quickUpdateTaskAction(task.id, { dueDate: dueDate || null })}
-        />
-      </div>
-
-      {/* Assignee — admins can reassign inline */}
-      {admin ? (
-        <div className="w-36 shrink-0">
-          <InlineSelect
-            value={task.assigneeId ?? ""}
-            placeholder="Unassigned"
-            options={owners.map((o) => ({ value: o.id, label: o.name }))}
-            onSave={(assigneeId) => quickUpdateTaskAction(task.id, { assigneeId: assigneeId || null })}
+      {/* Stack title above metadata on small screens; inline single row on sm+ */}
+      <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+        <div className="min-w-0 flex-1">
+          <InlineInput
+            value={task.title}
+            triggerClassName="font-medium"
+            onSave={(title) => quickUpdateTaskAction(task.id, { title })}
           />
+          <Link
+            href={`/deals/${task.dealSalesId}`}
+            className="block px-1.5 text-xs text-muted-foreground hover:text-primary"
+          >
+            <span className="font-mono">{task.dealSalesId}</span> · {task.dealTitle}
+          </Link>
         </div>
-      ) : (
-        task.assigneeName && <Avatar name={task.assigneeName} color={task.assigneeColor} className="h-6 w-6 text-[10px]" />
-      )}
+
+        {/* Metadata controls: wrap on small screens, fixed columns on sm+ */}
+        <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap sm:gap-3">
+          <Badge variant="secondary" className="shrink-0">
+            {task.type}
+          </Badge>
+
+          {/* Urgency / criticality — inline editable, colored by level */}
+          <div className="w-24 shrink-0">
+            <InlineSelect
+              value={task.urgency}
+              options={TASK_URGENCY_OPTIONS}
+              className={`font-medium ${URGENCY_TEXT_CLASS[task.urgency]}`}
+              onSave={(urgency) =>
+                quickUpdateTaskAction(task.id, { urgency: urgency as TaskUrgency })
+              }
+            />
+          </div>
+
+          {/* Due date — inline */}
+          <div className="w-32 shrink-0">
+            <InlineInput
+              type="date"
+              value={task.dueDate ?? ""}
+              display={
+                task.dueDate ? (
+                  <span className={task.overdue ? "text-xs font-medium text-destructive" : "text-xs text-muted-foreground"}>
+                    {formatDate(task.dueDate)}
+                  </span>
+                ) : (
+                  <span className="text-xs text-muted-foreground">No date</span>
+                )
+              }
+              onSave={(dueDate) => quickUpdateTaskAction(task.id, { dueDate: dueDate || null })}
+            />
+          </div>
+
+          {/* Assignee — admins can reassign inline */}
+          {admin ? (
+            <div className="w-36 shrink-0">
+              <InlineSelect
+                value={task.assigneeId ?? ""}
+                placeholder="Unassigned"
+                options={owners.map((o) => ({ value: o.id, label: o.name }))}
+                onSave={(assigneeId) => quickUpdateTaskAction(task.id, { assigneeId: assigneeId || null })}
+              />
+            </div>
+          ) : (
+            task.assigneeName && <Avatar name={task.assigneeName} color={task.assigneeColor} className="h-6 w-6 text-[10px]" />
+          )}
+        </div>
+      </div>
     </div>
   );
 }

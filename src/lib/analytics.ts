@@ -148,6 +148,8 @@ export type SellerStats = {
   role: string;
   /** KPIs over the requested window (honours from/to + activeOnly). */
   kpis: Kpis;
+  /** Lead / active / closing / won / lost funnel over the requested window. */
+  funnel: FunnelStage[];
   /** Year × period (quarter/semester/year) win-rate & value matrix, all-time. */
   scorecard: Scorecard;
   /** Monthly created-vs-won trend across the window. */
@@ -172,6 +174,7 @@ type DealLite = {
     isWon: boolean;
     isLost: boolean;
     probability: number;
+    phase: string | null;
   };
 };
 
@@ -208,6 +211,7 @@ async function fetchScopedDeals(
           isWon: true,
           isLost: true,
           probability: true,
+          phase: true,
         },
       },
     },
@@ -342,6 +346,39 @@ function computeFunnel(deals: DealLite[]): FunnelStage[] {
     cur.value += amt(d);
     map.set(s.id, cur);
   }
+  return [...map.values()].sort((a, b) => a.order - b.order);
+}
+
+const PHASE_FUNNEL_STAGES = [
+  { id: "lead", name: "Lead", color: "var(--chart-1)", order: 1 },
+  { id: "closing", name: "Closing", color: "var(--chart-3)", order: 2 },
+  { id: "won", name: "Won", color: "var(--success)", order: 3 },
+  { id: "lost", name: "Lost", color: "var(--destructive)", order: 4 },
+  { id: "active", name: "Active", color: "var(--chart-2)", order: 5 },
+] satisfies Omit<FunnelStage, "count" | "value">[];
+
+function phaseBucket(d: DealLite): (typeof PHASE_FUNNEL_STAGES)[number]["id"] {
+  if (d.stage.isWon) return "won";
+  if (d.stage.isLost) return "lost";
+
+  const phase = d.stage.phase?.trim().toLowerCase();
+  if (phase === "lead" || phase === "closing" || phase === "active") return phase;
+
+  return "active";
+}
+
+function computePhaseFunnel(deals: DealLite[]): FunnelStage[] {
+  const map = new Map(
+    PHASE_FUNNEL_STAGES.map((s) => [s.id, { ...s, count: 0, value: 0 }])
+  );
+
+  for (const d of deals) {
+    const bucket = map.get(phaseBucket(d));
+    if (!bucket) continue;
+    bucket.count += 1;
+    bucket.value += amt(d);
+  }
+
   return [...map.values()].sort((a, b) => a.order - b.order);
 }
 
@@ -569,6 +606,7 @@ export async function getSellerBreakdown(
       avatarColor: g.meta?.avatarColor ?? "#94a3b8",
       role: g.meta?.role ?? "—",
       kpis: computeKpis(g.windowed),
+      funnel: computePhaseFunnel(g.windowed),
       scorecard: computeScorecard(g.all, resolved.granularity),
       series: computeSeries(g.windowed, resolved.from, resolved.to),
     });

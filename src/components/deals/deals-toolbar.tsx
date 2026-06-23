@@ -13,7 +13,7 @@ import {
   ClearFiltersButton,
   useFilterUrl,
 } from "@/components/shared/filter-bar";
-import { DEAL_STATUS_OPTIONS } from "@/lib/filter-helpers";
+import { DEAL_STATUS_OPTIONS, STALE_WINDOW_OPTIONS } from "@/lib/filter-helpers";
 import { DealSortSelect } from "@/components/deals/deal-sort-select";
 import type { TagView } from "@/components/shared/tag-badge";
 
@@ -31,6 +31,7 @@ const DEAL_FILTER_KEYS = [
   "dueTo",
   "overdue",
   "mine",
+  "stale",
 ];
 
 export function DealsToolbar({
@@ -83,6 +84,13 @@ export function DealsToolbar({
       <FilterDateRange fromParam="dueFrom" toParam="dueTo" />
 
       <FilterToggleChip param="overdue" label="Overdue" icon={<AlarmClock />} />
+
+      <FilterSelect
+        param="stale"
+        placeholder="Any activity"
+        ariaLabel="Filter stalled open deals"
+        options={STALE_WINDOW_OPTIONS}
+      />
 
       <FilterToggleChip param="mine" label="My deals" icon={<UserCheck />} />
 

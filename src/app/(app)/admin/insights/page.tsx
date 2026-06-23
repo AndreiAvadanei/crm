@@ -15,8 +15,9 @@ import {
 import { DashboardFilters } from "@/components/dashboard/dashboard-filters";
 import { SellerCompareChart } from "@/components/dashboard/dashboard-charts";
 import { GranularityToggle } from "@/components/dashboard/scorecard-table";
-import { SellerInsights } from "@/components/dashboard/seller-insights";
+import { SellerInsights, SellerPhaseFunnel } from "@/components/dashboard/seller-insights";
 import { formatCurrency } from "@/lib/utils";
+import type { FunnelStage, SellerStats } from "@/lib/analytics";
 
 export const metadata = {
   title: "Seller insights",
@@ -28,10 +29,25 @@ function parseDate(v?: string): Date | null {
   return isNaN(d.getTime()) ? null : d;
 }
 
+function aggregateSellerFunnel(sellers: SellerStats[]): FunnelStage[] {
+  const template = sellers[0]?.funnel ?? [];
+  return template.map((stage, index) => ({
+    ...stage,
+    count: sellers.reduce((sum, seller) => sum + (seller.funnel[index]?.count ?? 0), 0),
+    value: sellers.reduce((sum, seller) => sum + (seller.funnel[index]?.value ?? 0), 0),
+  }));
+}
+
 export default async function AdminInsightsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ from?: string; to?: string; active?: string; gran?: string }>;
+  searchParams: Promise<{
+    from?: string;
+    to?: string;
+    active?: string;
+    gran?: string;
+    seller?: string;
+  }>;
 }) {
   const user = await requireAdmin();
   const sp = await searchParams;
@@ -39,12 +55,20 @@ export default async function AdminInsightsPage({
   const granularity: Granularity =
     sp.gran === "semester" || sp.gran === "year" ? sp.gran : "quarter";
 
-  const sellers = await getSellerBreakdown(user, {
+  const allSellers = await getSellerBreakdown(user, {
     from: parseDate(sp.from),
     to: parseDate(sp.to) ?? new Date(),
     activeOnly: sp.active === "1",
     granularity,
   });
+
+  const selectedSeller = allSellers.find((seller) => seller.ownerId === sp.seller);
+  const sellers = selectedSeller ? [selectedSeller] : allSellers;
+  const sellerOptions = allSellers.map((seller) => ({
+    value: seller.ownerId,
+    label: seller.name,
+  }));
+  const overallFunnel = aggregateSellerFunnel(sellers);
 
   const maxWon = Math.max(1, ...sellers.map((s) => s.kpis.totalWon));
   const chartData = sellers.map((s) => ({
@@ -61,7 +85,7 @@ export default async function AdminInsightsPage({
         description="Compare sales performance across the team."
       />
       <div className="space-y-6 p-4 md:p-6">
-        <DashboardFilters showComparison={false} />
+        <DashboardFilters showComparison={false} sellerOptions={sellerOptions} />
 
         {sellers.length === 0 ? (
           <Card>
@@ -71,6 +95,11 @@ export default async function AdminInsightsPage({
           </Card>
         ) : (
           <>
+            <SellerPhaseFunnel
+              funnel={overallFunnel}
+              sellerName={selectedSeller?.name}
+            />
+
             <div className="grid gap-6 lg:grid-cols-2">
               <Card>
                 <CardHeader>

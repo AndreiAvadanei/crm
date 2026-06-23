@@ -67,6 +67,7 @@ function StatCard({
   icon: Icon,
   delta,
   invert,
+  tone = "var(--chart-1)",
 }: {
   label: string;
   value: string;
@@ -74,17 +75,22 @@ function StatCard({
   icon: React.ElementType;
   delta?: KpiDelta;
   invert?: boolean;
+  tone?: string;
 }) {
   return (
-    <Card>
+    <Card className="card-interactive">
       <CardContent className="flex items-start justify-between p-5">
         <div>
-          <div className="text-sm text-muted-foreground">{label}</div>
-          <div className="mt-1 text-2xl font-semibold tabular-nums">{value}</div>
+          <div className="text-sm font-medium text-muted-foreground">{label}</div>
+          <div className="mt-1 text-2xl font-semibold tabular-nums text-foreground">{value}</div>
           {sub && <div className="mt-0.5 text-xs text-muted-foreground">{sub}</div>}
           <DeltaBadge delta={delta} invert={invert} />
         </div>
-        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+        {/* Tinted icon chip adds color without overwhelming the card. */}
+        <div
+          className="flex h-10 w-10 items-center justify-center rounded-lg"
+          style={{ backgroundColor: `color-mix(in oklch, ${tone} 16%, transparent)`, color: tone }}
+        >
           <Icon className="h-5 w-5" />
         </div>
       </CardContent>
@@ -106,14 +112,19 @@ function StatusCard({
   tone: string;
 }) {
   return (
-    <Card>
+    <Card className="card-interactive">
       <CardContent className="flex items-center justify-between p-5">
         <div>
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Icon className="h-4 w-4" style={{ color: tone }} />
+          <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+            <span
+              className="flex h-6 w-6 items-center justify-center rounded-md"
+              style={{ backgroundColor: `color-mix(in oklch, ${tone} 16%, transparent)`, color: tone }}
+            >
+              <Icon className="h-3.5 w-3.5" />
+            </span>
             {label}
           </div>
-          <div className="mt-1 text-2xl font-semibold tabular-nums">{count}</div>
+          <div className="mt-1 text-2xl font-semibold tabular-nums text-foreground">{count}</div>
           <div className="mt-0.5 text-xs text-muted-foreground">{formatCurrency(value)}</div>
         </div>
       </CardContent>
@@ -252,6 +263,7 @@ export default async function DashboardPage({
             sub={`${k.pipelineCount} open deals`}
             icon={Wallet}
             delta={d?.pipelineTotal}
+            tone="var(--chart-1)"
           />
           <StatCard
             label="Win rate"
@@ -259,6 +271,7 @@ export default async function DashboardPage({
             sub={`${k.wonCount}W / ${k.lostCount}L closed`}
             icon={Target}
             delta={d?.winRate}
+            tone="var(--chart-2)"
           />
           <StatCard
             label="Loss rate"
@@ -267,6 +280,7 @@ export default async function DashboardPage({
             icon={Percent}
             delta={d?.lossRate}
             invert
+            tone="var(--chart-4)"
           />
           <StatCard
             label="Avg won deal"
@@ -274,6 +288,7 @@ export default async function DashboardPage({
             sub={`${k.wonCount} won deals`}
             icon={Coins}
             delta={d?.avgWonDeal}
+            tone="var(--chart-3)"
           />
           <StatCard
             label="Total won"
@@ -281,6 +296,7 @@ export default async function DashboardPage({
             sub={`${k.wonCount} deals`}
             icon={Trophy}
             delta={d?.totalWon}
+            tone="var(--chart-5)"
           />
         </div>
 

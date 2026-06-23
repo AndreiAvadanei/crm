@@ -11,3 +11,6 @@ export const APP_NAME = "Bit Sentinel";
  * selectable. Replace with real pagination if datasets outgrow this bound.
  */
 export const LIST_FETCH_CAP = 5000;
+
+/** Default row count for paginated list pages. */
+export const CLIENTS_PAGE_SIZE = 25;

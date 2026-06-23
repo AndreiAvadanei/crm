@@ -34,6 +34,19 @@ export interface ClientFilterOpts {
   activeWithinDays?: number;
 }
 
+export interface ClientPaginationOpts extends ClientFilterOpts {
+  page?: number;
+  pageSize: number;
+}
+
+export interface PaginatedClientsWithStats {
+  clients: ClientWithStats[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
 /** Per-client rollups derived from the client's deals and their activity. */
 export interface ClientStats {
   dealCount: number;
@@ -241,6 +254,34 @@ export async function getClientsWithStats(
   });
 
   return sortClients(filtered, sort);
+}
+
+/**
+ * Server-side pagination wrapper for the clients list.
+ *
+ * Important: pagination happens after all filters and stats-derived predicates
+ * (`hasOpenDeals`, `noDeals`, `activeWithinDays`) so every page is a slice of
+ * the final filtered/sorted result set.
+ */
+export async function getPaginatedClientsWithStats(
+  user: User,
+  opts: ClientPaginationOpts
+): Promise<PaginatedClientsWithStats> {
+  const pageSize = Math.max(1, opts.pageSize);
+  const allClients = await getClientsWithStats(user, opts);
+  const total = allClients.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const requestedPage = Number.isFinite(opts.page) && opts.page && opts.page > 0 ? opts.page : 1;
+  const page = Math.min(requestedPage, totalPages);
+  const start = (page - 1) * pageSize;
+
+  return {
+    clients: allClients.slice(start, start + pageSize),
+    total,
+    page,
+    pageSize,
+    totalPages,
+  };
 }
 
 /**

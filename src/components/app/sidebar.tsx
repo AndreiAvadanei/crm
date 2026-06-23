@@ -6,6 +6,8 @@ import {
   LayoutDashboard,
   Handshake,
   Building2,
+  Building,
+  Receipt,
   Users,
   SlidersHorizontal,
   GitBranch,
@@ -25,6 +27,8 @@ const mainNav: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/deals", label: "Deals", icon: Handshake },
   { href: "/clients", label: "Clients", icon: Building2 },
+  { href: "/organizations", label: "Organizations", icon: Building },
+  { href: "/invoices", label: "Invoices", icon: Receipt },
   { href: "/tasks", label: "Tasks", icon: CheckSquare },
 ];
 

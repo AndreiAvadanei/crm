@@ -9,12 +9,12 @@ import {
   Tooltip,
   CartesianGrid,
 } from "recharts";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
 import { ScorecardGrid } from "@/components/dashboard/scorecard-table";
 import { formatCurrency } from "@/lib/utils";
-import type { SellerStats } from "@/lib/analytics";
+import type { FunnelStage, SellerStats } from "@/lib/analytics";
 
 /** Single headline stat used in the per-seller metric strip. */
 function Metric({
@@ -102,6 +102,83 @@ function winColor(rate: number) {
     : rate >= 25
       ? "var(--warning)"
       : "var(--destructive)";
+}
+
+export function SellerPhaseFunnel({
+  funnel,
+  sellerName,
+}: {
+  funnel: FunnelStage[];
+  sellerName?: string;
+}) {
+  const totalCount = funnel.reduce((sum, stage) => sum + stage.count, 0);
+  const totalValue = funnel.reduce((sum, stage) => sum + stage.value, 0);
+  const maxCount = Math.max(1, ...funnel.map((stage) => stage.count));
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Overall funnel</CardTitle>
+        <p className="text-sm text-muted-foreground">
+          {sellerName ? `${sellerName}'s deals` : "All sales"} by Lead, Closing, Won, Lost and Active.
+        </p>
+      </CardHeader>
+      <CardContent>
+        {totalCount === 0 ? (
+          <div className="flex h-[220px] items-center justify-center text-sm text-muted-foreground">
+            No deals in this window.
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
+              <span className="text-muted-foreground">
+                Total deals: <span className="font-medium text-foreground tabular-nums">{totalCount}</span>
+              </span>
+              <span className="text-muted-foreground">
+                Total value:{" "}
+                <span className="font-medium text-foreground tabular-nums">
+                  {formatCurrency(totalValue)}
+                </span>
+              </span>
+            </div>
+            <div className="space-y-3">
+              {funnel.map((stage) => {
+                const pct = totalCount ? Math.round((stage.count / totalCount) * 100) : 0;
+                return (
+                  <div key={stage.id} className="space-y-1">
+                    <div className="flex items-center justify-between gap-3 text-sm">
+                      <div className="flex items-center gap-2 font-medium">
+                        <span
+                          className="h-2.5 w-2.5 rounded-full"
+                          style={{ backgroundColor: stage.color }}
+                        />
+                        {stage.name}
+                      </div>
+                      <div className="text-right text-xs text-muted-foreground tabular-nums">
+                        <span className="font-medium text-foreground">{stage.count}</span> ·{" "}
+                        {pct}% · {formatCurrency(stage.value)}
+                      </div>
+                    </div>
+                    <div className="h-3 overflow-hidden rounded-full bg-muted">
+                      <div
+                        className="h-full rounded-full"
+                        style={{
+                          width: stage.count
+                            ? `${Math.max(4, (stage.count / maxCount) * 100)}%`
+                            : "0%",
+                          backgroundColor: stage.color,
+                        }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 export function SellerInsights({ sellers }: { sellers: SellerStats[] }) {

@@ -4,6 +4,9 @@ import { APP_NAME } from "@/lib/app-constants";
 
 type SendArgs = {
   to: string | string[];
+  cc?: string | string[];
+  from?: string;
+  replyTo?: string;
   subject: string;
   html: string;
   text?: string;
@@ -73,9 +76,9 @@ export function renderEmailLayout(title: string, bodyHtml: string, ctaUrl?: stri
  * never throws — failures are caught and logged so callers (notifications) are
  * safe to await without risking the underlying mutation.
  */
-export async function sendEmail({ to, subject, html, text }: SendArgs): Promise<void> {
+export async function sendEmail({ to, cc, from: fromOverride, replyTo, subject, html, text }: SendArgs): Promise<void> {
   const apiKey = process.env.POSTMARK_API_KEY;
-  const from = process.env.EMAIL_FROM;
+  const from = fromOverride || process.env.EMAIL_FROM;
   const messageStream = process.env.POSTMARK_MESSAGE_STREAM || "outbound";
 
   if (!apiKey || !from) {
@@ -85,29 +88,22 @@ export async function sendEmail({ to, subject, html, text }: SendArgs): Promise<
 
   const recipients = (Array.isArray(to) ? to : [to]).filter(Boolean);
   if (recipients.length === 0) return;
+  const ccRecipients = (Array.isArray(cc) ? cc : cc ? [cc] : []).filter(Boolean);
 
   const textBody = text ?? htmlToText(html);
 
   try {
     const client = new ServerClient(apiKey);
-    const results = await Promise.allSettled(
-      recipients.map((email) =>
-        client.sendEmail({
-          From: from,
-          To: email,
-          Subject: subject,
-          HtmlBody: html,
-          TextBody: textBody,
-          MessageStream: messageStream,
-        })
-      )
-    );
-    for (let i = 0; i < results.length; i++) {
-      const r = results[i];
-      if (r.status === "rejected") {
-        console.error(`[email] failed to send to ${recipients[i]}`, r.reason);
-      }
-    }
+    await client.sendEmail({
+      From: from,
+      To: recipients.join(","),
+      Cc: ccRecipients.length ? ccRecipients.join(",") : undefined,
+      ReplyTo: replyTo,
+      Subject: subject,
+      HtmlBody: html,
+      TextBody: textBody,
+      MessageStream: messageStream,
+    });
   } catch (err) {
     console.error("[email] send error", err);
   }

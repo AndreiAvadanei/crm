@@ -16,6 +16,7 @@ import {
   parseNumber,
   parseDate,
   dueWindowRange,
+  recencyCutoff,
   type DealStatus,
 } from "@/lib/filter-helpers";
 import { parseDealSort } from "@/lib/deal-sort";
@@ -42,6 +43,7 @@ export default async function DealsPage({
     dueTo?: string;
     overdue?: string;
     mine?: string;
+    stale?: string;
   }>;
 }) {
   const user = await requireFullAuth();
@@ -167,7 +169,46 @@ export default async function DealsPage({
     return dueDate < startOfToday;
   };
 
-  const kanbanDeals: KanbanDeal[] = deals.map((d) => ({
+  // "Stalled / no resolution" filter: open deals (not won/lost) with no activity
+  // for at least N days. Activity = the latest of the deal's own update and any
+  // comment / task / attachment / audit-log touch (same definition as the
+  // clients list's last-activity rollup). Only computed when the filter is set.
+  const staleDays = parseNumber(sp.stale);
+  let visibleDeals = deals;
+  if (staleDays != null && deals.length) {
+    const cutoffMs = recencyCutoff(staleDays).getTime();
+    const ids = deals.map((d) => d.id);
+    const [comments, tasks, attachments, audits] = await Promise.all([
+      prisma.comment.groupBy({ by: ["dealId"], where: { dealId: { in: ids } }, _max: { createdAt: true } }),
+      prisma.task.groupBy({ by: ["dealId"], where: { dealId: { in: ids } }, _max: { createdAt: true, updatedAt: true } }),
+      prisma.attachment.groupBy({ by: ["dealId"], where: { dealId: { in: ids } }, _max: { createdAt: true } }),
+      prisma.auditLog.groupBy({ by: ["entityId"], where: { entity: "Deal", entityId: { in: ids } }, _max: { createdAt: true } }),
+    ]);
+    const lastActivity = new Map<string, number>();
+    const bump = (id: string | null, d: Date | null | undefined) => {
+      if (!id || !d) return;
+      const t = d.getTime();
+      if (t > (lastActivity.get(id) ?? 0)) lastActivity.set(id, t);
+    };
+    for (const c of comments) bump(c.dealId, c._max.createdAt);
+    for (const t of tasks) {
+      bump(t.dealId, t._max.createdAt);
+      bump(t.dealId, t._max.updatedAt);
+    }
+    for (const a of attachments) bump(a.dealId, a._max.createdAt);
+    for (const a of audits) bump(a.entityId, a._max.createdAt);
+
+    visibleDeals = deals.filter((d) => {
+      const f = stageFlags.get(d.stageId);
+      // Won/lost deals are "resolved" by definition — exclude them.
+      if (f?.isWon || f?.isLost) return false;
+      const last = Math.max(d.updatedAt.getTime(), lastActivity.get(d.id) ?? 0);
+      // Keep only deals whose most recent activity is older than the cutoff.
+      return last < cutoffMs;
+    });
+  }
+
+  const kanbanDeals: KanbanDeal[] = visibleDeals.map((d) => ({
     id: d.id,
     salesId: d.salesId,
     title: d.title,
@@ -182,10 +223,10 @@ export default async function DealsPage({
     openTasks: d._count.tasks,
   }));
 
-  const totalValue = deals.reduce((s, d) => s + (d.amountEur ? Number(d.amountEur) : 0), 0);
+  const totalValue = visibleDeals.reduce((s, d) => s + (d.amountEur ? Number(d.amountEur) : 0), 0);
 
   // Inline-table data (table view): editable rows + admin sharing state.
-  const dealRows: DealRow[] = deals.map((d) => ({
+  const dealRows: DealRow[] = visibleDeals.map((d) => ({
     id: d.id,
     salesId: d.salesId,
     title: d.title,
@@ -208,9 +249,9 @@ export default async function DealsPage({
       })
     : [];
   const shares =
-    admin && deals.length
+    admin && visibleDeals.length
       ? await prisma.share.findMany({
-          where: { subject: "DEAL", subjectId: { in: deals.map((d) => d.id) } },
+          where: { subject: "DEAL", subjectId: { in: visibleDeals.map((d) => d.id) } },
           select: { subjectId: true, userId: true },
         })
       : [];
@@ -219,7 +260,7 @@ export default async function DealsPage({
 
   return (
     <div className="flex h-full flex-col">
-      <PageHeader title="Deals" description={`${deals.length} deals · ${formatCurrency(totalValue)} pipeline value`}>
+      <PageHeader title="Deals" description={`${visibleDeals.length} deals · ${formatCurrency(totalValue)} pipeline value`}>
         <DealFormDialog
           isAdmin={admin}
           stages={stages.map((s) => ({ id: s.id, name: s.name }))}

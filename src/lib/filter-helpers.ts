@@ -52,6 +52,17 @@ export const ACTIVITY_WINDOW_OPTIONS: Option<ActivityWindow>[] = [
   { value: "90", label: "Active · 90 days" },
 ];
 
+/**
+ * Deal "stalled" windows (days) — open deals with no activity for at least
+ * N days (no resolution / movement). Inverse of {@link ACTIVITY_WINDOW_OPTIONS}.
+ */
+export type StaleWindow = "7" | "30" | "90";
+export const STALE_WINDOW_OPTIONS: Option<StaleWindow>[] = [
+  { value: "7", label: "Stalled · 7+ days" },
+  { value: "30", label: "Stalled · 30+ days" },
+  { value: "90", label: "Stalled · 90+ days" },
+];
+
 // ---------------------------------------------------------------------------
 // Parsing helpers
 // ---------------------------------------------------------------------------

@@ -66,6 +66,13 @@ enum ShareSubject {
   CLIENT
 }
 
+enum InvoiceStatus {
+  GENERATA
+  TRIMISA_LA_CONTABILITATE
+  IN_ASTEPTARE
+  OTHER
+}
+
 // ---------------------------------------------------------------------------
 // Users / auth
 // ---------------------------------------------------------------------------
@@ -198,6 +205,8 @@ model Client {
   owner         User?    @relation("ClientOwner", fields: [ownerId], references: [id], onDelete: SetNull)
   tags          Tag[]    @relation("ClientTags")
   deals         Deal[]
+  organizations Organization[]
+  invoices      Invoice[]
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -227,6 +236,7 @@ model Deal {
   tasks       Task[]
   comments    Comment[]
   attachments Attachment[]
+  invoices    Invoice[]
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
@@ -287,6 +297,89 @@ model Attachment {
   createdAt    DateTime @default(now())
 
   @@index([dealId])
+}
+
+// ---------------------------------------------------------------------------
+// Billing: organizations (legal entities) & invoices
+// ---------------------------------------------------------------------------
+// A billing legal entity (SRL/SA/LLC/etc.) that we issue invoices to. One CRM
+// Client (the account/relationship) can own several Organizations.
+model Organization {
+  id         String   @id @default(cuid())
+  clientId   String
+  client     Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  // Exact name as it appears in the source export ("Nume companie"). Used as the
+  // idempotent join key for the invoice import (facturi "Nume companie (from Client)").
+  sourceName String   @unique
+  // Display/legal name (defaults to sourceName when not separately provided).
+  legalName  String?
+  country    String?
+  // Romanian CUI / VAT id / EIN etc.
+  taxId      String?
+  // Romanian trade-register number ("J....").
+  regNumber  String?
+  bankName   String?
+  iban       String?
+  address    String?  @db.Text
+  // Marks the default billing entity for its client.
+  isDefault  Boolean  @default(false)
+  invoices   Invoice[]
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([clientId])
+  @@index([taxId])
+}
+
+model Invoice {
+  id             String        @id @default(cuid())
+  // Source idempotency key: Airtable "Record ID" for imports, "manual-<cuid>" for
+  // records created through the UI. Unique so re-imports update in place.
+  externalRecordId String      @unique
+  // Original request reference from the source export ("Referinta cerere").
+  externalRef    String?
+  // Human invoice number(s), e.g. "BT.BIT 696".
+  number         String?
+  status         InvoiceStatus @default(GENERATA)
+
+  organizationId String
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  // Denormalized owning client for convenient listing/filtering.
+  clientId       String?
+  client         Client?       @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  // Opportunity this invoice was issued under (via Deal.salesId). Nullable because
+  // some invoices reference a SAL that is missing from the CRM, or none at all.
+  dealId         String?
+  deal           Deal?         @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  // Snapshot of the referenced SAL id (kept even when the deal can't be resolved).
+  salesIdSnapshot String?
+
+  servicesDescription String?   @db.Text
+  // Best-effort contract reference parsed from the services text.
+  contractRef    String?
+  // Raw amount string from the source ("Suma"), kept verbatim for traceability.
+  amountRaw      String?
+  currency       String?
+  paymentTermDays Int?
+  issueDate      DateTime?
+  // Date the invoice is expected/planned to be issued (manual scheduling).
+  expectedInvoiceDate DateTime?
+  // Parsed numeric total of the invoice.
+  totalAmount    Decimal?      @db.Decimal(14, 2)
+  // Raw total string ("Total de pe factura"), kept verbatim.
+  totalRaw       String?
+  // Newline-separated source document URLs ("Facturi").
+  fileUrls       String?       @db.Text
+  // Issuing company ("Factura se face pe"), typically the seller entity.
+  issuerName     String?
+  createdByName  String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([organizationId])
+  @@index([dealId])
+  @@index([clientId])
+  @@index([issueDate])
 }
 
 // ---------------------------------------------------------------------------

@@ -13,6 +13,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Avatar } from "@/components/ui/avatar";
 import { TagBadge, StageBadge } from "@/components/shared/tag-badge";
 import { ClientFormDialog } from "@/components/clients/client-form-dialog";
+import { ClientOrganizationsCard } from "@/components/organizations/client-organizations-card";
+import { InvoiceListCard } from "@/components/invoices/invoice-list-card";
 import { ClientShareControl } from "@/components/clients/client-share-control";
 import { NewDealButton } from "@/components/clients/new-deal-button";
 import { DeleteButton } from "@/components/shared/delete-button";
@@ -51,6 +53,10 @@ export default async function ClientDetailPage({ params }: ClientDetailPageProps
       tags: true,
       owner: true,
       deals: { where: dealVis, include: { stage: true }, orderBy: { createdAt: "desc" } },
+      organizations: {
+        include: { _count: { select: { invoices: true } } },
+        orderBy: { sourceName: "asc" },
+      },
     },
   });
   if (!client) notFound();
@@ -88,6 +94,27 @@ export default async function ClientDetailPage({ params }: ClientDetailPageProps
     prisma.client.findMany({ where: clientVis, orderBy: { name: "asc" }, select: { id: true, name: true }, take: LIST_FETCH_CAP }),
   ]);
   const dealStages = (pipeline?.stages ?? []).map((s) => ({ id: s.id, name: s.name }));
+
+  // Invoices billed to any of this client's organizations.
+  const clientInvoices = await prisma.invoice.findMany({
+    where: { OR: [{ clientId: id }, { organization: { clientId: id } }] },
+    include: { organization: { select: { sourceName: true } } },
+    orderBy: [{ issueDate: "desc" }, { createdAt: "desc" }],
+    take: 100,
+  });
+  const invoiceItems = clientInvoices.map((i) => ({
+    id: i.id,
+    number: i.number,
+    externalRef: i.externalRef,
+    organizationName: i.organization.sourceName,
+    status: i.status,
+    totalAmount: i.totalAmount == null ? null : Number(i.totalAmount),
+    currency: i.currency,
+    issueDate: i.issueDate ? i.issueDate.toISOString() : null,
+  }));
+  const clientOrgOptions = client.organizations.map((o) => ({ id: o.id, name: o.sourceName }));
+  const defaultClientOrgId = client.organizations.find((o) => o.isDefault)?.id ?? client.organizations[0]?.id;
+  const clientDealOptions = client.deals.map((d) => ({ salesId: d.salesId, title: d.title }));
 
   return (
     <div className="pb-10">
@@ -190,6 +217,25 @@ export default async function ClientDetailPage({ params }: ClientDetailPageProps
             </CardContent>
           </Card>
 
+          <ClientOrganizationsCard
+            client={{ id: client.id, name: client.name }}
+            canManage={canDelete}
+            organizations={client.organizations.map((o) => ({
+              id: o.id,
+              sourceName: o.sourceName,
+              legalName: o.legalName,
+              country: o.country,
+              taxId: o.taxId,
+              regNumber: o.regNumber,
+              bankName: o.bankName,
+              iban: o.iban,
+              address: o.address,
+              isDefault: o.isDefault,
+              clientId: o.clientId,
+              invoiceCount: o._count.invoices,
+            }))}
+          />
+
           {defs.length > 0 && (
             <Card>
               <CardHeader>
@@ -249,6 +295,17 @@ export default async function ClientDetailPage({ params }: ClientDetailPageProps
               {client.deals.length === 0 && <p className="text-sm text-muted-foreground">No deals yet.</p>}
             </CardContent>
           </Card>
+
+          <div className="mt-6">
+            <InvoiceListCard
+              invoices={invoiceItems}
+              add={
+                canDelete && clientOrgOptions.length > 0
+                  ? { organizations: clientOrgOptions, deals: clientDealOptions, defaultOrganizationId: defaultClientOrgId }
+                  : undefined
+              }
+            />
+          </div>
         </div>
       </div>
     </div>

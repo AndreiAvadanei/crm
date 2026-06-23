@@ -17,6 +17,7 @@ export function SearchInput({ placeholder = "Search…" }: { placeholder?: strin
     const sp = new URLSearchParams(Array.from(params.entries()));
     if (next) sp.set("q", next);
     else sp.delete("q");
+    sp.delete("page");
     startTransition(() => router.replace(`${pathname}?${sp.toString()}`));
   }
 

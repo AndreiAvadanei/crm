@@ -14,8 +14,10 @@ import { cn } from "@/lib/utils";
 /** Shared filter controls; drive everything through URL search params. */
 export function DashboardFilters({
   showComparison = true,
+  sellerOptions = [],
 }: {
   showComparison?: boolean;
+  sellerOptions?: { value: string; label: string }[];
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -42,6 +44,7 @@ export function DashboardFilters({
   const cmp = params.get("cmp") === "1";
   const cmpMonths = params.get("cmpMonths") ?? "3";
   const cmpCount = params.get("cmpCount") ?? "4";
+  const seller = params.get("seller") ?? "all";
 
   return (
     <div className={cn("flex flex-wrap items-end gap-3", pending && "opacity-70")}>
@@ -90,7 +93,29 @@ export function DashboardFilters({
         </div>
       </div>
 
-      {(from || to || active) && (
+      {sellerOptions.length > 0 && (
+        <div className="flex w-48 flex-col gap-1">
+          <label className="text-xs font-medium text-muted-foreground">Sales</label>
+          <Select
+            value={seller}
+            onValueChange={(v) => setParam("seller", v === "all" ? null : v)}
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All sales</SelectItem>
+              {sellerOptions.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+
+      {(from || to || active || seller !== "all") && (
         <button
           type="button"
           onClick={() =>
@@ -98,6 +123,7 @@ export function DashboardFilters({
               p.delete("from");
               p.delete("to");
               p.delete("active");
+              p.delete("seller");
             })
           }
           className="h-9 rounded-md px-3 text-xs font-medium text-muted-foreground hover:text-foreground"

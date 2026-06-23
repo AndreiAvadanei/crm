@@ -30,6 +30,7 @@ export function useFilterUrl() {
   const setParams = useCallback(
     (updates: Record<string, string | null | undefined>) => {
       const sp = new URLSearchParams(Array.from(params.entries()));
+      if (!Object.prototype.hasOwnProperty.call(updates, "page")) sp.delete("page");
       for (const [key, value] of Object.entries(updates)) {
         if (value == null || value === "") sp.delete(key);
         else sp.set(key, value);

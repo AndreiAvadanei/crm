@@ -27,6 +27,15 @@ export type ActivityAction =
   | "client_deleted"
   | "client_shared"
   | "client_unshared"
+  // Organizations
+  | "organization_created"
+  | "organization_updated"
+  | "organization_deleted"
+  // Invoices
+  | "invoice_created"
+  | "invoice_updated"
+  | "invoice_deleted"
+  | "invoice_generate_requested"
   // Admin: users
   | "user_created"
   | "user_updated"
@@ -214,6 +223,36 @@ export function activityPhrase(action: string, meta?: Meta): string {
       const n = s(meta, "name");
       const what = n ? `client ${quote(n)}` : "the client";
       return who ? `revoked ${who}'s access to ${what}` : `unshared ${what}`;
+    }
+    // Organizations
+    case "organization_created": {
+      const n = s(meta, "name");
+      return n ? `created organization ${quote(n)}` : "created an organization";
+    }
+    case "organization_updated": {
+      const n = s(meta, "name");
+      return n ? `updated organization ${quote(n)}` : "updated an organization";
+    }
+    case "organization_deleted": {
+      const n = s(meta, "name");
+      return n ? `deleted organization ${quote(n)}` : "deleted an organization";
+    }
+    // Invoices
+    case "invoice_created": {
+      const n = s(meta, "number");
+      return n ? `created invoice ${quote(n)}` : "created an invoice";
+    }
+    case "invoice_updated": {
+      const n = s(meta, "number");
+      return n ? `updated invoice ${quote(n)}` : "updated an invoice";
+    }
+    case "invoice_deleted": {
+      const n = s(meta, "number");
+      return n ? `deleted invoice ${quote(n)}` : "deleted an invoice";
+    }
+    case "invoice_generate_requested": {
+      const n = s(meta, "number");
+      return n ? `requested invoice generation for ${quote(n)}` : "requested invoice generation";
     }
     // Admin: users
     case "user_created": {

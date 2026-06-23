@@ -20,6 +20,7 @@ export function ClientSortSelect() {
     const sp = new URLSearchParams(Array.from(params.entries()));
     if (next && next !== "recent") sp.set("sort", next);
     else sp.delete("sort");
+    sp.delete("page");
     startTransition(() => router.replace(`${pathname}?${sp.toString()}`));
   }
 

@@ -1,0 +1,18 @@
+{
+  "_comment": "Manual resolutions for ambiguous org->client links used by scripts/link-organizations.ts. Key = exact clienti.csv 'Nume companie'. Provide clientId (preferred) or clientName; set createClient:true to create a new client from clientName when none exists. 'note' is informational only.",
+
+  "PRO TV S.R.L.": { "clientId": "cmqqma8wg03n3pefw2dt9pcdv", "note": "PRO TV SRL (canonical; dups: PRO TV, PROTV)" },
+  "CODE WHALE, INC.": { "clientId": "cmqqmaajo03zdpefw6ar5z0cy", "note": "CODE WHALE, INC (dup: CODE WHALE INC)" },
+  "Quantic Lab. S.R.L.": { "clientId": "cmqqm9rc100jupefwaycskvgr", "note": "Quantic Lab (dup: QuanticLab)" },
+  "PREMIER ENERGY FURNIZARE S.A.": { "clientId": "cmqqma1zz02jdpefw19foy0g4", "note": "Premier Energy Furnizare S.A. (dup: PREMIER ENERGY)" },
+  "Stillfront Group AB (publ)": { "clientId": "cmqqma6y7035kpefwjzuj5c55", "note": "Stillfront Group AB (Babil Games/Candywriter are sub-brands billed via Stillfront)" },
+  "MILLENIUM PRO DESIGN SRL": { "clientId": "cmqqma7jc03chpefwy0fuxstr", "note": "Millenium Pro Design (keeps ART&CRAFT + GRAFTEX in same client; dup: Millenium)" },
+  "LATITUDE BUSINESS APPLICATION S.R.L.": { "clientId": "cmqqma75c037qpefwdfki07yb", "note": "Latitude Business Application (dup: Latitude)" },
+  "CARREFOUR SYSTEMES D'INFORMATION 0552 MASSY": { "clientId": "cmqqmaac203y5pefw6cg5oy19", "note": "Dedicated CARREFOUR SYSTEMES D'INFORMATION 0552 MASSY client" },
+  "Electro-Alfa International S.A.": { "clientId": "cmqqmaai603z3pefw4qqy5xsz", "note": "Electroalfa SA (dup: Electroalfa)" },
+  "MeisterLabs GmbH": { "clientId": "cmqqma8rm03mcpefw2lo1a9b3", "note": "Meister Labs (dup: Meister)" },
+  "CERTSIGN SA": { "clientId": "cmqqm9qtr00gepefwc6cseewz", "note": "Certsign (Bogdan Patrascu = mislinked deal)" },
+  "TIMESAFE S.R.L.": { "clientId": "cmqqmad0504blpefwyhps8p9v", "note": "TIMESAFE SRL (Pago)" },
+
+  "CAPITAL FINANCIAL SERVICES": { "clientId": "cmqqm9ygg01k5pefwh4fbol5p", "note": "Twispay (CAPITAL FINANCIAL SERVICES is Twispay's billing entity)" }
+}

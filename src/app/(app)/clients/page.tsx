@@ -2,10 +2,10 @@ import { Plus } from "lucide-react";
 import { requireFullAuth } from "@/lib/auth/guards";
 import { prisma } from "@/lib/db";
 import { clientVisibilityWhere, isAdmin } from "@/lib/rbac";
-import { getClientsWithStats, getClientFilterFacets, type ClientSort } from "@/lib/client-stats";
+import { getPaginatedClientsWithStats, getClientFilterFacets, type ClientSort } from "@/lib/client-stats";
 import { getTagViews, getFieldDefViews, getOwners } from "@/lib/view-helpers";
 import { parseCsvIds, parseNumber } from "@/lib/filter-helpers";
-import { LIST_FETCH_CAP } from "@/lib/app-constants";
+import { CLIENTS_PAGE_SIZE, LIST_FETCH_CAP } from "@/lib/app-constants";
 import { PageHeader } from "@/components/app/page-header";
 import { Button } from "@/components/ui/button";
 import { SearchInput } from "@/components/shared/search-input";
@@ -13,6 +13,7 @@ import { ClientSortSelect } from "@/components/clients/client-sort-select";
 import { ClientsFilterBar } from "@/components/clients/clients-filter-bar";
 import { ClientFormDialog } from "@/components/clients/client-form-dialog";
 import { ClientsTable, type ClientRow } from "@/components/clients/clients-table";
+import { Pagination } from "@/components/shared/pagination";
 
 export const metadata = {
   title: "Clients",
@@ -31,15 +32,17 @@ export default async function ClientsPage({
     hasOpen?: string;
     noDeals?: string;
     active?: string;
+    page?: string;
   }>;
 }) {
   const user = await requireFullAuth();
-  const { q, sort, owner, tag, size, country, hasOpen, noDeals, active } = await searchParams;
+  const { q, sort, owner, tag, size, country, hasOpen, noDeals, active, page } = await searchParams;
 
   const admin = isAdmin(user);
   const clientVis = await clientVisibilityWhere(user);
-  const [clients, facets, tags, fieldDefs, owners, dealFieldDefs, pipeline, dealClients] = await Promise.all([
-    getClientsWithStats(user, {
+  const requestedPage = Number.parseInt(page ?? "", 10);
+  const [clientPage, facets, tags, fieldDefs, owners, dealFieldDefs, pipeline, dealClients] = await Promise.all([
+    getPaginatedClientsWithStats(user, {
       search: q,
       sort: sort as ClientSort | undefined,
       // Owner filter is admin-only (sales already scoped to their own data).
@@ -50,6 +53,8 @@ export default async function ClientsPage({
       hasOpenDeals: hasOpen === "1",
       noDeals: noDeals === "1",
       activeWithinDays: parseNumber(active),
+      page: requestedPage,
+      pageSize: CLIENTS_PAGE_SIZE,
     }),
     getClientFilterFacets(user),
     getTagViews(),
@@ -60,8 +65,9 @@ export default async function ClientsPage({
     prisma.client.findMany({ where: clientVis, orderBy: { name: "asc" }, select: { id: true, name: true }, take: LIST_FETCH_CAP }),
   ]);
   const dealStages = (pipeline?.stages ?? []).map((s) => ({ id: s.id, name: s.name }));
+  const totalClients = clientPage.total;
 
-  const clientRows: ClientRow[] = clients.map((c) => ({
+  const clientRows: ClientRow[] = clientPage.clients.map((c) => ({
     id: c.id,
     name: c.name,
     website: c.website,
@@ -78,7 +84,7 @@ export default async function ClientsPage({
 
   return (
     <div>
-      <PageHeader title="Clients" description={`${clients.length} ${clients.length === 1 ? "client" : "clients"} visible to you`}>
+      <PageHeader title="Clients" description={`${totalClients} ${totalClients === 1 ? "client" : "clients"} visible to you`}>
         <ClientFormDialog
           isAdmin={admin}
           tags={tags}
@@ -116,6 +122,16 @@ export default async function ClientsPage({
             defaultStageId: dealStages[0]?.id,
           }}
         />
+        {totalClients > CLIENTS_PAGE_SIZE && (
+          <Pagination
+            pathname="/clients"
+            params={{ q, sort, owner, tag, size, country, hasOpen, noDeals, active, page }}
+            page={clientPage.page}
+            total={totalClients}
+            pageSize={clientPage.pageSize}
+            itemLabel="client"
+          />
+        )}
       </div>
     </div>
   );
