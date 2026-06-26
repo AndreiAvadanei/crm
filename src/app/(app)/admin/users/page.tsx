@@ -48,6 +48,7 @@ export default async function UsersAdminPage() {
                 <TableHead>2FA</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Visible from</TableHead>
+                <TableHead>Invoices from</TableHead>
                 <TableHead>Access rules</TableHead>
                 <TableHead></TableHead>
               </TableRow>
@@ -84,6 +85,9 @@ export default async function UsersAdminPage() {
                   <TableCell className="text-xs text-muted-foreground">
                     {u.visibleFrom ? formatDate(u.visibleFrom) : "—"}
                   </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {u.role === "ADMIN" ? "all" : u.invoiceVisibleFrom ? formatDate(u.invoiceVisibleFrom) : "—"}
+                  </TableCell>
                   <TableCell>
                     {u.role === "ADMIN" ? (
                       <span className="text-xs text-muted-foreground">all access</span>
@@ -112,6 +116,7 @@ export default async function UsersAdminPage() {
                           name: u.name,
                           role: u.role,
                           visibleFrom: u.visibleFrom ? u.visibleFrom.toISOString() : null,
+                          invoiceVisibleFrom: u.invoiceVisibleFrom ? u.invoiceVisibleFrom.toISOString() : null,
                         }}
                         trigger={
                           <Button variant="ghost" size="icon">

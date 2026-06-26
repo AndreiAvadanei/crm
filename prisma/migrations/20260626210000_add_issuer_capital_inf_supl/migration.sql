@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE `Issuer` ADD COLUMN `capital` VARCHAR(191) NULL;
+ALTER TABLE `Issuer` ADD COLUMN `infSupl` TEXT NULL;

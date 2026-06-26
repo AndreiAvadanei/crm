@@ -124,3 +124,56 @@ View comment: ${url}`;
     console.error("[notifications] notifyNewComment failed", err);
   }
 }
+
+/**
+ * Notify a user that a deal has just been shared with them. Sent only to the
+ * newly-granted user; the actor (admin who shared) is excluded. No-op if the
+ * recipient is inactive / has no email.
+ */
+export async function notifyDealShared(
+  dealId: string,
+  sharedWithUserId: string,
+  actorId: string
+): Promise<void> {
+  try {
+    const recipients = await activeRecipients([sharedWithUserId], actorId);
+    if (recipients.length === 0) return;
+
+    const [deal, actor] = await Promise.all([
+      prisma.deal.findUnique({
+        where: { id: dealId },
+        include: { owner: true, client: true, stage: true },
+      }),
+      prisma.user.findUnique({ where: { id: actorId }, select: { name: true } }),
+    ]);
+    if (!deal) return;
+
+    const url = `${APP_BASE_URL}/deals/${deal.salesId}`;
+    const sharedBy = actor?.name ?? "An admin";
+    const amount = deal.amountEur != null ? `€${Number(deal.amountEur).toLocaleString("en-US")}` : "—";
+    const subject = `Shared with you: ${deal.title} (${deal.salesId})`;
+    const bodyHtml = `
+      <p style="margin:0 0 12px;"><strong>${esc(sharedBy)}</strong> gave you access to a deal.</p>
+      <table role="presentation" cellpadding="0" cellspacing="0" style="font-size:14px;line-height:1.6;">
+        <tr><td style="color:#6b7280;padding-right:12px;">Title</td><td><strong>${esc(deal.title)}</strong></td></tr>
+        <tr><td style="color:#6b7280;padding-right:12px;">Client</td><td>${esc(deal.client?.name) || "—"}</td></tr>
+        <tr><td style="color:#6b7280;padding-right:12px;">Amount</td><td>${amount}</td></tr>
+        <tr><td style="color:#6b7280;padding-right:12px;">Stage</td><td>${esc(deal.stage?.name) || "—"}</td></tr>
+        <tr><td style="color:#6b7280;padding-right:12px;">Owner</td><td>${esc(deal.owner?.name) || "—"}</td></tr>
+      </table>`;
+    const html = renderEmailLayout(subject, bodyHtml, url, "View deal");
+    const text = `${sharedBy} gave you access to a deal.
+
+Title: ${deal.title}
+Client: ${deal.client?.name ?? "—"}
+Amount: ${amount}
+Stage: ${deal.stage?.name ?? "—"}
+Owner: ${deal.owner?.name ?? "—"}
+
+View deal: ${url}`;
+
+    await sendEmail({ to: recipients.map((r) => r.email), subject, html, text });
+  } catch (err) {
+    console.error("[notifications] notifyDealShared failed", err);
+  }
+}

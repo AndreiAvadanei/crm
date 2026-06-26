@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Loader2 } from "lucide-react";
+import { Loader2, Plus, Trash2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -16,12 +16,16 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/components/ui/toast";
 import { ClientCombobox } from "@/components/shared/client-combobox";
+import { PartNumberPicker } from "@/components/invoices/part-number-picker";
+import { RelatedInvoicePicker } from "@/components/invoices/related-invoice-picker";
+import type { RelatedInvoiceOption } from "@/server/part-number-actions";
 import { createInvoiceAction, updateInvoiceAction } from "@/server/invoice-actions";
+import { resolvePartNumberCode, type PartNumberOption } from "@/lib/part-numbers";
 import {
   DEFAULT_INVOICE_CURRENCY,
-  DEFAULT_INVOICE_ISSUER,
   DEFAULT_INVOICE_PAYMENT_TERM,
   DEFAULT_INVOICE_STATUS,
   INVOICE_CURRENCY_OPTIONS,
@@ -43,18 +47,49 @@ export type InvoiceData = {
   issueDate: string | null; // yyyy-mm-dd
   expectedInvoiceDate: string | null; // yyyy-mm-dd
   issuerName: string | null;
+  issuerId: string | null;
+  partNumberId: string | null;
+  partNumberValues: Record<string, string> | null;
+  relatedInvoiceId: string | null;
+  selfIssued: boolean;
+  seriesId: string | null;
   servicesDescription: string | null;
   contractRef: string | null;
   fileUrls: string | null;
+  paid: boolean;
+  lines?: InvoiceLineData[];
+};
+
+type InvoiceLineData = {
+  serviceDescription: string;
+  textSupplement: string;
+  unitOfMeasure: string;
+  quantity: string;
+  unitPrice: string;
+  value: string;
+  total: string;
 };
 
 type DealOption = { salesId: string; title: string };
+
+const blankLine = (): InvoiceLineData => ({
+  serviceDescription: "",
+  textSupplement: "",
+  unitOfMeasure: "buc",
+  quantity: "",
+  unitPrice: "",
+  value: "",
+  total: "",
+});
 
 export function InvoiceFormDialog({
   trigger,
   invoice,
   organizations,
   deals,
+  issuers,
+  series = [],
+  partNumbers = [],
   defaultSalesId,
   defaultOrganizationId,
 }: {
@@ -62,6 +97,12 @@ export function InvoiceFormDialog({
   invoice?: InvoiceData;
   organizations: { id: string; name: string }[];
   deals: DealOption[];
+  /** Configured seller entities; falls back to legacy constants when empty. */
+  issuers?: { id: string; name: string }[];
+  /** Invoice number series offered for FacturaNumar assignment. */
+  series?: { id: string; prefix: string; nextNumber: number }[];
+  /** Billable part-number catalog offered in the wizard. */
+  partNumbers?: PartNumberOption[];
   /** Pre-fill the SAL id (e.g. when creating from a deal). */
   defaultSalesId?: string;
   /** Pre-select the organization (e.g. when creating from a client/org). */
@@ -74,7 +115,46 @@ export function InvoiceFormDialog({
   const [busy, setBusy] = React.useState(false);
   const [organizationId, setOrganizationId] = React.useState(invoice?.organizationId ?? defaultOrganizationId ?? "");
   const [salesId, setSalesId] = React.useState(invoice?.salesId ?? defaultSalesId ?? "");
+  const [paid, setPaid] = React.useState(invoice?.paid ?? false);
+  const [recurrent, setRecurrent] = React.useState(false);
+  const [lines, setLines] = React.useState<InvoiceLineData[]>(invoice?.lines?.length ? invoice.lines : [blankLine()]);
+  const [partNumberId, setPartNumberId] = React.useState(invoice?.partNumberId ?? "");
+  const [partNumberValues, setPartNumberValues] = React.useState<Record<string, string>>(invoice?.partNumberValues ?? {});
+  const [relatedInvoiceId, setRelatedInvoiceId] = React.useState(invoice?.relatedInvoiceId ?? "");
+  // When a related invoice is linked, its part number is inherited and the picker is locked.
+  const [inheritsPartNumber, setInheritsPartNumber] = React.useState(!!invoice?.relatedInvoiceId);
+  const [selfIssued, setSelfIssued] = React.useState(invoice?.selfIssued ?? false);
+  const [seriesId, setSeriesId] = React.useState(invoice?.seriesId ?? "");
   const editing = !!invoice;
+
+  function onRelatedInvoiceChange(id: string, option: RelatedInvoiceOption | null) {
+    setRelatedInvoiceId(id);
+    if (id && option?.partNumberId) {
+      setPartNumberId(option.partNumberId);
+      setPartNumberValues(option.partNumberValues ?? {});
+      setInheritsPartNumber(true);
+    } else if (id) {
+      // Related invoice has no part number to inherit; keep the picker usable.
+      setInheritsPartNumber(false);
+    } else {
+      setInheritsPartNumber(false);
+    }
+  }
+
+  // Configured issuers (id-based) when available, else legacy name-based constants.
+  const issuerOptions = React.useMemo(
+    () =>
+      issuers && issuers.length
+        ? issuers.map((i) => ({ value: i.id, name: i.name }))
+        : INVOICE_ISSUER_OPTIONS.map((n) => ({ value: n, name: n })),
+    [issuers]
+  );
+  const usingConfigured = !!(issuers && issuers.length);
+  const [issuerValue, setIssuerValue] = React.useState(() => {
+    if (usingConfigured && invoice?.issuerId && issuers!.some((i) => i.id === invoice.issuerId)) return invoice.issuerId;
+    const byName = issuerOptions.find((o) => o.name === invoice?.issuerName);
+    return byName?.value ?? issuerOptions[0]?.value ?? "";
+  });
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -84,12 +164,33 @@ export function InvoiceFormDialog({
     const fd = new FormData(formRef.current);
     fd.set("organizationId", organizationId);
     fd.set("salesId", salesId);
+    fd.set("paid", paid ? "1" : "");
+    fd.set("recurrent", !editing && recurrent ? "1" : "");
+    fd.set("linesJson", JSON.stringify(lines));
+    const selectedIssuer = issuerOptions.find((o) => o.value === issuerValue);
+    fd.set("issuerId", usingConfigured ? issuerValue : "");
+    fd.set("issuerName", selectedIssuer?.name ?? "");
+    const selectedPartNumber = partNumbers.find((p) => p.id === partNumberId);
+    fd.set("partNumberId", partNumberId);
+    fd.set("partNumberValues", partNumberId ? JSON.stringify(partNumberValues) : "");
+    fd.set("partNumberCode", selectedPartNumber ? resolvePartNumberCode(selectedPartNumber.code, partNumberValues) : "");
+    fd.set("relatedInvoiceId", relatedInvoiceId);
+    fd.set("selfIssued", selfIssued ? "1" : "");
+    fd.set("seriesId", selfIssued ? seriesId : "");
     const res = editing ? await updateInvoiceAction(invoice!.id, fd) : await createInvoiceAction(fd);
     setBusy(false);
     if (res.error) return toast({ title: res.error, variant: "error" });
     toast({ title: editing ? "Invoice updated" : "Invoice created", variant: "success" });
     setOpen(false);
     router.refresh();
+  }
+
+  function updateLine(index: number, patch: Partial<InvoiceLineData>) {
+    setLines((prev) => prev.map((line, i) => (i === index ? { ...line, ...patch } : line)));
+  }
+
+  function removeLine(index: number) {
+    setLines((prev) => (prev.length > 1 ? prev.filter((_, i) => i !== index) : [blankLine()]));
   }
 
   return (
@@ -179,19 +280,88 @@ export function InvoiceFormDialog({
               </select>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="issuerName">Issuer</Label>
+              <Label htmlFor="issuer">Issuer</Label>
               <select
-                id="issuerName"
-                name="issuerName"
-                defaultValue={invoice?.issuerName ?? DEFAULT_INVOICE_ISSUER}
+                id="issuer"
+                value={issuerValue}
+                onChange={(e) => setIssuerValue(e.target.value)}
                 className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
               >
-                {INVOICE_ISSUER_OPTIONS.map((issuer) => (
-                  <option key={issuer} value={issuer}>
-                    {issuer}
+                {issuerOptions.map((issuer) => (
+                  <option key={issuer.value} value={issuer.value}>
+                    {issuer.name}
                   </option>
                 ))}
               </select>
+            </div>
+            <div className="space-y-2 rounded-md border bg-muted/30 p-3 sm:col-span-2">
+              <div className="flex items-start gap-2">
+                <Checkbox
+                  id="selfIssued"
+                  checked={selfIssued}
+                  onCheckedChange={(v) => setSelfIssued(v === true)}
+                />
+                <div className="space-y-1">
+                  <Label htmlFor="selfIssued" className="cursor-pointer">Generate this invoice ourselves</Label>
+                  <p className="text-xs text-muted-foreground">
+                    By default the accounting firm generates the invoice and assigns its number. Tick this to
+                    issue it from our own series instead.
+                  </p>
+                </div>
+              </div>
+              {selfIssued && (
+                <div className="space-y-2 pl-6">
+                  <Label htmlFor="series">Number series</Label>
+                  <select
+                    id="series"
+                    value={seriesId}
+                    onChange={(e) => setSeriesId(e.target.value)}
+                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                  >
+                    <option value="">Default series</option>
+                    {series.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.prefix} (next {s.nextNumber})
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-muted-foreground">
+                    FacturaNumar is assigned from this series when the invoice is issued.
+                  </p>
+                </div>
+              )}
+            </div>
+            <div className="space-y-2 sm:col-span-2">
+              <Label>Related invoice (same customer)</Label>
+              <RelatedInvoicePicker
+                organizationId={organizationId}
+                value={relatedInvoiceId}
+                onChange={onRelatedInvoiceChange}
+                excludeInvoiceId={invoice?.id}
+              />
+              <p className="text-xs text-muted-foreground">
+                Link a split-project or follow-up invoice from the same customer. Its part number is inherited.
+              </p>
+            </div>
+            <div className="space-y-2 sm:col-span-2">
+              <Label>Part number</Label>
+              {partNumbers.length > 0 ? (
+                <PartNumberPicker
+                  partNumbers={partNumbers}
+                  value={partNumberId}
+                  values={partNumberValues}
+                  disabled={inheritsPartNumber}
+                  disabledHint="Inherited from the related invoice. Clear the related invoice to choose a different part number."
+                  onChange={({ id, values }) => {
+                    setPartNumberId(id);
+                    setPartNumberValues(values);
+                  }}
+                />
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  No part numbers configured yet. Add them in Settings → Part numbers.
+                </p>
+              )}
             </div>
             <div className="space-y-2 sm:col-span-2">
               <Label htmlFor="amountRaw">Amount (free text)</Label>
@@ -201,11 +371,107 @@ export function InvoiceFormDialog({
               <Label htmlFor="servicesDescription">Services</Label>
               <Textarea id="servicesDescription" name="servicesDescription" defaultValue={invoice?.servicesDescription ?? ""} />
             </div>
+            <div className="space-y-3 sm:col-span-2">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <Label>Articles</Label>
+                  <p className="text-xs text-muted-foreground">Add one or more invoice lines. UM is stored lowercase.</p>
+                </div>
+                <Button type="button" variant="outline" size="sm" onClick={() => setLines((prev) => [...prev, blankLine()])}>
+                  <Plus className="h-4 w-4" /> Add article
+                </Button>
+              </div>
+              <div className="space-y-3">
+                {lines.map((line, index) => (
+                  <div key={index} className="rounded-md border bg-muted/20 p-3">
+                    <div className="mb-3 flex items-center justify-between">
+                      <span className="text-sm font-medium">Article {index + 1}</span>
+                      <Button type="button" variant="ghost" size="icon" aria-label="Remove article" onClick={() => removeLine(index)}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-6">
+                      <div className="space-y-1 sm:col-span-4">
+                        <Label>Service</Label>
+                        <Input
+                          value={line.serviceDescription}
+                          onChange={(e) => updateLine(index, { serviceDescription: e.target.value })}
+                          placeholder="Service description"
+                        />
+                      </div>
+                      <div className="space-y-1 sm:col-span-2">
+                        <Label>UM</Label>
+                        <Input
+                          value={line.unitOfMeasure}
+                          onChange={(e) => updateLine(index, { unitOfMeasure: e.target.value.toLowerCase() })}
+                          placeholder="buc, zile, ore"
+                        />
+                      </div>
+                      <div className="space-y-1 sm:col-span-6">
+                        <Label>Text supl.</Label>
+                        <Textarea
+                          value={line.textSupplement}
+                          onChange={(e) => updateLine(index, { textSupplement: e.target.value })}
+                          rows={2}
+                        />
+                      </div>
+                      <div className="space-y-1 sm:col-span-2">
+                        <Label>Quantity</Label>
+                        <Input value={line.quantity} onChange={(e) => updateLine(index, { quantity: e.target.value })} inputMode="decimal" />
+                      </div>
+                      <div className="space-y-1 sm:col-span-2">
+                        <Label>Unit price</Label>
+                        <Input value={line.unitPrice} onChange={(e) => updateLine(index, { unitPrice: e.target.value })} inputMode="decimal" />
+                      </div>
+                      <div className="space-y-1 sm:col-span-1">
+                        <Label>Value</Label>
+                        <Input value={line.value} onChange={(e) => updateLine(index, { value: e.target.value })} inputMode="decimal" />
+                      </div>
+                      <div className="space-y-1 sm:col-span-1">
+                        <Label>Total</Label>
+                        <Input value={line.total} onChange={(e) => updateLine(index, { total: e.target.value })} inputMode="decimal" />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
             <div className="space-y-2 sm:col-span-2">
               <Label htmlFor="contractRef">Contract reference</Label>
               <Input id="contractRef" name="contractRef" defaultValue={invoice?.contractRef ?? ""} placeholder="Nr. 234/15.11.2022" />
             </div>
+            <div className="flex items-center gap-2 sm:col-span-2">
+              <Checkbox id="paid" checked={paid} onCheckedChange={(v) => setPaid(v === true)} />
+              <Label htmlFor="paid" className="cursor-pointer">Paid</Label>
+            </div>
           </div>
+
+          {!editing && (
+            <div className="space-y-3 rounded-md border bg-muted/30 p-3">
+              <div className="flex items-center gap-2">
+                <Checkbox id="recurrent" checked={recurrent} onCheckedChange={(v) => setRecurrent(v === true)} />
+                <Label htmlFor="recurrent" className="cursor-pointer">Recurrent invoice</Label>
+              </div>
+              {recurrent && (
+                <>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label htmlFor="repetitions">Repetitions</Label>
+                      <Input id="repetitions" name="repetitions" type="number" min={1} max={60} defaultValue={12} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="intervalMonths">Every (months)</Label>
+                      <Input id="intervalMonths" name="intervalMonths" type="number" min={1} max={24} defaultValue={1} />
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Creates one invoice per repetition, keeping the same day-of-month and shifting the expected
+                    invoice date. Requires an expected invoice date.
+                  </p>
+                </>
+              )}
+            </div>
+          )}
 
           <DialogFooter>
             <Button type="submit" disabled={busy}>

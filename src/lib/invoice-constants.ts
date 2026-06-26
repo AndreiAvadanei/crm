@@ -10,6 +10,22 @@ export const INVOICE_STATUS_LABELS = {
 
 export type InvoiceStatusKey = keyof typeof INVOICE_STATUS_LABELS;
 
+/** Badge color per status. Green (success) marks a fully generated invoice. */
+export function invoiceStatusVariant(
+  status: string
+): "default" | "success" | "warning" | "secondary" {
+  switch (status) {
+    case "GENERATA":
+      return "success";
+    case "TRIMISA_LA_CONTABILITATE":
+      return "default";
+    case "IN_ASTEPTARE":
+      return "warning";
+    default:
+      return "secondary";
+  }
+}
+
 export const INVOICE_STATUS_OPTIONS = [
   { value: "IN_ASTEPTARE", label: "Pending" },
   { value: "GENERATA", label: "Generated" },

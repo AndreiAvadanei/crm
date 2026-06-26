@@ -31,11 +31,15 @@ export type ActivityAction =
   | "organization_created"
   | "organization_updated"
   | "organization_deleted"
+  | "organizations_imported"
   // Invoices
   | "invoice_created"
   | "invoice_updated"
   | "invoice_deleted"
+  | "invoice_imported"
   | "invoice_generate_requested"
+  | "invoice_bulk_generate_requested"
+  | "invoice_files_received"
   // Admin: users
   | "user_created"
   | "user_updated"
@@ -237,6 +241,11 @@ export function activityPhrase(action: string, meta?: Meta): string {
       const n = s(meta, "name");
       return n ? `deleted organization ${quote(n)}` : "deleted an organization";
     }
+    case "organizations_imported": {
+      const created = s(meta, "created") ?? "0";
+      const updated = s(meta, "updated") ?? "0";
+      return `imported organizations (${created} created, ${updated} updated)`;
+    }
     // Invoices
     case "invoice_created": {
       const n = s(meta, "number");
@@ -253,6 +262,16 @@ export function activityPhrase(action: string, meta?: Meta): string {
     case "invoice_generate_requested": {
       const n = s(meta, "number");
       return n ? `requested invoice generation for ${quote(n)}` : "requested invoice generation";
+    }
+    case "invoice_bulk_generate_requested": {
+      const c = s(meta, "count");
+      return c ? `emailed ${c} invoices to accounting` : "emailed invoices to accounting";
+    }
+    case "invoice_files_received": {
+      const n = s(meta, "number");
+      const c = s(meta, "fileCount");
+      const files = c ? ` (${c} file${c === "1" ? "" : "s"})` : "";
+      return n ? `received generated invoice ${quote(n)}${files}` : `received generated invoice${files}`;
     }
     // Admin: users
     case "user_created": {

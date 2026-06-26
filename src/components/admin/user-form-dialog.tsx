@@ -18,7 +18,7 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/toast";
 import { createUserAction, updateUserAction } from "@/server/admin-actions";
 
-type UserData = { id: string; name: string; role: string; visibleFrom: string | null };
+type UserData = { id: string; name: string; role: string; visibleFrom: string | null; invoiceVisibleFrom: string | null };
 
 export function UserFormDialog({ trigger, user }: { trigger: React.ReactNode; user?: UserData }) {
   const router = useRouter();
@@ -117,6 +117,19 @@ export function UserFormDialog({ trigger, user }: { trigger: React.ReactNode; us
                   defaultValue={user?.visibleFrom?.slice(0, 10) ?? ""}
                 />
               </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="invoiceVisibleFrom">Invoices visible from</Label>
+              <Input
+                id="invoiceVisibleFrom"
+                name="invoiceVisibleFrom"
+                type="date"
+                defaultValue={user?.invoiceVisibleFrom?.slice(0, 10) ?? ""}
+              />
+              <p className="text-xs text-muted-foreground">
+                Sales user can see every invoice issued on/after this date, even for clients not shared with them. Leave
+                empty to limit invoices to their visible clients.
+              </p>
             </div>
             <DialogFooter>
               <Button type="submit" disabled={busy}>

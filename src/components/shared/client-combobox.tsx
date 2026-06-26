@@ -9,7 +9,7 @@ import * as Popover from "@radix-ui/react-popover";
 import { Check, ChevronsUpDown, Loader2, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export type ComboOption = { value: string; label: string };
+export type ComboOption = { value: string; label: string; searchText?: string };
 
 export function ClientCombobox({
   value,
@@ -45,7 +45,7 @@ export function ClientCombobox({
   const filtered = React.useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return options;
-    return options.filter((o) => o.label.toLowerCase().includes(q));
+    return options.filter((o) => [o.label, o.value, o.searchText].filter(Boolean).join(" ").toLowerCase().includes(q));
   }, [options, query]);
 
   function select(next: string) {

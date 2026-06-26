@@ -215,6 +215,7 @@ export default async function DealsPage({
     amountEur: d.amountEur ? Number(d.amountEur) : null,
     stageId: d.stageId,
     clientName: d.client?.name ?? null,
+    ownerId: d.ownerId,
     ownerName: d.owner?.name ?? null,
     ownerColor: d.owner?.avatarColor ?? null,
     dueDate: d.dueDate?.toISOString() ?? null,
@@ -298,6 +299,8 @@ export default async function DealsPage({
             }))}
             deals={kanbanDeals}
             newDeal={{ isAdmin: admin, clients, tags, fieldDefs, owners }}
+            shareUsers={shareUsers.map((u) => ({ id: u.id, name: u.name, color: u.avatarColor }))}
+            sharedMap={sharedMap}
           />
         </div>
       ) : (

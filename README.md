@@ -104,7 +104,8 @@ The import is designed for retry after interruption. Deals are upserted by exact
 ## Roles & visibility
 
 - **ADMIN**: full access; manages users, custom fields, pipeline/tags, sharing and per-user visibility; can run the import.
-- **SALES**: sees deals/clients they own, plus records matching their **tag + date** access rules, plus records explicitly **shared** with them by an admin.
+- **SALES**: sees deals/clients they own, plus records matching their **tag + date** access rules, plus records explicitly **shared** with them by an admin. Organizations and invoices follow the visibility of their owning client.
+- **Invoice date sharing**: an admin can set a per-user **"Invoices visible from"** date so a sales user also sees every invoice issued on/after that date, even for clients not shared with them (read-only; editing still requires owning the client).
 
 ## Project layout
 

@@ -91,6 +91,9 @@ model User {
   totpSecret         String?
   // Default lower bound for which deals/clients a sales user can see by creation date.
   visibleFrom        DateTime?
+  // Lower bound (by invoice issue date) for invoices a sales user may see,
+  // independent of whether they can see the owning client.
+  invoiceVisibleFrom DateTime?
   // Transient WebAuthn challenge used during passkey enrollment.
   currentChallenge   String?    @db.Text
   createdAt          DateTime   @default(now())
@@ -323,12 +326,110 @@ model Organization {
   address    String?  @db.Text
   // Marks the default billing entity for its client.
   isDefault  Boolean  @default(false)
+  // VAT percentage used when calculating tax for this organization.
+  tvaPercent Decimal  @default(21.00) @db.Decimal(5, 2)
+
+  // --- Romanian accounting / "tert" fields (exact export column names). ---
+  // Some duplicate the canonical columns above (tara=country, adresa=address,
+  // cont_banca=iban, banca=bankName, reg_com=regNumber) and are kept in sync on
+  // write so legacy display/invoice code keeps working off the canonical ones.
+  tara       String?
+  judet      String?
+  localitate String?
+  adresa     String?  @db.Text
+  cont_banca String?
+  banca      String?
+  tel        String?
+  email      String?
+  reg_com    String?
+  delegat    String?
+  inf_supl   String?  @db.Text
+  tip_tert   String?
+  is_tva     Boolean  @default(false)
+  blocat     Boolean  @default(false)
+  data_v_tva DateTime?
+  data_s_tva DateTime?
+  cod_post   String?
+
   invoices   Invoice[]
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
   @@index([clientId])
   @@index([taxId])
+}
+
+// A seller/issuing legal entity that we issue invoices *from* (e.g. BIT SENTINEL
+// SECURITY SRL, CYBEREDU SRL). Configured in Settings and offered in the invoice
+// wizard. `name` mirrors the legacy free-text Invoice.issuerName so filtering and
+// per-issuer totals work across both imported and manually-created invoices.
+model Issuer {
+  id         String    @id @default(cuid())
+  // Display / legal name; also the join key against Invoice.issuerName.
+  name       String    @unique
+  legalName  String?
+  // CUI / VAT id ("ClientCIF").
+  taxId      String?
+  // Trade-register number ("ClientNrRegCom" / reg_com).
+  regCom     String?
+  country    String?
+  county     String?
+  city       String?
+  address    String?   @db.Text
+  bankName   String?
+  iban       String?
+  phone      String?
+  email      String?
+  // Capital social, printed as "FurnizorCapital" in the Saga export.
+  capital    String?
+  // Free-text footer ("FurnizorInformatiiSuplimentare"), e.g. SWIFT/bank notes.
+  infSupl    String?   @db.Text
+  isDefault  Boolean   @default(false)
+  isActive   Boolean   @default(true)
+  invoices   Invoice[]
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+}
+
+// Catalog of billable part-number templates (imported from the part-numbers
+// matrix). The `code` is a template that may contain `<...>` placeholders (e.g.
+// "RED-PEN-B-I-BP-<limit>"); the invoice wizard fills those in per invoice.
+model PartNumber {
+  id             String    @id @default(cuid())
+  // Template code, e.g. "RED-PEN-B-I-BP-<limit>". Unique join/idempotency key.
+  code           String    @unique
+  group          String?
+  title          String?   @db.Text
+  // Human hint(s) describing each limit placeholder (comma-separated, in order).
+  limitations    String?   @db.Text
+  category       String?
+  subCategory    String?
+  subSubCategory String?
+  type           String?
+  description    String?   @db.Text
+  order          Int       @default(0)
+  active         Boolean   @default(true)
+  invoices       Invoice[]
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([group])
+}
+
+// A self-managed invoice number series (e.g. prefix "BIT.R"). The CRM assigns
+// FacturaNumar as "<prefix> <nextNumber>" and increments the counter the first
+// time an invoice in the series is issued (XML download / accounting email).
+model InvoiceSeries {
+  id         String    @id @default(cuid())
+  // Series code / prefix shown on the number, e.g. "BIT.R".
+  prefix     String    @unique
+  // Next number to assign; the admin seeds the initial value.
+  nextNumber Int       @default(1)
+  isDefault  Boolean   @default(false)
+  isActive   Boolean   @default(true)
+  invoices   Invoice[]
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 }
 
 model Invoice {
@@ -364,22 +465,102 @@ model Invoice {
   issueDate      DateTime?
   // Date the invoice is expected/planned to be issued (manual scheduling).
   expectedInvoiceDate DateTime?
+  // Whether the invoice has been paid by the client.
+  paid           Boolean       @default(false)
   // Parsed numeric total of the invoice.
   totalAmount    Decimal?      @db.Decimal(14, 2)
+  // Accounting export subtotal before VAT ("baza_tva").
+  totalBaseAmount Decimal?     @db.Decimal(14, 2)
+  // Accounting export VAT amount ("tva").
+  vatAmount      Decimal?      @db.Decimal(14, 2)
+  // Outstanding balance from accounting ("neachitat").
+  unpaidAmount   Decimal?      @db.Decimal(14, 2)
   // Raw total string ("Total de pe factura"), kept verbatim.
   totalRaw       String?
+  // Extra invoice-level accounting note from import ("inf_suplm").
+  invoiceInfo    String?       @db.Text
+  // Original imported invoice/header values, kept for hover/tooltips and audit.
+  originalValues Json?
   // Newline-separated source document URLs ("Facturi").
   fileUrls       String?       @db.Text
-  // Issuing company ("Factura se face pe"), typically the seller entity.
+  // Issuing company ("Factura se face pe"), typically the seller entity. Kept as
+  // free text for imports; manual invoices also link a configured Issuer below.
   issuerName     String?
+  issuerId       String?
+  issuer         Issuer?       @relation(fields: [issuerId], references: [id], onDelete: SetNull)
+  // Billable part number chosen for this invoice.
+  partNumberId   String?
+  partNumber     PartNumber?   @relation(fields: [partNumberId], references: [id], onDelete: SetNull)
+  // Resolved code with the dynamic limits filled in, e.g. "RED-PEN-B-I-BP-50".
+  partNumberCode String?
+  // Placeholder -> value map for the chosen part number, e.g. { "limit": "50" }.
+  partNumberValues Json?
+  // When true, we generate the invoice ourselves and assign a FacturaNumar from
+  // our own series on issue. Default false: the accounting firm generates it and
+  // assigns the number, so we leave `number` empty until they report it back.
+  selfIssued     Boolean       @default(false)
+  // Invoice number series used to assign FacturaNumar when issuing (self-issued only).
+  seriesId       String?
+  series         InvoiceSeries? @relation(fields: [seriesId], references: [id], onDelete: SetNull)
+  // Optional link to a related invoice for the same customer (e.g. split project).
+  relatedInvoiceId String?
+  relatedInvoice   Invoice?    @relation("RelatedInvoice", fields: [relatedInvoiceId], references: [id], onDelete: SetNull)
+  relatedInvoices  Invoice[]   @relation("RelatedInvoice")
   createdByName  String?
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
+  files          InvoiceFile[]
+  lines          InvoiceLine[]
 
   @@index([organizationId])
   @@index([dealId])
   @@index([clientId])
   @@index([issueDate])
+  @@index([issuerId])
+  @@index([partNumberId])
+  @@index([relatedInvoiceId])
+  @@index([seriesId])
+}
+
+// Invoice articles/lines. Imported accounting exports repeat the same invoice
+// number once per article, so the invoice stays grouped while lines preserve
+// each row's service, quantity, unit, and original values.
+model InvoiceLine {
+  id                  String   @id @default(cuid())
+  invoiceId           String
+  invoice             Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  sourceLineKey       String?
+  serviceDescription  String?  @db.Text
+  textSupplement      String?  @db.Text
+  unitOfMeasure       String?
+  quantity            Decimal? @db.Decimal(14, 4)
+  unitPrice           Decimal? @db.Decimal(14, 4)
+  value               Decimal? @db.Decimal(14, 2)
+  total               Decimal? @db.Decimal(14, 2)
+  originalValues      Json?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([invoiceId, sourceLineKey])
+  @@index([invoiceId])
+}
+
+// Issued invoice documents (PDFs) returned by accounting and stored locally.
+// Served only to authenticated, authorized users via /api/invoices/files/[id].
+model InvoiceFile {
+  id         String   @id @default(cuid())
+  invoiceId  String
+  invoice    Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  filename   String
+  mimeType   String?
+  size       Int      @default(0)
+  // Path within UPLOADS_DIR (see src/lib/storage.ts).
+  storageKey String
+  // Provenance, e.g. "email-reply".
+  source     String?
+  createdAt  DateTime @default(now())
+
+  @@index([invoiceId])
 }
 
 // ---------------------------------------------------------------------------

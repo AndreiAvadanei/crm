@@ -17,6 +17,14 @@ function str(fd: FormData, k: string) {
   return v == null ? undefined : String(v).trim() || undefined;
 }
 
+function percent(fd: FormData, k: string) {
+  const raw = str(fd, k);
+  if (!raw) return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0 || n > 100) return null;
+  return String(Math.round(n * 100) / 100);
+}
+
 async function ensureAdmin() {
   const user = await requireUser();
   if (!isAdmin(user)) throw new Error("Admins only");
@@ -51,6 +59,7 @@ export async function createUserAction(formData: FormData): Promise<Result> {
       twoFactorEnabled: false,
       avatarColor: COLORS[Math.floor(Math.random() * COLORS.length)],
       visibleFrom: str(formData, "visibleFrom") ? new Date(str(formData, "visibleFrom")!) : null,
+      invoiceVisibleFrom: str(formData, "invoiceVisibleFrom") ? new Date(str(formData, "invoiceVisibleFrom")!) : null,
     },
   });
   await logActivity({
@@ -70,15 +79,17 @@ export async function updateUserAction(userId: string, formData: FormData): Prom
   const newName = str(formData, "name");
   const newRole = str(formData, "role") as "ADMIN" | "SALES" | undefined;
   const newVisibleFrom = str(formData, "visibleFrom") ? new Date(str(formData, "visibleFrom")!) : null;
+  const newInvoiceVisibleFrom = str(formData, "invoiceVisibleFrom") ? new Date(str(formData, "invoiceVisibleFrom")!) : null;
   await prisma.user.update({
     where: { id: userId },
-    data: { name: newName, role: newRole, visibleFrom: newVisibleFrom },
+    data: { name: newName, role: newRole, visibleFrom: newVisibleFrom, invoiceVisibleFrom: newInvoiceVisibleFrom },
   });
   const changes = before
     ? changeList(
         diffText("name", "Name", before.name, newName ?? before.name),
         diffPlain("role", "Role", before.role, newRole ?? before.role),
-        diffDate("visibleFrom", "Visible from", before.visibleFrom, newVisibleFrom)
+        diffDate("visibleFrom", "Visible from", before.visibleFrom, newVisibleFrom),
+        diffDate("invoiceVisibleFrom", "Invoices visible from", before.invoiceVisibleFrom, newInvoiceVisibleFrom)
       )
     : [];
   await logActivity({
@@ -430,6 +441,30 @@ export async function setDefaultDealOwnerAction(formData: FormData): Promise<Res
   return { ok: true };
 }
 
+/** Set the default VAT percent applied to newly-created organizations. */
+export async function setDefaultOrganizationTvaPercentAction(formData: FormData): Promise<Result> {
+  const admin = await ensureAdmin();
+  const value = percent(formData, "tvaPercent");
+  if (value === null) return { error: "VAT percent must be a number between 0 and 100." };
+
+  const before = await getSetting(SETTING_KEYS.defaultOrganizationTvaPercent);
+  await setSetting(SETTING_KEYS.defaultOrganizationTvaPercent, value ?? null);
+
+  await logActivity({
+    actorId: admin.id,
+    action: "settings_updated",
+    entity: "Setting",
+    entityId: SETTING_KEYS.defaultOrganizationTvaPercent,
+    meta: {
+      setting: "Default organization VAT percent",
+      value: value ? `${value}%` : "21%",
+      changed: before !== (value ?? null),
+    },
+  });
+  revalidatePath("/admin/settings");
+  return { ok: true };
+}
+
 /**
  * Set or regenerate the inbound-email webhook secret. When `regenerate` is set
  * (or no explicit `secret` is provided) a new cryptographically-random token is
@@ -458,6 +493,39 @@ export async function setInboundWebhookSecretAction(formData: FormData): Promise
     entity: "Setting",
     entityId: SETTING_KEYS.inboundWebhookSecret,
     meta: { setting: "Inbound webhook secret", value: value ? "(updated)" : "(cleared)" },
+  });
+  revalidatePath("/admin/settings");
+  return { ok: true, secret: value ?? undefined };
+}
+
+/**
+ * Set or regenerate the inbound-invoice (PDF reply) webhook secret. Same logic as
+ * the inbound-email webhook: `regenerate` (or no `secret`) mints a new random
+ * token; an empty `secret` clears it (disabling the webhook). The secret value
+ * itself is never written to the audit log.
+ */
+export async function setInvoiceWebhookSecretAction(formData: FormData): Promise<Result> {
+  const admin = await ensureAdmin();
+  const provided = str(formData, "secret");
+  const regenerate = str(formData, "regenerate") === "1";
+
+  let value: string | null;
+  if (regenerate) {
+    value = randomBytes(32).toString("base64url");
+  } else if (provided) {
+    if (provided.length < 16) return { error: "Secret must be at least 16 characters." };
+    value = provided;
+  } else {
+    value = null; // clear / disable
+  }
+
+  await setSetting(SETTING_KEYS.invoiceWebhookSecret, value);
+  await logActivity({
+    actorId: admin.id,
+    action: "settings_updated",
+    entity: "Setting",
+    entityId: SETTING_KEYS.invoiceWebhookSecret,
+    meta: { setting: "Invoice webhook secret", value: value ? "(updated)" : "(cleared)" },
   });
   revalidatePath("/admin/settings");
   return { ok: true, secret: value ?? undefined };

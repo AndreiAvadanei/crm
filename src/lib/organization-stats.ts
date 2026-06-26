@@ -18,10 +18,12 @@ export interface OrganizationRow {
   taxId: string | null;
   regNumber: string | null;
   country: string | null;
+  judet: string | null;
   bankName: string | null;
   iban: string | null;
   address: string | null;
   isDefault: boolean;
+  tvaPercent: string;
   clientId: string;
   clientName: string;
   invoiceCount: number;
@@ -76,10 +78,12 @@ export async function getPaginatedOrganizations(
       taxId: o.taxId,
       regNumber: o.regNumber,
       country: o.country,
+      judet: o.judet,
       bankName: o.bankName,
       iban: o.iban,
       address: o.address,
       isDefault: o.isDefault,
+      tvaPercent: o.tvaPercent.toString(),
       clientId: o.clientId,
       clientName: o.client.name,
       invoiceCount: o._count.invoices,

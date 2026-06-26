@@ -48,7 +48,7 @@ export async function uploadBrandingLogoAction(modeRaw: string, formData: FormDa
   await audit(user.id, "branding_logo_updated", mode);
 
   revalidatePath("/", "layout");
-  revalidatePath("/admin/branding");
+  revalidatePath("/admin/settings");
   return { ok: true };
 }
 
@@ -63,6 +63,6 @@ export async function deleteBrandingLogoAction(modeRaw: string): Promise<Result>
   await audit(user.id, "branding_logo_removed", mode);
 
   revalidatePath("/", "layout");
-  revalidatePath("/admin/branding");
+  revalidatePath("/admin/settings");
   return { ok: true };
 }

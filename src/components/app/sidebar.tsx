@@ -8,6 +8,7 @@ import {
   Building2,
   Building,
   Receipt,
+  ChartColumnIncreasing,
   Users,
   SlidersHorizontal,
   GitBranch,
@@ -15,7 +16,6 @@ import {
   CheckSquare,
   Activity,
   BarChart3,
-  Image as ImageIcon,
   Settings,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -33,11 +33,11 @@ const mainNav: NavItem[] = [
 ];
 
 const adminNav: NavItem[] = [
+  { href: "/invoices/insights", label: "Invoices Insights", icon: ChartColumnIncreasing },
   { href: "/admin/insights", label: "Seller Insights", icon: BarChart3 },
   { href: "/admin/users", label: "Users", icon: Users },
   { href: "/admin/custom-fields", label: "Custom Fields", icon: SlidersHorizontal },
   { href: "/admin/pipeline", label: "Pipeline & Tags", icon: GitBranch },
-  { href: "/admin/branding", label: "Branding", icon: ImageIcon },
   { href: "/admin/settings", label: "Settings", icon: Settings },
   { href: "/admin/import", label: "Import", icon: Upload },
   { href: "/activity", label: "Activity", icon: Activity },
@@ -71,7 +71,13 @@ export function Sidebar({
   logoDarkVersion?: number;
 }) {
   const pathname = usePathname();
-  const isActive = (href: string) => pathname === href || pathname.startsWith(href + "/");
+  // Pick the single most specific (longest) matching nav href so overlapping
+  // prefixes like /invoices and /invoices/insights don't both highlight.
+  const allHrefs = [...mainNav, ...adminNav].map((i) => i.href);
+  const bestMatch = allHrefs
+    .filter((href) => pathname === href || pathname.startsWith(href + "/"))
+    .sort((a, b) => b.length - a.length)[0];
+  const isActive = (href: string) => href === bestMatch;
 
   return (
     <aside className="hidden w-60 shrink-0 flex-col border-r bg-sidebar md:flex">

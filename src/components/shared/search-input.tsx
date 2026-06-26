@@ -5,7 +5,7 @@ import { useState, useTransition } from "react";
 import { Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 
-export function SearchInput({ placeholder = "Search…" }: { placeholder?: string }) {
+export function SearchInput({ placeholder = "Search…", className }: { placeholder?: string; className?: string }) {
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
@@ -28,7 +28,7 @@ export function SearchInput({ placeholder = "Search…" }: { placeholder?: strin
         value={value}
         onChange={(e) => update(e.target.value)}
         placeholder={placeholder}
-        className="pl-8"
+        className={`pl-8 ${className ?? ""}`}
       />
     </div>
   );

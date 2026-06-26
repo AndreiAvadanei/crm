@@ -14,6 +14,7 @@ import { prisma } from "@/lib/db";
 import { Prisma } from "@/generated/prisma";
 import { requireUser } from "@/lib/auth/guards";
 import { isAdmin, canEditDeal, canEditClient, canLinkClientToDeal } from "@/lib/rbac";
+import { notifyDealShared } from "@/lib/notifications";
 import {
   changeList,
   diffText,
@@ -239,6 +240,8 @@ export async function quickShareDealAction(dealId: string, userId: string, on: b
     salesId: deal?.salesId,
     title: deal?.title,
   });
+  // Email the newly-granted user (best-effort; never blocks the share).
+  if (on) await notifyDealShared(dealId, userId, admin.id);
   revalidatePath("/deals");
   revalidatePath("/deals/[salesId]", "page");
   return { ok: true };

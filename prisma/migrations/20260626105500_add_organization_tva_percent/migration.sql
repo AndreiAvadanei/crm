@@ -1,0 +1,1 @@
+ALTER TABLE `Organization` ADD COLUMN `tvaPercent` DECIMAL(5, 2) NOT NULL DEFAULT 21.00;

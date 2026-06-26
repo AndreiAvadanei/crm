@@ -9,12 +9,18 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/toast";
 
+type SecretAction = (formData: FormData) => Promise<{ ok?: boolean; error?: string; secret?: string }>;
+
 export function InboundWebhookForm({
   webhookUrl,
   currentSecret,
+  action = setInboundWebhookSecretAction,
+  urlHint,
 }: {
   webhookUrl: string;
   currentSecret: string | null;
+  action?: SecretAction;
+  urlHint?: React.ReactNode;
 }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -39,7 +45,7 @@ export function InboundWebhookForm({
     // clear → send nothing
 
     setBusy(mode);
-    const res = await setInboundWebhookSecretAction(fd);
+    const res = await action(fd);
     setBusy(null);
     if (res.error) return toast({ title: res.error, variant: "error" });
     if (res.secret) setSecret(res.secret);
@@ -63,10 +69,12 @@ export function InboundWebhookForm({
             {copied === "url" ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
           </Button>
         </div>
-        <p className="text-xs text-muted-foreground">
-          POST the email JSON here. Authenticate with header <code>x-webhook-secret</code>, an{" "}
-          <code>Authorization: Bearer &lt;secret&gt;</code> header, or a <code>?secret=</code> query param.
-        </p>
+        {urlHint ?? (
+          <p className="text-xs text-muted-foreground">
+            POST the email JSON here. Authenticate with header <code>x-webhook-secret</code>, an{" "}
+            <code>Authorization: Bearer &lt;secret&gt;</code> header, or a <code>?secret=</code> query param.
+          </p>
+        )}
       </div>
 
       <div className="space-y-2">

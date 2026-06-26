@@ -41,6 +41,8 @@ services:
       EMAIL_FROM: ${EMAIL_FROM:-}
       POSTMARK_MESSAGE_STREAM: ${POSTMARK_MESSAGE_STREAM:-outbound}
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:${WEB_PORT:-3000}}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o}
       NODE_ENV: production
     ports:
       - "${WEB_PORT:-3000}:3000"

@@ -1,6 +1,13 @@
 import "server-only";
-import { ServerClient } from "postmark";
+import { ServerClient, Attachment } from "postmark";
 import { APP_NAME } from "@/lib/app-constants";
+
+export type EmailAttachment = {
+  name: string;
+  /** Raw file contents; encoded to base64 for the provider. */
+  content: string | Buffer;
+  contentType: string;
+};
 
 type SendArgs = {
   to: string | string[];
@@ -10,6 +17,7 @@ type SendArgs = {
   subject: string;
   html: string;
   text?: string;
+  attachments?: EmailAttachment[];
 };
 
 /** Strip tags to a readable plain-text body for the multipart fallback. */
@@ -76,7 +84,7 @@ export function renderEmailLayout(title: string, bodyHtml: string, ctaUrl?: stri
  * never throws — failures are caught and logged so callers (notifications) are
  * safe to await without risking the underlying mutation.
  */
-export async function sendEmail({ to, cc, from: fromOverride, replyTo, subject, html, text }: SendArgs): Promise<void> {
+export async function sendEmail({ to, cc, from: fromOverride, replyTo, subject, html, text, attachments }: SendArgs): Promise<void> {
   const apiKey = process.env.POSTMARK_API_KEY;
   const from = fromOverride || process.env.EMAIL_FROM;
   const messageStream = process.env.POSTMARK_MESSAGE_STREAM || "outbound";
@@ -92,6 +100,16 @@ export async function sendEmail({ to, cc, from: fromOverride, replyTo, subject, 
 
   const textBody = text ?? htmlToText(html);
 
+  const postmarkAttachments = (attachments ?? []).map(
+    (att) =>
+      new Attachment(
+        att.name,
+        (Buffer.isBuffer(att.content) ? att.content : Buffer.from(att.content, "utf-8")).toString("base64"),
+        att.contentType,
+        null
+      )
+  );
+
   try {
     const client = new ServerClient(apiKey);
     await client.sendEmail({
@@ -103,6 +121,7 @@ export async function sendEmail({ to, cc, from: fromOverride, replyTo, subject, 
       HtmlBody: html,
       TextBody: textBody,
       MessageStream: messageStream,
+      Attachments: postmarkAttachments.length ? postmarkAttachments : undefined,
     });
   } catch (err) {
     console.error("[email] send error", err);

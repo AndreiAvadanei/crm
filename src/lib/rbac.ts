@@ -51,6 +51,32 @@ export async function clientVisibilityWhere(user: User): Promise<Prisma.ClientWh
   return { OR: or };
 }
 
+/**
+ * Which invoices a SALES user may see:
+ *  - invoices whose owning organization belongs to a client they can see, OR
+ *  - invoices issued on/after their `invoiceVisibleFrom` cutoff (shared by date,
+ *    regardless of client visibility).
+ */
+export async function invoiceVisibilityWhere(user: User): Promise<Prisma.InvoiceWhereInput> {
+  if (isAdmin(user)) return {};
+  const clientVis = await clientVisibilityWhere(user);
+  const or: Prisma.InvoiceWhereInput[] = [{ organization: { client: clientVis } }];
+  if (user.invoiceVisibleFrom) {
+    or.push({ issueDate: { gte: user.invoiceVisibleFrom } });
+  }
+  return { OR: or };
+}
+
+export async function canViewInvoice(user: User, invoiceId: string): Promise<boolean> {
+  if (isAdmin(user)) return true;
+  const where = await invoiceVisibilityWhere(user);
+  const found = await prisma.invoice.findFirst({
+    where: { AND: [{ id: invoiceId }, where] },
+    select: { id: true },
+  });
+  return !!found;
+}
+
 export async function canViewDeal(user: User, dealId: string): Promise<boolean> {
   if (isAdmin(user)) return true;
   const where = await dealVisibilityWhere(user);

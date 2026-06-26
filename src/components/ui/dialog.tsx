@@ -7,6 +7,27 @@ import { cn } from "@/lib/utils";
 
 const Dialog = DialogPrimitive.Root;
 const DialogTrigger = DialogPrimitive.Trigger;
+
+function DialogOpenTrigger({
+  trigger,
+  onOpen,
+}: {
+  trigger: React.ReactNode;
+  onOpen: () => void;
+}) {
+  // Keep the wrapper stable for server-created elements passed into client dialogs.
+  // Branching on React.isValidElement can render different tags during hydration.
+  return (
+    <span
+      className="contents"
+      onClick={(e) => {
+        if (!e.defaultPrevented) onOpen();
+      }}
+    >
+      {trigger}
+    </span>
+  );
+}
 const DialogPortal = DialogPrimitive.Portal;
 const DialogClose = DialogPrimitive.Close;
 
@@ -83,6 +104,7 @@ export {
   DialogOverlay,
   DialogClose,
   DialogTrigger,
+  DialogOpenTrigger,
   DialogContent,
   DialogHeader,
   DialogFooter,

@@ -1,20 +1,26 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Pencil } from "lucide-react";
+import { Info, Pencil } from "lucide-react";
 import { requireFullAuth } from "@/lib/auth/guards";
 import { prisma } from "@/lib/db";
-import { clientVisibilityWhere, dealVisibilityWhere, isAdmin } from "@/lib/rbac";
+import { clientVisibilityWhere, dealVisibilityWhere, invoiceVisibilityWhere, isAdmin } from "@/lib/rbac";
 import { LIST_FETCH_CAP } from "@/lib/app-constants";
 import { PageHeader } from "@/components/app/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { DeleteButton } from "@/components/shared/delete-button";
+import { getActiveIssuers } from "@/lib/issuers";
+import { getActiveSeries } from "@/lib/series";
+import { getActivePartNumbers } from "@/lib/part-number-catalog";
+import { SagaXmlDownloadButton } from "@/components/invoices/saga-xml-button";
 import { InvoiceFormDialog, type InvoiceData } from "@/components/invoices/invoice-form-dialog";
 import { GenerateInvoiceDialog } from "@/components/invoices/generate-invoice-dialog";
 import { deleteInvoiceAction } from "@/server/invoice-actions";
 import { INVOICE_STATUS_LABELS } from "@/lib/invoice-stats";
+import { invoiceStatusVariant } from "@/lib/invoice-constants";
 import { formatDate } from "@/lib/utils";
 
 type Props = { params: Promise<{ id: string }> };
@@ -34,17 +40,56 @@ function fmtAmount(value: number | null, currency: string | null): string {
   }
 }
 
+function asOriginalValues(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function originalTitle(values: Record<string, unknown>, keys: string[]): string {
+  return keys.map((key) => `${key}: ${values[key] ?? "—"}`).join("\n");
+}
+
+function OriginalInfo({ values, keys }: { values: Record<string, unknown>; keys: string[] }) {
+  const hasAny = keys.some((key) => values[key] != null && String(values[key]).trim() !== "");
+  if (!hasAny) return null;
+  return (
+    <span title={originalTitle(values, keys)} className="inline-flex cursor-help align-middle text-muted-foreground">
+      <Info className="h-3.5 w-3.5" />
+    </span>
+  );
+}
+
+function decimalNumber(value: unknown): number | null {
+  if (value == null) return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Coerce the stored partNumberValues JSON into a string map for the form. */
+function asStringMap(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = v == null ? "" : String(v);
+  return out;
+}
+
 export default async function InvoiceDetailPage({ params }: Props) {
   const user = await requireFullAuth();
   const { id } = await params;
-  const [clientVis, dealVis] = await Promise.all([clientVisibilityWhere(user), dealVisibilityWhere(user)]);
+  const [clientVis, dealVis, invoiceVis] = await Promise.all([
+    clientVisibilityWhere(user),
+    dealVisibilityWhere(user),
+    invoiceVisibilityWhere(user),
+  ]);
 
   const invoice = await prisma.invoice.findFirst({
-    where: { AND: [{ id }, { organization: { client: clientVis } }] },
+    where: { AND: [{ id }, invoiceVis] },
     include: {
       organization: { include: { client: { select: { id: true, name: true, ownerId: true } } } },
       client: { select: { id: true, name: true } },
       deal: { select: { salesId: true, title: true } },
+      lines: { orderBy: { createdAt: "asc" } },
+      partNumber: { select: { code: true, title: true } },
+      relatedInvoice: { select: { id: true, number: true, issueDate: true, organization: { select: { sourceName: true } } } },
     },
   });
   if (!invoice) notFound();
@@ -52,9 +97,13 @@ export default async function InvoiceDetailPage({ params }: Props) {
   const admin = isAdmin(user);
   const canManage = admin || invoice.organization.client.ownerId === user.id;
   const total = invoice.totalAmount == null ? null : Number(invoice.totalAmount);
+  const totalBase = invoice.totalBaseAmount == null ? null : Number(invoice.totalBaseAmount);
+  const vatAmount = invoice.vatAmount == null ? null : Number(invoice.vatAmount);
+  const unpaidAmount = invoice.unpaidAmount == null ? null : Number(invoice.unpaidAmount);
   const issueDateInput = invoice.issueDate ? invoice.issueDate.toISOString().slice(0, 10) : null;
+  const original = asOriginalValues(invoice.originalValues);
 
-  const [orgs, deals] = canManage
+  const [orgs, deals, issuers, partNumbers, seriesList] = canManage
     ? await Promise.all([
         prisma.organization.findMany({
           where: { client: clientVis },
@@ -68,8 +117,11 @@ export default async function InvoiceDetailPage({ params }: Props) {
           select: { salesId: true, title: true },
           take: LIST_FETCH_CAP,
         }),
+        getActiveIssuers(),
+        getActivePartNumbers(),
+        getActiveSeries(),
       ])
-    : [[], []];
+    : [[], [], [], [], []];
 
   const formData: InvoiceData = {
     id: invoice.id,
@@ -84,9 +136,25 @@ export default async function InvoiceDetailPage({ params }: Props) {
     issueDate: issueDateInput,
     expectedInvoiceDate: invoice.expectedInvoiceDate ? invoice.expectedInvoiceDate.toISOString().slice(0, 10) : null,
     issuerName: invoice.issuerName,
+    issuerId: invoice.issuerId,
+    partNumberId: invoice.partNumberId,
+    partNumberValues: asStringMap(invoice.partNumberValues),
+    relatedInvoiceId: invoice.relatedInvoiceId,
+    selfIssued: invoice.selfIssued,
+    seriesId: invoice.seriesId,
     servicesDescription: invoice.servicesDescription,
     contractRef: invoice.contractRef,
     fileUrls: invoice.fileUrls,
+    paid: invoice.paid,
+    lines: invoice.lines.map((line) => ({
+      serviceDescription: line.serviceDescription ?? "",
+      textSupplement: line.textSupplement ?? "",
+      unitOfMeasure: line.unitOfMeasure ?? "",
+      quantity: line.quantity == null ? "" : String(line.quantity),
+      unitPrice: line.unitPrice == null ? "" : String(line.unitPrice),
+      value: line.value == null ? "" : String(line.value),
+      total: line.total == null ? "" : String(line.total),
+    })),
   };
 
   const fileUrls = (invoice.fileUrls ?? "").split(/[\r\n,]+/).map((s) => s.trim()).filter(Boolean);
@@ -127,10 +195,14 @@ export default async function InvoiceDetailPage({ params }: Props) {
                 trigger={<Button variant="outline">Generate invoice</Button>}
               />
             )}
+            <SagaXmlDownloadButton invoiceId={invoice.id} />
             <InvoiceFormDialog
               invoice={formData}
               organizations={orgs.map((o) => ({ id: o.id, name: o.sourceName }))}
               deals={deals}
+              issuers={issuers}
+              series={seriesList}
+              partNumbers={partNumbers}
               trigger={
                 <Button variant="outline">
                   <Pencil /> Edit
@@ -155,13 +227,23 @@ export default async function InvoiceDetailPage({ params }: Props) {
               <CardTitle>Summary</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
-              <Row label="Status"><Badge>{INVOICE_STATUS_LABELS[invoice.status]}</Badge></Row>
+              <Row label="Status"><Badge variant={invoiceStatusVariant(invoice.status)}>{INVOICE_STATUS_LABELS[invoice.status]}</Badge></Row>
               <Row label="Total">{fmtAmount(total, invoice.currency)}</Row>
               <Row label="Currency">{invoice.currency ?? "—"}</Row>
               <Row label="Issue date">{formatDate(invoice.issueDate)}</Row>
               <Row label="Expected to invoice">{formatDate(invoice.expectedInvoiceDate)}</Row>
+              <Row label="Paid"><Badge variant={invoice.paid ? "success" : "outline"}>{invoice.paid ? "Paid" : "Unpaid"}</Badge></Row>
               <Row label="Payment term">{invoice.paymentTermDays != null ? `${invoice.paymentTermDays} days` : "—"}</Row>
               <Row label="Issuer">{invoice.issuerName ?? "—"}</Row>
+              <Row label="Part number">
+                {invoice.partNumberCode || invoice.partNumber?.code ? (
+                  <span className="font-mono text-xs" title={invoice.partNumber?.title ?? undefined}>
+                    {invoice.partNumberCode || invoice.partNumber?.code}
+                  </span>
+                ) : (
+                  "—"
+                )}
+              </Row>
               <Row label="Created by">{invoice.createdByName ?? "—"}</Row>
             </CardContent>
           </Card>
@@ -202,6 +284,16 @@ export default async function InvoiceDetailPage({ params }: Props) {
                   "—"
                 )}
               </Row>
+              <Row label="Related invoice">
+                {invoice.relatedInvoice ? (
+                  <Link href={`/invoices/${invoice.relatedInvoice.id}`} className="hover:text-primary">
+                    {invoice.relatedInvoice.number || "(no number)"}
+                    {invoice.relatedInvoice.issueDate ? ` · ${formatDate(invoice.relatedInvoice.issueDate)}` : ""}
+                  </Link>
+                ) : (
+                  "—"
+                )}
+              </Row>
               <Row label="Source ref">{invoice.externalRef ?? "—"}</Row>
             </CardContent>
           </Card>
@@ -210,19 +302,118 @@ export default async function InvoiceDetailPage({ params }: Props) {
         <div className="space-y-6 md:col-span-2">
           <Card>
             <CardHeader>
-              <CardTitle>Services</CardTitle>
+              <CardTitle>Issued invoice information</CardTitle>
             </CardHeader>
-            <CardContent className="text-sm">
-              {invoice.servicesDescription ? (
-                <p className="whitespace-pre-wrap">{invoice.servicesDescription}</p>
+            <CardContent className="grid gap-3 text-sm sm:grid-cols-2">
+              <Detail label="Invoice number" values={original} keys={["nr_iesire"]}>{invoice.number ?? "—"}</Detail>
+              <Detail label="Issued date" values={original} keys={["data"]}>{formatDate(invoice.issueDate)}</Detail>
+              <Detail label="Currency" values={original} keys={["cod_valuta"]}>{invoice.currency ?? "—"}</Detail>
+              <Detail label="Base total" values={original} keys={["baza_tva", "total"]}>{fmtAmount(totalBase, invoice.currency)}</Detail>
+              <Detail label="VAT" values={original} keys={["tva", "tva_val"]}>{fmtAmount(vatAmount, invoice.currency)}</Detail>
+              <Detail label="Total" values={original} keys={["total", "baza_tva"]}>{fmtAmount(total, invoice.currency)}</Detail>
+              <Detail label="Outstanding" values={original} keys={["neachitat"]}>
+                {invoice.paid ? "Paid" : fmtAmount(unpaidAmount, invoice.currency)}
+              </Detail>
+              <Detail label="Payment term" values={original} keys={["scadent"]}>
+                {invoice.paymentTermDays != null ? `${invoice.paymentTermDays} days` : "—"}
+              </Detail>
+              <div className="sm:col-span-2">
+                <Detail label="Invoice info" values={original} keys={["inf_suplm"]}>{invoice.invoiceInfo ?? "—"}</Detail>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Operator request information</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              <Detail label="Expected to invoice">{formatDate(invoice.expectedInvoiceDate)}</Detail>
+              <Detail label="Issuer">{invoice.issuerName ?? "—"}</Detail>
+              <Detail label="Created by">{invoice.createdByName ?? "—"}</Detail>
+              <Detail label="Amount note">{invoice.amountRaw ?? "—"}</Detail>
+              <Detail label="Contract reference">{invoice.contractRef ?? "—"}</Detail>
+              <div>
+                <div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Requested services</div>
+                {invoice.servicesDescription ? (
+                  <p className="whitespace-pre-wrap rounded-md bg-muted/30 p-3">{invoice.servicesDescription}</p>
+                ) : (
+                  <p className="text-muted-foreground">No description.</p>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Articles ({invoice.lines.length})</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {invoice.lines.length > 0 ? (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Service</TableHead>
+                      <TableHead>UM</TableHead>
+                      <TableHead className="text-right">Qty</TableHead>
+                      <TableHead className="text-right">Unit price</TableHead>
+                      <TableHead className="text-right">Value</TableHead>
+                      <TableHead className="text-right">Total</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {invoice.lines.map((line) => {
+                      const lineOriginal = asOriginalValues(line.originalValues);
+                      return (
+                        <TableRow key={line.id}>
+                          <TableCell className="max-w-[22rem]">
+                            <div className="flex items-start gap-1">
+                              <div>
+                                <div className="whitespace-pre-wrap">{line.serviceDescription ?? "—"}</div>
+                                {line.textSupplement && (
+                                  <div className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">{line.textSupplement}</div>
+                                )}
+                              </div>
+                              <OriginalInfo values={lineOriginal} keys={["denumire1", "text_supl"]} />
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <span className="inline-flex items-center gap-1">
+                              {line.unitOfMeasure ?? "—"}
+                              <OriginalInfo values={lineOriginal} keys={["um"]} />
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            <span className="inline-flex items-center justify-end gap-1">
+                              {decimalNumber(line.quantity)?.toLocaleString("en-US", { maximumFractionDigits: 4 }) ?? "—"}
+                              <OriginalInfo values={lineOriginal} keys={["cantitate"]} />
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            <span className="inline-flex items-center justify-end gap-1">
+                              {decimalNumber(line.unitPrice)?.toLocaleString("en-US", { maximumFractionDigits: 4 }) ?? "—"}
+                              <OriginalInfo values={lineOriginal} keys={["pret_unitar"]} />
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            <span className="inline-flex items-center justify-end gap-1">
+                              {fmtAmount(decimalNumber(line.value), invoice.currency)}
+                              <OriginalInfo values={lineOriginal} keys={["valoare"]} />
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            <span className="inline-flex items-center justify-end gap-1">
+                              {fmtAmount(decimalNumber(line.total), invoice.currency)}
+                              <OriginalInfo values={lineOriginal} keys={["total1"]} />
+                            </span>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
               ) : (
-                <p className="text-muted-foreground">No description.</p>
-              )}
-              {invoice.contractRef && (
-                <p className="mt-3 text-muted-foreground">Contract: {invoice.contractRef}</p>
-              )}
-              {invoice.amountRaw && (
-                <p className="mt-1 text-muted-foreground">Amount note: {invoice.amountRaw}</p>
+                <p className="text-sm text-muted-foreground">No articles recorded for this invoice.</p>
               )}
             </CardContent>
           </Card>
@@ -252,6 +443,28 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
     <div className="flex items-center justify-between gap-4">
       <span className="text-muted-foreground">{label}</span>
       <span className="text-right font-medium">{children}</span>
+    </div>
+  );
+}
+
+function Detail({
+  label,
+  children,
+  values,
+  keys = [],
+}: {
+  label: string;
+  children: React.ReactNode;
+  values?: Record<string, unknown>;
+  keys?: string[];
+}) {
+  return (
+    <div className="flex items-start justify-between gap-4 rounded-md border bg-muted/20 px-3 py-2">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="flex max-w-[70%] items-center gap-1 text-right font-medium">
+        {children}
+        {values && keys.length > 0 && <OriginalInfo values={values} keys={keys} />}
+      </span>
     </div>
   );
 }

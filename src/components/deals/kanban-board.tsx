@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type SyntheticEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -20,6 +20,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Plus,
+  Share2,
   SquarePen,
 } from "lucide-react";
 import { moveDealStageAction } from "@/server/deal-actions";
@@ -30,6 +31,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { TagBadge, type TagView } from "@/components/shared/tag-badge";
 import { InlineInput, InlineTagEditor } from "@/components/shared/inline-edit";
 import { DealFormDialog } from "@/components/deals/deal-form-dialog";
+import { ShareControl } from "@/components/deals/share-control";
 import type { FieldDefView } from "@/components/shared/custom-field-inputs";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
 
@@ -47,6 +49,7 @@ export type KanbanDeal = {
   amountEur: number | null;
   stageId: string;
   clientName: string | null;
+  ownerId: string | null;
   ownerName: string | null;
   ownerColor: string | null;
   dueDate: string | null;
@@ -54,6 +57,8 @@ export type KanbanDeal = {
   tags: TagView[];
   openTasks: number;
 };
+
+export type ShareUserView = { id: string; name: string; color: string };
 
 // Data needed to render the full New-deal dialog prefilled to a stage.
 type NewDealProps = {
@@ -104,9 +109,16 @@ function DealCard({
   stageColor,
   stageOptions,
   allTags,
+  owners,
+  canAssign,
+  shareUsers,
+  canShare,
+  sharedUserIds,
   onStageChange,
   onTagsChange,
   onAmountChange,
+  onOwnerChange,
+  onDueDateChange,
 }: {
   deal: KanbanDeal;
   overlay?: boolean;
@@ -116,10 +128,22 @@ function DealCard({
   stageOptions?: { id: string; name: string }[];
   // Full tag list for the inline tag editor.
   allTags?: TagView[];
+  // Full owner list for the inline assignee selector (admins only).
+  owners?: { id: string; name: string }[];
+  // Whether the current user may reassign owners (admin only).
+  canAssign?: boolean;
+  // Sales users this deal can be shared with (admin only).
+  shareUsers?: ShareUserView[];
+  // Whether the current user may share the deal (admin only).
+  canShare?: boolean;
+  // Ids of users this specific deal is currently shared with.
+  sharedUserIds?: string[];
   // Optimistic local-state callbacks owned by the board.
   onStageChange?: (dealId: string, stageId: string) => void;
   onTagsChange?: (dealId: string, tags: TagView[]) => void;
   onAmountChange?: (dealId: string, amount: number | null) => void;
+  onOwnerChange?: (dealId: string, ownerId: string | null) => void;
+  onDueDateChange?: (dealId: string, dueDate: string | null) => void;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: deal.id });
   const overdue = deal.overdue;
@@ -151,7 +175,45 @@ function DealCard({
             </span>
           )}
         </div>
-        {deal.ownerName && <Avatar name={deal.ownerName} color={deal.ownerColor} className="h-5 w-5 text-[9px]" />}
+        <div className="flex items-center gap-1">
+          {interactive && canShare && shareUsers && (
+            <span onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
+              <ShareControl
+                dealId={deal.id}
+                users={shareUsers.map((u) => ({
+                  id: u.id,
+                  name: u.name,
+                  color: u.color,
+                  shared: (sharedUserIds ?? []).includes(u.id),
+                }))}
+                trigger={
+                  <button
+                    type="button"
+                    title="Share deal"
+                    className={cn(
+                      "rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
+                      (sharedUserIds?.length ?? 0) > 0 && "text-primary"
+                    )}
+                  >
+                    <Share2 className="h-3.5 w-3.5" />
+                  </button>
+                }
+              />
+            </span>
+          )}
+          {interactive && canAssign && owners ? (
+            <CardOwnerSelect
+              dealId={deal.id}
+              ownerId={deal.ownerId}
+              ownerName={deal.ownerName}
+              ownerColor={deal.ownerColor}
+              owners={owners}
+              onOwnerChange={onOwnerChange!}
+            />
+          ) : (
+            deal.ownerName && <Avatar name={deal.ownerName} color={deal.ownerColor} className="h-5 w-5 text-[9px]" />
+          )}
+        </div>
       </div>
       <Link
         href={`/deals/${deal.salesId}`}
@@ -246,16 +308,25 @@ function DealCard({
               <CheckSquare className="h-3 w-3" /> {deal.openTasks}
             </span>
           )}
-          {deal.dueDate && (
-            <span
-              className={cn(
-                "flex items-center gap-0.5",
-                overdue && "font-medium text-destructive"
-              )}
-              title={overdue ? "Overdue" : "Due date"}
-            >
-              <CalendarClock className="h-3 w-3" /> {formatDate(deal.dueDate)}
-            </span>
+          {interactive ? (
+            <CardDueDate
+              dealId={deal.id}
+              dueDate={deal.dueDate}
+              overdue={overdue}
+              onDueDateChange={onDueDateChange!}
+            />
+          ) : (
+            deal.dueDate && (
+              <span
+                className={cn(
+                  "flex items-center gap-0.5",
+                  overdue && "font-medium text-destructive"
+                )}
+                title={overdue ? "Overdue" : "Due date"}
+              >
+                <CalendarClock className="h-3 w-3" /> {formatDate(deal.dueDate)}
+              </span>
+            )
           )}
         </div>
       </div>
@@ -264,7 +335,8 @@ function DealCard({
 }
 
 // ---------------------------------------------------------------------------
-// Inline status selector used on a card. Optimistically moves the card to the
+// Inline status selector used on a card. Renders the stage name as plain text;
+// clicking turns it into a native select. Optimistically moves the card to the
 // chosen stage's column via the board callback, then persists the change.
 // ---------------------------------------------------------------------------
 function CardStageSelect({
@@ -280,22 +352,56 @@ function CardStageSelect({
   options: { id: string; name: string }[];
   onStageChange: (dealId: string, stageId: string) => void;
 }) {
+  const [editing, setEditing] = useState(false);
+  const selectRef = useRef<HTMLSelectElement>(null);
+  const stageName = options.find((o) => o.id === stageId)?.name ?? "—";
+
+  // Focus + open the picker as soon as we enter edit mode.
+  useEffect(() => {
+    if (!editing) return;
+    selectRef.current?.focus();
+    try {
+      (selectRef.current as unknown as { showPicker?: () => void })?.showPicker?.();
+    } catch {
+      /* showPicker unsupported — focus is enough */
+    }
+  }, [editing]);
+
+  // Stop drag/click from bubbling to the card's drag sensor.
+  const stop = (e: SyntheticEvent) => e.stopPropagation();
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        onPointerDown={stop}
+        onClick={(e) => {
+          stop(e);
+          setEditing(true);
+        }}
+        title="Change status"
+        className="mt-2 flex w-full items-center gap-1.5 rounded px-1.5 py-0.5 text-left text-xs transition-colors hover:bg-accent/60 hover:ring-1 hover:ring-border"
+      >
+        <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: stageColor }} />
+        <span className="truncate font-medium">{stageName}</span>
+      </button>
+    );
+  }
+
   return (
-    <span
-      className="mt-2 flex items-center gap-1.5"
-      // Stop drag/click from firing while interacting with the native select.
-      onPointerDown={(e) => e.stopPropagation()}
-      onClick={(e) => e.stopPropagation()}
-    >
+    <span className="mt-2 flex items-center gap-1.5" onPointerDown={stop} onClick={stop}>
       <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: stageColor }} />
       <select
+        ref={selectRef}
         value={stageId}
         onChange={(e) => {
           const next = e.target.value;
+          setEditing(false);
           if (next !== stageId) onStageChange(dealId, next);
         }}
+        onBlur={() => setEditing(false)}
         title="Change status"
-        className="form-control h-7 w-full cursor-pointer px-1.5 text-xs transition-colors hover:bg-accent/60"
+        className="form-control h-7 w-full cursor-pointer px-1.5 text-xs"
       >
         {options.map((o) => (
           <option key={o.id} value={o.id}>
@@ -304,6 +410,161 @@ function CardStageSelect({
         ))}
       </select>
     </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Inline owner (assignee) selector used on a card. Shows the owner avatar;
+// clicking turns it into a native select of active users. Optimistically
+// reassigns via the board callback, then persists the change. Admins only.
+// ---------------------------------------------------------------------------
+function CardOwnerSelect({
+  dealId,
+  ownerId,
+  ownerName,
+  ownerColor,
+  owners,
+  onOwnerChange,
+}: {
+  dealId: string;
+  ownerId: string | null;
+  ownerName: string | null;
+  ownerColor: string | null;
+  owners: { id: string; name: string }[];
+  onOwnerChange: (dealId: string, ownerId: string | null) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const selectRef = useRef<HTMLSelectElement>(null);
+
+  useEffect(() => {
+    if (!editing) return;
+    selectRef.current?.focus();
+    try {
+      (selectRef.current as unknown as { showPicker?: () => void })?.showPicker?.();
+    } catch {
+      /* showPicker unsupported — focus is enough */
+    }
+  }, [editing]);
+
+  const stop = (e: SyntheticEvent) => e.stopPropagation();
+
+  if (editing) {
+    return (
+      <span onPointerDown={stop} onClick={stop}>
+        <select
+          ref={selectRef}
+          value={ownerId ?? ""}
+          onChange={(e) => {
+            const next = e.target.value;
+            setEditing(false);
+            onOwnerChange(dealId, next || null);
+          }}
+          onBlur={() => setEditing(false)}
+          title="Reassign owner"
+          className="form-control h-6 max-w-[9rem] cursor-pointer px-1 text-[11px]"
+        >
+          <option value="">Unassigned</option>
+          {owners.map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.name}
+            </option>
+          ))}
+        </select>
+      </span>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onPointerDown={stop}
+      onClick={(e) => {
+        stop(e);
+        setEditing(true);
+      }}
+      title={ownerName ? `Assigned to ${ownerName} — click to reassign` : "Assign owner"}
+      className="rounded-full transition-opacity hover:opacity-80"
+    >
+      {ownerName ? (
+        <Avatar name={ownerName} color={ownerColor} className="h-5 w-5 text-[9px]" />
+      ) : (
+        <span className="flex h-5 w-5 items-center justify-center rounded-full border border-dashed text-[10px] text-muted-foreground">
+          +
+        </span>
+      )}
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Inline due-date editor used on a card. Shows the formatted date (or a "Due"
+// placeholder); clicking turns it into a native date input. Optimistically
+// updates via the board callback, then persists the change.
+// ---------------------------------------------------------------------------
+function CardDueDate({
+  dealId,
+  dueDate,
+  overdue,
+  onDueDateChange,
+}: {
+  dealId: string;
+  dueDate: string | null;
+  overdue: boolean;
+  onDueDateChange: (dealId: string, dueDate: string | null) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const value = dueDate ? dueDate.slice(0, 10) : "";
+
+  useEffect(() => {
+    if (!editing) return;
+    inputRef.current?.focus();
+    try {
+      (inputRef.current as unknown as { showPicker?: () => void })?.showPicker?.();
+    } catch {
+      /* showPicker unsupported — focus is enough */
+    }
+  }, [editing]);
+
+  const stop = (e: SyntheticEvent) => e.stopPropagation();
+
+  if (editing) {
+    return (
+      <span onPointerDown={stop} onClick={stop}>
+        <input
+          ref={inputRef}
+          type="date"
+          defaultValue={value}
+          onChange={(e) => {
+            const next = e.target.value;
+            setEditing(false);
+            if (next !== value) onDueDateChange(dealId, next || null);
+          }}
+          onBlur={() => setEditing(false)}
+          title="Change due date"
+          className="form-control h-6 px-1 text-[11px]"
+        />
+      </span>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onPointerDown={stop}
+      onClick={(e) => {
+        stop(e);
+        setEditing(true);
+      }}
+      title={overdue ? "Overdue — click to change" : "Change due date"}
+      className={cn(
+        "flex items-center gap-0.5 rounded px-1 py-0.5 transition-colors hover:bg-accent/60 hover:ring-1 hover:ring-border",
+        overdue && "font-medium text-destructive"
+      )}
+    >
+      <CalendarClock className="h-3 w-3" />
+      {dueDate ? formatDate(dueDate) : <span className="text-muted-foreground">Due</span>}
+    </button>
   );
 }
 
@@ -332,6 +593,7 @@ function QuickAdd({ stageId, onCreated }: { stageId: string; onCreated: (deal: K
       amountEur: null,
       stageId,
       clientName: null,
+      ownerId: null,
       ownerName: null,
       ownerColor: null,
       dueDate: null,
@@ -372,22 +634,36 @@ function StageColumn({
   newDeal,
   stageOptions,
   allTags,
+  owners,
+  canAssign,
+  shareUsers,
+  canShare,
+  sharedMap,
   onCollapse,
   onCreated,
   onStageChange,
   onTagsChange,
   onAmountChange,
+  onOwnerChange,
+  onDueDateChange,
 }: {
   stage: KanbanStage;
   deals: KanbanDeal[];
   newDeal?: NewDealProps;
   stageOptions: { id: string; name: string }[];
   allTags: TagView[];
+  owners: { id: string; name: string }[];
+  canAssign: boolean;
+  shareUsers: ShareUserView[];
+  canShare: boolean;
+  sharedMap: Record<string, string[]>;
   onCollapse: () => void;
   onCreated: (deal: KanbanDeal) => void;
   onStageChange: (dealId: string, stageId: string) => void;
   onTagsChange: (dealId: string, tags: TagView[]) => void;
   onAmountChange: (dealId: string, amount: number | null) => void;
+  onOwnerChange: (dealId: string, ownerId: string | null) => void;
+  onDueDateChange: (dealId: string, dueDate: string | null) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage.id });
   const [adding, setAdding] = useState(false);
@@ -479,9 +755,16 @@ function StageColumn({
             stageColor={stage.color}
             stageOptions={stageOptions}
             allTags={allTags}
+            owners={owners}
+            canAssign={canAssign}
+            shareUsers={shareUsers}
+            canShare={canShare}
+            sharedUserIds={sharedMap[d.id]}
             onStageChange={onStageChange}
             onTagsChange={onTagsChange}
             onAmountChange={onAmountChange}
+            onOwnerChange={onOwnerChange}
+            onDueDateChange={onDueDateChange}
           />
         ))}
         {deals.length === 0 && !adding && (
@@ -562,6 +845,11 @@ function PhaseGroup({
   newDeal,
   stageOptions,
   allTags,
+  owners,
+  canAssign,
+  shareUsers,
+  canShare,
+  sharedMap,
   collapsed,
   onTogglePhase,
   onToggleStage,
@@ -569,6 +857,8 @@ function PhaseGroup({
   onStageChange,
   onTagsChange,
   onAmountChange,
+  onOwnerChange,
+  onDueDateChange,
 }: {
   group: PhaseGroupData;
   byStage: Record<string, KanbanDeal[]>;
@@ -576,6 +866,11 @@ function PhaseGroup({
   newDeal?: NewDealProps;
   stageOptions: { id: string; name: string }[];
   allTags: TagView[];
+  owners: { id: string; name: string }[];
+  canAssign: boolean;
+  shareUsers: ShareUserView[];
+  canShare: boolean;
+  sharedMap: Record<string, string[]>;
   collapsed: boolean;
   onTogglePhase: () => void;
   onToggleStage: (stageId: string) => void;
@@ -583,6 +878,8 @@ function PhaseGroup({
   onStageChange: (dealId: string, stageId: string) => void;
   onTagsChange: (dealId: string, tags: TagView[]) => void;
   onAmountChange: (dealId: string, amount: number | null) => void;
+  onOwnerChange: (dealId: string, ownerId: string | null) => void;
+  onDueDateChange: (dealId: string, dueDate: string | null) => void;
 }) {
   const groupDeals = group.stages.flatMap((s) => byStage[s.id] ?? []);
   const total = groupDeals.reduce((s, d) => s + (d.amountEur ?? 0), 0);
@@ -650,11 +947,18 @@ function PhaseGroup({
               newDeal={newDeal}
               stageOptions={stageOptions}
               allTags={allTags}
+              owners={owners}
+              canAssign={canAssign}
+              shareUsers={shareUsers}
+              canShare={canShare}
+              sharedMap={sharedMap}
               onCollapse={() => onToggleStage(stage.id)}
               onCreated={onCreated}
               onStageChange={onStageChange}
               onTagsChange={onTagsChange}
               onAmountChange={onAmountChange}
+              onOwnerChange={onOwnerChange}
+              onDueDateChange={onDueDateChange}
             />
           )
         )}
@@ -670,12 +974,17 @@ export function KanbanBoard({
   stages,
   deals: initial,
   newDeal,
+  shareUsers = [],
+  sharedMap = {},
 }: {
   stages: KanbanStage[];
   deals: KanbanDeal[];
   newDeal?: NewDealProps;
+  shareUsers?: ShareUserView[];
+  sharedMap?: Record<string, string[]>;
 }) {
   const { toast } = useToast();
+  const router = useRouter();
   const [deals, setDeals] = useState(initial);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [collapsedStages, setCollapsedStages] = useState<Set<string>>(new Set());
@@ -692,6 +1001,11 @@ export function KanbanBoard({
 
   const stageOptions = useMemo(() => stages.map((s) => ({ id: s.id, name: s.name })), [stages]);
   const allTags = newDeal?.tags ?? [];
+  // Owner reassignment from cards is admin-only (matches quickUpdateDealAction).
+  const owners = newDeal?.owners ?? [];
+  const canAssign = !!newDeal?.isAdmin && owners.length > 0;
+  // Sharing is admin-only (matches quickShareDealAction).
+  const canShare = !!newDeal?.isAdmin && shareUsers.length > 0;
 
   const byStage = useMemo(() => {
     const map: Record<string, KanbanDeal[]> = {};
@@ -767,6 +1081,48 @@ export function KanbanBoard({
     setDeals((ds) => ds.map((d) => (d.id === dealId ? { ...d, amountEur: amount } : d)));
   }
 
+  // Inline owner reassignment from a card: optimistically update the avatar,
+  // persist via quick-update, revert on failure, and refresh on success so the
+  // real avatar color (not carried in the owners list) is synced from server.
+  async function changeOwner(dealId: string, ownerId: string | null) {
+    const prev = deals;
+    const name = ownerId ? owners.find((o) => o.id === ownerId)?.name ?? null : null;
+    setDeals((ds) =>
+      ds.map((d) => (d.id === dealId ? { ...d, ownerId, ownerName: name, ownerColor: null } : d))
+    );
+    const res = await quickUpdateDealAction(dealId, { ownerId });
+    if (res.error) {
+      setDeals(prev);
+      toast({ title: res.error, variant: "error" });
+    } else {
+      router.refresh();
+    }
+  }
+
+  // Inline due-date change from a card: optimistically update the date (with a
+  // naive overdue recompute for instant feedback), persist via quick-update,
+  // revert on failure, and refresh on success so overdue reflects stage flags.
+  async function changeDueDate(dealId: string, dueDate: string | null) {
+    const prev = deals;
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const overdue = dueDate ? new Date(dueDate) < startOfToday : false;
+    setDeals((ds) =>
+      ds.map((d) =>
+        d.id === dealId
+          ? { ...d, dueDate: dueDate ? new Date(dueDate).toISOString() : null, overdue }
+          : d
+      )
+    );
+    const res = await quickUpdateDealAction(dealId, { dueDate });
+    if (res.error) {
+      setDeals(prev);
+      toast({ title: res.error, variant: "error" });
+    } else {
+      router.refresh();
+    }
+  }
+
   function onDragStart(e: DragStartEvent) {
     setActiveId(String(e.active.id));
   }
@@ -800,6 +1156,11 @@ export function KanbanBoard({
             newDeal={newDeal}
             stageOptions={stageOptions}
             allTags={allTags}
+            owners={owners}
+            canAssign={canAssign}
+            shareUsers={shareUsers}
+            canShare={canShare}
+            sharedMap={sharedMap}
             collapsed={collapsedPhases.has(group.key)}
             onTogglePhase={() => togglePhase(group.key)}
             onToggleStage={toggleStage}
@@ -807,6 +1168,8 @@ export function KanbanBoard({
             onStageChange={changeStage}
             onTagsChange={changeTags}
             onAmountChange={changeAmount}
+            onOwnerChange={changeOwner}
+            onDueDateChange={changeDueDate}
           />
         ))}
       </div>

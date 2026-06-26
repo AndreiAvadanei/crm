@@ -21,6 +21,7 @@ import { DeleteButton } from "@/components/shared/delete-button";
 import { deleteClientAction } from "@/server/client-actions";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { LIST_FETCH_CAP } from "@/lib/app-constants";
+import { getDefaultOrganizationTvaPercent } from "@/lib/settings";
 
 type ClientDetailPageProps = {
   params: Promise<{ id: string }>;
@@ -61,12 +62,13 @@ export default async function ClientDetailPage({ params }: ClientDetailPageProps
   });
   if (!client) notFound();
 
-  const [defs, valuesMap, tags, fieldDefViews, owners] = await Promise.all([
+  const [defs, valuesMap, tags, fieldDefViews, owners, defaultTvaPercent] = await Promise.all([
     prisma.customFieldDefinition.findMany({ where: { entity: "CLIENT", active: true }, orderBy: { order: "asc" } }),
     loadValues("CLIENT", id),
     getTagViews(),
     getFieldDefViews("CLIENT"),
     isAdmin(user) ? getOwners() : Promise.resolve([]),
+    getDefaultOrganizationTvaPercent(),
   ]);
 
   const admin = isAdmin(user);
@@ -220,6 +222,7 @@ export default async function ClientDetailPage({ params }: ClientDetailPageProps
           <ClientOrganizationsCard
             client={{ id: client.id, name: client.name }}
             canManage={canDelete}
+            defaultTvaPercent={defaultTvaPercent}
             organizations={client.organizations.map((o) => ({
               id: o.id,
               sourceName: o.sourceName,
@@ -231,6 +234,7 @@ export default async function ClientDetailPage({ params }: ClientDetailPageProps
               iban: o.iban,
               address: o.address,
               isDefault: o.isDefault,
+              tvaPercent: o.tvaPercent.toString(),
               clientId: o.clientId,
               invoiceCount: o._count.invoices,
             }))}

@@ -39,3 +39,4 @@ yarn-error.log*
 jira.csv
 clienti.csv
 facturi.csv
+/data-init/

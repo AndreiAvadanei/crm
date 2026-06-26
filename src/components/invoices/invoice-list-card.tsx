@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { InvoiceFormDialog } from "@/components/invoices/invoice-form-dialog";
-import { INVOICE_STATUS_LABELS } from "@/lib/invoice-constants";
+import { INVOICE_STATUS_LABELS, invoiceStatusVariant } from "@/lib/invoice-constants";
 import { formatDate } from "@/lib/utils";
 
 export type InvoiceListItem = {
@@ -76,7 +76,7 @@ export function InvoiceListCard({
               <div className="truncate text-xs text-muted-foreground">{i.organizationName}</div>
             </div>
             <div className="flex shrink-0 items-center gap-3">
-              <Badge variant="secondary">{INVOICE_STATUS_LABELS[i.status]}</Badge>
+              <Badge variant={invoiceStatusVariant(i.status)}>{INVOICE_STATUS_LABELS[i.status]}</Badge>
               <span className="tabular-nums text-sm">{fmt(i.totalAmount, i.currency)}</span>
               <span className="hidden text-xs text-muted-foreground sm:inline">{formatDate(i.issueDate)}</span>
             </div>

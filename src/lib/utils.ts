@@ -14,6 +14,13 @@ export function formatCurrency(value: number | null | undefined, currency = "EUR
   }).format(value);
 }
 
+export function formatPercent(value: number | string | null | undefined) {
+  if (value == null || value === "") return "—";
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "—";
+  return `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(n)}%`;
+}
+
 export function formatDate(date: Date | string | null | undefined) {
   if (!date) return "—";
   const d = typeof date === "string" ? new Date(date) : date;

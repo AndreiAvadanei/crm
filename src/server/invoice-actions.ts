@@ -3,22 +3,32 @@
 import crypto from "crypto";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
-import { InvoiceStatus } from "@/generated/prisma";
+import { InvoiceStatus, Prisma } from "@/generated/prisma";
 import { requireUser } from "@/lib/auth/guards";
 import { canEditClient, isAdmin } from "@/lib/rbac";
 import { logActivity } from "@/lib/activity";
 import { sendEmail } from "@/lib/email";
+import { buildInvoiceSagaXml } from "@/lib/invoice-saga";
+import { assignInvoiceNumber } from "@/lib/invoice-numbering";
 import {
   DEFAULT_INVOICE_CURRENCY,
   DEFAULT_INVOICE_ISSUER,
   DEFAULT_INVOICE_PAYMENT_TERM,
   DEFAULT_INVOICE_STATUS,
   INVOICE_CURRENCY_OPTIONS,
-  INVOICE_ISSUER_OPTIONS,
   INVOICE_PAYMENT_TERM_OPTIONS,
 } from "@/lib/invoice-constants";
 
 type Result = { ok?: boolean; error?: string; id?: string };
+type InvoiceLineInput = {
+  serviceDescription?: string;
+  textSupplement?: string;
+  unitOfMeasure?: string;
+  quantity?: string | null;
+  unitPrice?: string | null;
+  value?: string | null;
+  total?: string | null;
+};
 
 const BILLING_EMAIL_FROM = "billing@bit-sentinel.com";
 const BILLING_EMAIL_TO = "romeo200564ro@gmail.com";
@@ -53,9 +63,17 @@ function parsePaymentTerm(v: string | undefined): number {
   return (INVOICE_PAYMENT_TERM_OPTIONS as readonly number[]).includes(days) ? days : DEFAULT_INVOICE_PAYMENT_TERM;
 }
 
-function parseIssuer(v: string | undefined): string {
-  const issuer = v || DEFAULT_INVOICE_ISSUER;
-  return (INVOICE_ISSUER_OPTIONS as readonly string[]).includes(issuer) ? issuer : DEFAULT_INVOICE_ISSUER;
+/**
+ * Resolve the seller/issuer for an invoice. Prefers a configured Issuer (by id),
+ * falling back to free-text issuerName for legacy/manual entries. Returns both the
+ * link id and the canonical name kept on the invoice for filtering/totals.
+ */
+async function resolveIssuer(issuerId: string | undefined, issuerName: string | undefined): Promise<{ issuerId: string | null; issuerName: string }> {
+  if (issuerId) {
+    const issuer = await prisma.issuer.findUnique({ where: { id: issuerId }, select: { id: true, name: true } });
+    if (issuer) return { issuerId: issuer.id, issuerName: issuer.name };
+  }
+  return { issuerId: null, issuerName: issuerName?.trim() || DEFAULT_INVOICE_ISSUER };
 }
 
 function parseDate(v: string | undefined): Date | null {
@@ -64,22 +82,160 @@ function parseDate(v: string | undefined): Date | null {
   return isNaN(d.getTime()) ? null : d;
 }
 
+/** Resolve the chosen part number, ignoring stale/unknown ids. */
+async function resolvePartNumber(
+  idRaw: string | undefined,
+  valuesRaw: string | undefined,
+  codeRaw: string | undefined
+): Promise<{ partNumberId: string | null; partNumberCode: string | null; partNumberValues: Prisma.InputJsonValue | typeof Prisma.DbNull }> {
+  const id = idRaw || null;
+  if (!id) return { partNumberId: null, partNumberCode: null, partNumberValues: Prisma.DbNull };
+  const pn = await prisma.partNumber.findUnique({ where: { id }, select: { id: true } });
+  if (!pn) return { partNumberId: null, partNumberCode: null, partNumberValues: Prisma.DbNull };
+  let values: Prisma.InputJsonValue | typeof Prisma.DbNull = Prisma.DbNull;
+  if (valuesRaw) {
+    try {
+      const parsed = JSON.parse(valuesRaw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) values = parsed as Prisma.InputJsonObject;
+    } catch {
+      values = Prisma.DbNull;
+    }
+  }
+  return { partNumberId: pn.id, partNumberCode: codeRaw || null, partNumberValues: values };
+}
+
+/** Resolve the chosen number series id, ignoring stale/unknown ids. */
+async function resolveSeries(idRaw: string | undefined): Promise<string | null> {
+  const id = idRaw || null;
+  if (!id) return null;
+  const series = await prisma.invoiceSeries.findUnique({ where: { id }, select: { id: true } });
+  return series ? series.id : null;
+}
+
+/** Resolve a related invoice link, ignoring unknown ids and self-references. */
+async function resolveRelatedInvoice(idRaw: string | undefined, selfId?: string): Promise<string | null> {
+  const id = idRaw || null;
+  if (!id || id === selfId) return null;
+  const found = await prisma.invoice.findUnique({ where: { id }, select: { id: true } });
+  return found ? found.id : null;
+}
+
+function parseBool(v: string | undefined): boolean {
+  return v === "1" || v === "true" || v === "on";
+}
+
+function parseDecimal(v: string | null | undefined): string | null {
+  if (!v) return null;
+  let s = v.trim().replace(/\s+/g, "");
+  if (!s) return null;
+  if (s.includes(",") && !s.includes(".")) s = s.replace(",", ".");
+  if (s.includes(",") && s.includes(".")) s = s.replace(/,/g, "");
+  const n = Number(s);
+  if (!Number.isFinite(n)) return null;
+  return n.toFixed(4).replace(/\.?0+$/, "");
+}
+
+function parseInvoiceLines(formData: FormData): InvoiceLineInput[] {
+  const raw = str(formData, "linesJson");
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as InvoiceLineInput[];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((line) => ({
+        serviceDescription: line.serviceDescription?.trim() || undefined,
+        textSupplement: line.textSupplement?.trim() || undefined,
+        unitOfMeasure: line.unitOfMeasure?.trim().toLowerCase() || undefined,
+        quantity: parseDecimal(line.quantity),
+        unitPrice: parseDecimal(line.unitPrice),
+        value: parseDecimal(line.value),
+        total: parseDecimal(line.total),
+      }))
+      .filter((line) =>
+        Boolean(line.serviceDescription || line.textSupplement || line.unitOfMeasure || line.quantity || line.unitPrice || line.value || line.total)
+      );
+  } catch {
+    return [];
+  }
+}
+
+async function replaceInvoiceLines(invoiceId: string, lines: InvoiceLineInput[]) {
+  await prisma.invoiceLine.deleteMany({ where: { invoiceId } });
+  if (lines.length === 0) return;
+  await prisma.invoiceLine.createMany({
+    data: lines.map((line, index) => ({
+      invoiceId,
+      sourceLineKey: `manual-${index + 1}`,
+      serviceDescription: line.serviceDescription ?? null,
+      textSupplement: line.textSupplement ?? null,
+      unitOfMeasure: line.unitOfMeasure ?? null,
+      quantity: line.quantity ?? null,
+      unitPrice: line.unitPrice ?? null,
+      value: line.value ?? null,
+      total: line.total ?? null,
+    })),
+  });
+}
+
+function clampInt(v: string | undefined, def: number, min: number, max: number): number {
+  const n = Number.parseInt(v ?? "", 10);
+  if (!Number.isFinite(n)) return def;
+  return Math.min(max, Math.max(min, n));
+}
+
+/** Shift a date by N months, keeping the day-of-month (clamped to month length). */
+function addMonthsKeepDay(base: Date, months: number): Date {
+  const d = new Date(base);
+  const day = d.getUTCDate();
+  d.setUTCDate(1);
+  d.setUTCMonth(d.getUTCMonth() + months);
+  const daysInMonth = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  d.setUTCDate(Math.min(day, daysInMonth));
+  return d;
+}
+
 /** Build the column set shared by create/update from the form. */
-async function invoiceData(formData: FormData) {
+async function invoiceData(formData: FormData, selfId?: string) {
   const sale = await resolveDeal(str(formData, "salesId"));
+  const lines = parseInvoiceLines(formData);
+  const lineServices = lines
+    .map((line) => line.serviceDescription)
+    .filter(Boolean)
+    .join("\n");
+  const servicesDescription = (str(formData, "servicesDescription") ?? lineServices) || null;
+  const issuer = await resolveIssuer(str(formData, "issuerId"), str(formData, "issuerName"));
+  const partNumber = await resolvePartNumber(
+    str(formData, "partNumberId"),
+    str(formData, "partNumberValues"),
+    str(formData, "partNumberCode")
+  );
+  const relatedInvoiceId = await resolveRelatedInvoice(str(formData, "relatedInvoiceId"), selfId);
+  const selfIssued = parseBool(str(formData, "selfIssued"));
+  // A series only matters when we issue the invoice ourselves; otherwise the
+  // accounting firm generates it and assigns the number.
+  const seriesId = selfIssued ? await resolveSeries(str(formData, "seriesId")) : null;
   return {
     fields: {
       status: parseStatus(str(formData, "status")),
       dealId: sale.dealId,
       salesIdSnapshot: sale.salesId,
-      servicesDescription: str(formData, "servicesDescription") ?? null,
+      servicesDescription,
       contractRef: str(formData, "contractRef") ?? null,
       amountRaw: str(formData, "amountRaw") ?? null,
       currency: parseCurrency(str(formData, "currency")),
       paymentTermDays: parsePaymentTerm(str(formData, "paymentTermDays")),
       expectedInvoiceDate: parseDate(str(formData, "expectedInvoiceDate")),
-      issuerName: parseIssuer(str(formData, "issuerName")),
+      issuerName: issuer.issuerName,
+      issuerId: issuer.issuerId,
+      partNumberId: partNumber.partNumberId,
+      partNumberCode: partNumber.partNumberCode,
+      partNumberValues: partNumber.partNumberValues,
+      relatedInvoiceId,
+      selfIssued,
+      seriesId,
+      paid: parseBool(str(formData, "paid")),
     },
+    lines,
     saleMissing: sale.missing,
   };
 }
@@ -99,29 +255,45 @@ export async function createInvoiceAction(formData: FormData): Promise<Result> {
   if (!org) return { error: "Organization not found." };
   if (!(await canEditOrgInvoices(user, org.clientId))) return { error: "Not allowed." };
 
-  const { fields, saleMissing } = await invoiceData(formData);
+  const { fields, lines, saleMissing } = await invoiceData(formData);
   if (saleMissing) return { error: `No deal found for ${str(formData, "salesId")}.` };
 
-  const invoice = await prisma.invoice.create({
-    data: {
-      externalRecordId: `manual-${crypto.randomUUID()}`,
-      organizationId,
-      clientId: org.clientId,
-      createdByName: user.name,
-      ...fields,
-    },
-  });
+  // Recurrence: create N invoices with identical data but the expected invoice
+  // date shifted by `intervalMonths` each time (day kept, month/year change).
+  const recurrent = parseBool(str(formData, "recurrent"));
+  const repetitions = clampInt(str(formData, "repetitions"), 12, 1, 60);
+  const intervalMonths = clampInt(str(formData, "intervalMonths"), 1, 1, 24);
+  const baseExpected = fields.expectedInvoiceDate;
+  const count = recurrent && baseExpected ? repetitions : 1;
+
+  let firstId = "";
+  for (let k = 0; k < count; k++) {
+    const expectedInvoiceDate = baseExpected ? addMonthsKeepDay(baseExpected, k * intervalMonths) : null;
+    const invoice = await prisma.invoice.create({
+      data: {
+        externalRecordId: `manual-${crypto.randomUUID()}`,
+        organizationId,
+        clientId: org.clientId,
+        createdByName: user.name,
+        ...fields,
+        expectedInvoiceDate,
+      },
+    });
+    await replaceInvoiceLines(invoice.id, lines);
+    if (k === 0) firstId = invoice.id;
+  }
+
   await logActivity({
     actorId: user.id,
     action: "invoice_created",
     entity: "Invoice",
-    entityId: invoice.id,
-    meta: { number: invoice.number, organizationId },
+    entityId: firstId,
+    meta: { organizationId, count },
   });
   revalidatePath("/invoices");
   if (org.clientId) revalidatePath(`/clients/${org.clientId}`);
   if (fields.salesIdSnapshot) revalidatePath(`/deals/${fields.salesIdSnapshot}`);
-  return { ok: true, id: invoice.id };
+  return { ok: true, id: firstId };
 }
 
 export async function updateInvoiceAction(invoiceId: string, formData: FormData): Promise<Result> {
@@ -143,13 +315,14 @@ export async function updateInvoiceAction(invoiceId: string, formData: FormData)
     clientId = org.clientId;
   }
 
-  const { fields, saleMissing } = await invoiceData(formData);
+  const { fields, lines, saleMissing } = await invoiceData(formData, invoiceId);
   if (saleMissing) return { error: `No deal found for ${str(formData, "salesId")}.` };
 
   await prisma.invoice.update({
     where: { id: invoiceId },
     data: { organizationId, clientId, ...fields },
   });
+  await replaceInvoiceLines(invoiceId, lines);
   await logActivity({
     actorId: user.id,
     action: "invoice_updated",
@@ -161,6 +334,121 @@ export async function updateInvoiceAction(invoiceId: string, formData: FormData)
   revalidatePath(`/invoices/${invoiceId}`);
   if (clientId) revalidatePath(`/clients/${clientId}`);
   if (fields.salesIdSnapshot) revalidatePath(`/deals/${fields.salesIdSnapshot}`);
+  return { ok: true };
+}
+
+/** Inline toggle of the paid flag from the table or detail view. */
+export async function setInvoicePaidAction(invoiceId: string, paid: boolean): Promise<Result> {
+  const user = await requireUser();
+  const inv = await prisma.invoice.findUnique({
+    where: { id: invoiceId },
+    select: { id: true, number: true, clientId: true, salesIdSnapshot: true, organization: { select: { clientId: true } } },
+  });
+  if (!inv) return { error: "Not found." };
+  if (!(await canEditOrgInvoices(user, inv.clientId ?? inv.organization.clientId))) return { error: "Not allowed." };
+
+  await prisma.invoice.update({ where: { id: invoiceId }, data: { paid } });
+  await logActivity({
+    actorId: user.id,
+    action: "invoice_updated",
+    entity: "Invoice",
+    entityId: invoiceId,
+    meta: { number: inv.number, paid },
+  });
+  revalidatePath("/invoices");
+  revalidatePath(`/invoices/${invoiceId}`);
+  if (inv.clientId) revalidatePath(`/clients/${inv.clientId}`);
+  if (inv.salesIdSnapshot) revalidatePath(`/deals/${inv.salesIdSnapshot}`);
+  return { ok: true };
+}
+
+/** Inline edit of the linked deal (SAL id) from the table. Empty clears it. */
+export async function setInvoiceDealAction(invoiceId: string, salesId: string | null): Promise<Result> {
+  const user = await requireUser();
+  const inv = await prisma.invoice.findUnique({
+    where: { id: invoiceId },
+    select: { id: true, number: true, clientId: true, salesIdSnapshot: true, organization: { select: { clientId: true } } },
+  });
+  if (!inv) return { error: "Not found." };
+  if (!(await canEditOrgInvoices(user, inv.clientId ?? inv.organization.clientId))) return { error: "Not allowed." };
+
+  const sale = await resolveDeal(salesId ?? undefined);
+  if (sale.missing) return { error: `No deal found for ${salesId}.` };
+
+  await prisma.invoice.update({
+    where: { id: invoiceId },
+    data: { dealId: sale.dealId, salesIdSnapshot: sale.salesId },
+  });
+  await logActivity({
+    actorId: user.id,
+    action: "invoice_updated",
+    entity: "Invoice",
+    entityId: invoiceId,
+    meta: { number: inv.number, salesId: sale.salesId },
+  });
+  revalidatePath("/invoices");
+  revalidatePath(`/invoices/${invoiceId}`);
+  if (inv.clientId) revalidatePath(`/clients/${inv.clientId}`);
+  if (inv.salesIdSnapshot) revalidatePath(`/deals/${inv.salesIdSnapshot}`);
+  if (sale.salesId) revalidatePath(`/deals/${sale.salesId}`);
+  return { ok: true };
+}
+
+/** Inline edit of a free-text field (contract reference or services). */
+export async function setInvoiceTextFieldAction(
+  invoiceId: string,
+  field: "contractRef" | "servicesDescription",
+  value: string
+): Promise<Result> {
+  const user = await requireUser();
+  const inv = await prisma.invoice.findUnique({
+    where: { id: invoiceId },
+    select: { id: true, number: true, clientId: true, salesIdSnapshot: true, organization: { select: { clientId: true } } },
+  });
+  if (!inv) return { error: "Not found." };
+  if (!(await canEditOrgInvoices(user, inv.clientId ?? inv.organization.clientId))) return { error: "Not allowed." };
+
+  const trimmed = value.trim();
+  await prisma.invoice.update({ where: { id: invoiceId }, data: { [field]: trimmed || null } });
+  await logActivity({
+    actorId: user.id,
+    action: "invoice_updated",
+    entity: "Invoice",
+    entityId: invoiceId,
+    meta: { number: inv.number, field },
+  });
+  revalidatePath("/invoices");
+  revalidatePath(`/invoices/${invoiceId}`);
+  if (inv.clientId) revalidatePath(`/clients/${inv.clientId}`);
+  if (inv.salesIdSnapshot) revalidatePath(`/deals/${inv.salesIdSnapshot}`);
+  return { ok: true };
+}
+
+/** Inline edit of the expected invoice date (yyyy-mm-dd, or empty to clear). */
+export async function setInvoiceExpectedDateAction(invoiceId: string, date: string | null): Promise<Result> {
+  const user = await requireUser();
+  const inv = await prisma.invoice.findUnique({
+    where: { id: invoiceId },
+    select: { id: true, number: true, clientId: true, salesIdSnapshot: true, organization: { select: { clientId: true } } },
+  });
+  if (!inv) return { error: "Not found." };
+  if (!(await canEditOrgInvoices(user, inv.clientId ?? inv.organization.clientId))) return { error: "Not allowed." };
+
+  await prisma.invoice.update({
+    where: { id: invoiceId },
+    data: { expectedInvoiceDate: parseDate(date ?? undefined) },
+  });
+  await logActivity({
+    actorId: user.id,
+    action: "invoice_updated",
+    entity: "Invoice",
+    entityId: invoiceId,
+    meta: { number: inv.number },
+  });
+  revalidatePath("/invoices");
+  revalidatePath(`/invoices/${invoiceId}`);
+  if (inv.clientId) revalidatePath(`/clients/${inv.clientId}`);
+  if (inv.salesIdSnapshot) revalidatePath(`/deals/${inv.salesIdSnapshot}`);
   return { ok: true };
 }
 
@@ -198,6 +486,8 @@ function renderBillingInvoiceEmail(input: {
   amount: string;
   currency: string | null;
   paymentTermDays: number | null;
+  initiatedByName: string | null;
+  initiatedByEmail: string | null;
 }) {
   const isRefacere = (input.number ?? "").trim().length > 0;
   const titlePrefix = isRefacere ? "Refacere factura" : "Factura noua";
@@ -313,6 +603,14 @@ ${existingInvoiceRow}
         <p>Vă mulțumesc pentru colaborare!</p>
         
         <p>Cu stimă,<br>Andrei</p>
+
+        <hr style="margin-top:24px;border:none;border-top:1px solid #ddd;">
+        <p style="color:#888;font-size:12px;line-height:1.5;">
+            Inițiată din platforma CRM de: ${esc(input.initiatedByName)}${input.initiatedByEmail ? ` (${esc(input.initiatedByEmail)})` : ""}<br>
+            <span style="font-family:monospace;">[INVOICE-INITIATOR-NAME: ${esc(input.initiatedByName)}]</span><br>
+            <span style="font-family:monospace;">[INVOICE-INITIATOR-EMAIL: ${esc(input.initiatedByEmail)}]</span><br>
+            <span style="font-family:monospace;">[INVOICE-ID: ${esc(input.id)}]</span>
+        </p>
     </div>
 </body>
 </html>`;
@@ -344,9 +642,11 @@ export async function prepareGenerateInvoiceAction(invoiceId: string): Promise<R
   if (!inv) return { error: "Not found." };
   if (!(await canEditOrgInvoices(user, inv.clientId ?? inv.organization.clientId))) return { error: "Not allowed." };
   if (inv.status !== InvoiceStatus.IN_ASTEPTARE) return { error: "Only pending invoices can be generated." };
+  // Assign the next FacturaNumar from the series (no-op if already numbered).
+  const assignedNumber = await assignInvoiceNumber(invoiceId);
   const { subject, html } = renderBillingInvoiceEmail({
     id: inv.id,
-    number: inv.number,
+    number: assignedNumber ?? inv.number,
     organizationName: inv.organization.sourceName,
     issuerName: inv.issuerName,
     address: inv.organization.address,
@@ -359,7 +659,17 @@ export async function prepareGenerateInvoiceAction(invoiceId: string): Promise<R
     amount: invoiceAmountText(inv.totalAmount, inv.amountRaw),
     currency: inv.currency,
     paymentTermDays: inv.paymentTermDays,
+    initiatedByName: user.name,
+    initiatedByEmail: user.email,
   });
+
+  // Attach the Saga-import XML so accounting can import the invoice directly.
+  let sagaXml: { filename: string; xml: string; warnings: string[] };
+  try {
+    sagaXml = await buildInvoiceSagaXml(invoiceId);
+  } catch (err) {
+    return { error: `Could not build the Saga XML: ${(err as Error).message}` };
+  }
 
   await sendEmail({
     from: BILLING_EMAIL_FROM,
@@ -368,6 +678,7 @@ export async function prepareGenerateInvoiceAction(invoiceId: string): Promise<R
     replyTo: BILLING_EMAIL_REPLY_TO,
     subject,
     html,
+    attachments: [{ name: sagaXml.filename, content: sagaXml.xml, contentType: "application/xml" }],
   });
   await prisma.invoice.update({ where: { id: invoiceId }, data: { status: InvoiceStatus.TRIMISA_LA_CONTABILITATE } });
   await logActivity({
@@ -376,7 +687,7 @@ export async function prepareGenerateInvoiceAction(invoiceId: string): Promise<R
     entity: "Invoice",
     entityId: invoiceId,
     meta: {
-      number: inv.number,
+      number: assignedNumber ?? inv.number,
       organization: inv.organization.sourceName,
       client: inv.client?.name,
       salesId: inv.deal?.salesId ?? inv.salesIdSnapshot,
@@ -385,6 +696,8 @@ export async function prepareGenerateInvoiceAction(invoiceId: string): Promise<R
       cc: parseRecipients(BILLING_EMAIL_CC),
       replyTo: BILLING_EMAIL_REPLY_TO,
       subject,
+      sagaXmlFile: sagaXml.filename,
+      sagaWarnings: sagaXml.warnings.length ? sagaXml.warnings : undefined,
     },
   });
   revalidatePath("/invoices");

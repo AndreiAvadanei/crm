@@ -8,16 +8,19 @@ import { Badge } from "@/components/ui/badge";
 import { DeleteButton } from "@/components/shared/delete-button";
 import { OrgFormDialog, type OrgData } from "@/components/organizations/org-form-dialog";
 import { deleteOrganizationAction } from "@/server/organization-actions";
+import { formatPercent } from "@/lib/utils";
 import type { OrganizationRow } from "@/lib/organization-stats";
 
 export function OrganizationsTable({
   organizations,
   clients,
   canManage,
+  defaultTvaPercent,
 }: {
   organizations: OrganizationRow[];
   clients: { id: string; name: string }[];
   canManage: boolean;
+  defaultTvaPercent: string;
 }) {
   return (
     <div className="rounded-lg border bg-card">
@@ -28,6 +31,8 @@ export function OrganizationsTable({
             <TableHead>Client</TableHead>
             <TableHead>Tax id</TableHead>
             <TableHead>Country</TableHead>
+            <TableHead>County</TableHead>
+            <TableHead className="text-right">TVA</TableHead>
             <TableHead>IBAN</TableHead>
             <TableHead className="text-right">Invoices</TableHead>
             {canManage && <TableHead className="w-px text-right">Actions</TableHead>}
@@ -46,6 +51,7 @@ export function OrganizationsTable({
               iban: o.iban,
               address: o.address,
               isDefault: o.isDefault,
+              tvaPercent: o.tvaPercent,
               clientId: o.clientId,
             };
             return (
@@ -61,6 +67,8 @@ export function OrganizationsTable({
                 </TableCell>
                 <TableCell className="text-sm">{o.taxId ?? "—"}</TableCell>
                 <TableCell className="text-sm">{o.country ?? "—"}</TableCell>
+                <TableCell className="text-sm">{o.judet ?? "—"}</TableCell>
+                <TableCell className="text-right tabular-nums">{formatPercent(o.tvaPercent)}</TableCell>
                 <TableCell className="font-mono text-xs">{o.iban ?? "—"}</TableCell>
                 <TableCell className="text-right tabular-nums">
                   <Link href={`/invoices?organization=${o.id}`} className="hover:text-primary">
@@ -73,6 +81,7 @@ export function OrganizationsTable({
                       <OrgFormDialog
                         organization={orgData}
                         clients={clients}
+                        defaultTvaPercent={defaultTvaPercent}
                         trigger={
                           <Button variant="ghost" size="icon" aria-label="Edit organization">
                             <Pencil className="h-4 w-4" />
@@ -93,7 +102,7 @@ export function OrganizationsTable({
           })}
           {organizations.length === 0 && (
             <TableRow>
-              <TableCell colSpan={canManage ? 7 : 6} className="py-10 text-center text-sm text-muted-foreground">
+              <TableCell colSpan={canManage ? 9 : 8} className="py-10 text-center text-sm text-muted-foreground">
                 No organizations found.
               </TableCell>
             </TableRow>
