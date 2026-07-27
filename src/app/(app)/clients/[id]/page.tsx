@@ -22,6 +22,7 @@ import { deleteClientAction } from "@/server/client-actions";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { LIST_FETCH_CAP } from "@/lib/app-constants";
 import { getDefaultOrganizationTvaPercent } from "@/lib/settings";
+import { resolveOrgVatPercent } from "@/lib/invoice-vat";
 
 type ClientDetailPageProps = {
   params: Promise<{ id: string }>;
@@ -114,7 +115,12 @@ export default async function ClientDetailPage({ params }: ClientDetailPageProps
     currency: i.currency,
     issueDate: i.issueDate ? i.issueDate.toISOString() : null,
   }));
-  const clientOrgOptions = client.organizations.map((o) => ({ id: o.id, name: o.sourceName }));
+  const clientOrgOptions = client.organizations.map((o) => ({
+    id: o.id,
+    name: o.sourceName,
+    defaultVatPercent: resolveOrgVatPercent(o),
+    configuredTvaPercent: Number(o.tvaPercent) || 21,
+  }));
   const defaultClientOrgId = client.organizations.find((o) => o.isDefault)?.id ?? client.organizations[0]?.id;
   const clientDealOptions = client.deals.map((d) => ({ salesId: d.salesId, title: d.title }));
 

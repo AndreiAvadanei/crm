@@ -14,3 +14,6 @@ export const LIST_FETCH_CAP = 5000;
 
 /** Default row count for paginated list pages. */
 export const CLIENTS_PAGE_SIZE = 25;
+
+/** Row count per section (overdue / upcoming) on the Tasks board. */
+export const TASKS_PAGE_SIZE = 15;

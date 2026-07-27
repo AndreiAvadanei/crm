@@ -199,7 +199,8 @@ export function ImportOrganizationsDialog({ trigger }: { trigger: ReactNode }) {
                       <TableHead className="w-16">Rând</TableHead>
                       <TableHead>Organizație</TableHead>
                       <TableHead>CUI</TableHead>
-                      <TableHead>Localitate</TableHead>
+                      <TableHead>Țară / localitate</TableHead>
+                      <TableHead className="text-right">TVA</TableHead>
                       <TableHead>Acțiune</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -210,6 +211,9 @@ export function ImportOrganizationsDialog({ trigger }: { trigger: ReactNode }) {
                         <TableCell className="max-w-64 truncate font-medium">{row.sourceName}</TableCell>
                         <TableCell className="text-muted-foreground">{row.taxId ?? "—"}</TableCell>
                         <TableCell className="text-muted-foreground">{row.location ?? "—"}</TableCell>
+                        <TableCell className="text-right tabular-nums text-muted-foreground">
+                          {row.tvaPercent != null ? `${row.tvaPercent}%` : "—"}
+                        </TableCell>
                         <TableCell>
                           <div className="flex flex-wrap items-center gap-2">
                             <Badge variant={actionVariant[row.action]}>{actionLabel[row.action]}</Badge>
@@ -220,7 +224,7 @@ export function ImportOrganizationsDialog({ trigger }: { trigger: ReactNode }) {
                     ))}
                     {filteredPreviewRows.length === 0 && (
                       <TableRow>
-                        <TableCell colSpan={5} className="py-6 text-center text-muted-foreground">
+                        <TableCell colSpan={6} className="py-6 text-center text-muted-foreground">
                           Nu există rânduri pentru filtrul selectat.
                         </TableCell>
                       </TableRow>

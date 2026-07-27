@@ -10,6 +10,8 @@ import { logActivity } from "@/lib/activity";
 import { sendEmail } from "@/lib/email";
 import { buildInvoiceSagaXml } from "@/lib/invoice-saga";
 import { assignInvoiceNumber } from "@/lib/invoice-numbering";
+import { computeInvoiceTotals, lineNetValue, round2, type LineAmountInput } from "@/lib/invoice-totals";
+import { resolveOrgVatPercent, resolveInvoiceVatPercent, parseVatPercentInput, inferVatPercentFromAmounts } from "@/lib/invoice-vat";
 import {
   DEFAULT_INVOICE_CURRENCY,
   DEFAULT_INVOICE_ISSUER,
@@ -159,21 +161,120 @@ function parseInvoiceLines(formData: FormData): InvoiceLineInput[] {
   }
 }
 
-async function replaceInvoiceLines(invoiceId: string, lines: InvoiceLineInput[]) {
+/** Net value (before VAT) of a parsed line, defaulting quantity to 1. */
+function lineNet(line: InvoiceLineInput): number {
+  return lineNetValue(line as LineAmountInput);
+}
+
+type LineAmountFingerprint = { quantity: string | null; unitPrice: string | null; value: string | null };
+
+function lineAmountFingerprint(line: {
+  quantity?: string | null | unknown;
+  unitPrice?: string | null | unknown;
+  value?: string | null | unknown;
+}): LineAmountFingerprint {
+  const q = line.quantity == null ? null : String(line.quantity);
+  const up = line.unitPrice == null ? null : String(line.unitPrice);
+  const v = line.value == null ? null : String(line.value);
+  return {
+    quantity: parseDecimal(q),
+    unitPrice: parseDecimal(up),
+    value: parseDecimal(v),
+  };
+}
+
+function lineAmountFingerprintsEqual(a: LineAmountFingerprint, b: LineAmountFingerprint): boolean {
+  return a.quantity === b.quantity && a.unitPrice === b.unitPrice && a.value === b.value;
+}
+
+function linesFinancialFingerprint(
+  lines: Array<{ quantity?: unknown; unitPrice?: unknown; value?: unknown }>
+): string {
+  return JSON.stringify(lines.map((line) => lineAmountFingerprint(line)));
+}
+
+function storedVatPercent(invoice: {
+  vatPercent: unknown;
+  totalBaseAmount: unknown;
+  vatAmount: unknown;
+}): number | null {
+  if (invoice.vatPercent != null) {
+    const n = Number(invoice.vatPercent);
+    if (Number.isFinite(n)) return n;
+  }
+  const base = invoice.totalBaseAmount == null ? null : Number(invoice.totalBaseAmount);
+  const vat = invoice.vatAmount == null ? null : Number(invoice.vatAmount);
+  return inferVatPercentFromAmounts(base, vat);
+}
+
+/** True when article amounts or the invoice VAT % changed — totals should be recomputed. */
+function invoiceFinancialsChanged(
+  existing: {
+    vatPercent: unknown;
+    totalBaseAmount: unknown;
+    vatAmount: unknown;
+    lines: Array<{ quantity: unknown; unitPrice: unknown; value: unknown }>;
+  },
+  incomingLines: InvoiceLineInput[],
+  incomingVatPercent: number
+): boolean {
+  const prevVat = storedVatPercent(existing);
+  if (prevVat != null && round2(prevVat) !== round2(incomingVatPercent)) return true;
+  return linesFinancialFingerprint(existing.lines) !== linesFinancialFingerprint(incomingLines);
+}
+
+type ExistingLineRow = {
+  quantity: unknown;
+  unitPrice: unknown;
+  value: unknown;
+  total: unknown;
+};
+
+/**
+ * Replace an invoice's lines. When `preserveFrom` is set and a line's amounts
+ * match the previous row at the same index, keep the stored value/total.
+ */
+async function writeInvoiceLines(
+  invoiceId: string,
+  lines: InvoiceLineInput[],
+  vatPercent: number,
+  preserveFrom?: ExistingLineRow[]
+) {
   await prisma.invoiceLine.deleteMany({ where: { invoiceId } });
   if (lines.length === 0) return;
   await prisma.invoiceLine.createMany({
-    data: lines.map((line, index) => ({
-      invoiceId,
-      sourceLineKey: `manual-${index + 1}`,
-      serviceDescription: line.serviceDescription ?? null,
-      textSupplement: line.textSupplement ?? null,
-      unitOfMeasure: line.unitOfMeasure ?? null,
-      quantity: line.quantity ?? null,
-      unitPrice: line.unitPrice ?? null,
-      value: line.value ?? null,
-      total: line.total ?? null,
-    })),
+    data: lines.map((line, index) => {
+      const preserved = preserveFrom?.[index];
+      if (
+        preserved &&
+        lineAmountFingerprintsEqual(lineAmountFingerprint(line), lineAmountFingerprint(preserved))
+      ) {
+        return {
+          invoiceId,
+          sourceLineKey: `manual-${index + 1}`,
+          serviceDescription: line.serviceDescription ?? null,
+          textSupplement: line.textSupplement ?? null,
+          unitOfMeasure: line.unitOfMeasure ?? null,
+          quantity: preserved.quantity == null ? null : (preserved.quantity as Prisma.Decimal | string | number),
+          unitPrice: preserved.unitPrice == null ? null : (preserved.unitPrice as Prisma.Decimal | string | number),
+          value: preserved.value == null ? null : (preserved.value as Prisma.Decimal | string | number),
+          total: preserved.total == null ? null : (preserved.total as Prisma.Decimal | string | number),
+        };
+      }
+      const net = lineNet(line);
+      const hasAmount = line.value != null || line.unitPrice != null;
+      return {
+        invoiceId,
+        sourceLineKey: `manual-${index + 1}`,
+        serviceDescription: line.serviceDescription ?? null,
+        textSupplement: line.textSupplement ?? null,
+        unitOfMeasure: line.unitOfMeasure ?? null,
+        quantity: line.quantity ?? null,
+        unitPrice: line.unitPrice ?? null,
+        value: hasAmount ? round2(net) : line.value ?? null,
+        total: hasAmount ? round2(net * (1 + vatPercent / 100)) : null,
+      };
+    }),
   });
 }
 
@@ -198,11 +299,12 @@ function addMonthsKeepDay(base: Date, months: number): Date {
 async function invoiceData(formData: FormData, selfId?: string) {
   const sale = await resolveDeal(str(formData, "salesId"));
   const lines = parseInvoiceLines(formData);
-  const lineServices = lines
-    .map((line) => line.serviceDescription)
-    .filter(Boolean)
-    .join("\n");
-  const servicesDescription = (str(formData, "servicesDescription") ?? lineServices) || null;
+  // Services text is derived from the article lines (the source of truth).
+  const servicesDescription =
+    lines
+      .map((line) => line.serviceDescription)
+      .filter(Boolean)
+      .join("\n") || null;
   const issuer = await resolveIssuer(str(formData, "issuerId"), str(formData, "issuerName"));
   const partNumber = await resolvePartNumber(
     str(formData, "partNumberId"),
@@ -221,7 +323,6 @@ async function invoiceData(formData: FormData, selfId?: string) {
       salesIdSnapshot: sale.salesId,
       servicesDescription,
       contractRef: str(formData, "contractRef") ?? null,
-      amountRaw: str(formData, "amountRaw") ?? null,
       currency: parseCurrency(str(formData, "currency")),
       paymentTermDays: parsePaymentTerm(str(formData, "paymentTermDays")),
       expectedInvoiceDate: parseDate(str(formData, "expectedInvoiceDate")),
@@ -251,12 +352,27 @@ export async function createInvoiceAction(formData: FormData): Promise<Result> {
   const user = await requireUser();
   const organizationId = str(formData, "organizationId");
   if (!organizationId) return { error: "Organization is required." };
-  const org = await prisma.organization.findUnique({ where: { id: organizationId }, select: { clientId: true } });
+  const org = await prisma.organization.findUnique({
+    where: { id: organizationId },
+    select: { clientId: true, country: true, tvaPercent: true },
+  });
   if (!org) return { error: "Organization not found." };
   if (!(await canEditOrgInvoices(user, org.clientId))) return { error: "Not allowed." };
 
   const { fields, lines, saleMissing } = await invoiceData(formData);
   if (saleMissing) return { error: `No deal found for ${str(formData, "salesId")}.` };
+
+  // Articles are the source of truth: roll them up into base / VAT / total.
+  const orgDefaultVat = resolveOrgVatPercent(org);
+  const vatPercent = parseVatPercentInput(str(formData, "vatPercent"), orgDefaultVat);
+  const totals = computeInvoiceTotals(lines, vatPercent);
+  const amountFields = {
+    vatPercent,
+    totalBaseAmount: totals.base,
+    vatAmount: totals.vat,
+    totalAmount: totals.total,
+    unpaidAmount: fields.paid ? 0 : totals.total,
+  };
 
   // Recurrence: create N invoices with identical data but the expected invoice
   // date shifted by `intervalMonths` each time (day kept, month/year change).
@@ -276,10 +392,11 @@ export async function createInvoiceAction(formData: FormData): Promise<Result> {
         clientId: org.clientId,
         createdByName: user.name,
         ...fields,
+        ...amountFields,
         expectedInvoiceDate,
       },
     });
-    await replaceInvoiceLines(invoice.id, lines);
+    await writeInvoiceLines(invoice.id, lines, vatPercent);
     if (k === 0) firstId = invoice.id;
   }
 
@@ -300,7 +417,23 @@ export async function updateInvoiceAction(invoiceId: string, formData: FormData)
   const user = await requireUser();
   const existing = await prisma.invoice.findUnique({
     where: { id: invoiceId },
-    select: { id: true, number: true, clientId: true, organizationId: true, organization: { select: { clientId: true } } },
+    select: {
+      id: true,
+      number: true,
+      clientId: true,
+      organizationId: true,
+      paid: true,
+      vatPercent: true,
+      totalBaseAmount: true,
+      vatAmount: true,
+      totalAmount: true,
+      unpaidAmount: true,
+      organization: { select: { clientId: true } },
+      lines: {
+        orderBy: { createdAt: "asc" },
+        select: { quantity: true, unitPrice: true, value: true, total: true },
+      },
+    },
   });
   if (!existing) return { error: "Not found." };
   if (!(await canEditOrgInvoices(user, existing.clientId ?? existing.organization.clientId))) return { error: "Not allowed." };
@@ -318,11 +451,46 @@ export async function updateInvoiceAction(invoiceId: string, formData: FormData)
   const { fields, lines, saleMissing } = await invoiceData(formData, invoiceId);
   if (saleMissing) return { error: `No deal found for ${str(formData, "salesId")}.` };
 
-  await prisma.invoice.update({
-    where: { id: invoiceId },
-    data: { organizationId, clientId, ...fields },
+  const orgVat = await prisma.organization.findUnique({
+    where: { id: organizationId },
+    select: { country: true, tvaPercent: true },
   });
-  await replaceInvoiceLines(invoiceId, lines);
+  const orgDefaultVat = orgVat ? resolveOrgVatPercent(orgVat) : 0;
+  const vatPercent = parseVatPercentInput(str(formData, "vatPercent"), orgDefaultVat);
+  const financialChanged = invoiceFinancialsChanged(existing, lines, vatPercent);
+
+  const updateData: Prisma.InvoiceUncheckedUpdateInput = {
+    organizationId,
+    clientId,
+    ...fields,
+  };
+
+  if (financialChanged) {
+    const totals = computeInvoiceTotals(lines, vatPercent);
+    Object.assign(updateData, {
+      vatPercent,
+      totalBaseAmount: totals.base,
+      vatAmount: totals.vat,
+      totalAmount: totals.total,
+      unpaidAmount: fields.paid ? 0 : totals.total,
+    });
+  } else if (fields.paid !== existing.paid) {
+    updateData.unpaidAmount = fields.paid
+      ? 0
+      : existing.totalAmount != null
+        ? Number(existing.totalAmount)
+        : existing.unpaidAmount != null
+          ? Number(existing.unpaidAmount)
+          : null;
+  }
+
+  await prisma.invoice.update({ where: { id: invoiceId }, data: updateData });
+  await writeInvoiceLines(
+    invoiceId,
+    lines,
+    financialChanged ? vatPercent : storedVatPercent(existing) ?? vatPercent,
+    financialChanged ? undefined : existing.lines
+  );
   await logActivity({
     actorId: user.id,
     action: "invoice_updated",
@@ -465,10 +633,23 @@ function esc(value: unknown): string {
     .replace(/"/g, "&quot;");
 }
 
-function invoiceAmountText(totalAmount: unknown, amountRaw: string | null): string {
-  if (amountRaw) return amountRaw;
-  if (totalAmount == null) return "";
-  return String(totalAmount);
+type EmailArticle = {
+  description: string;
+  textSupplement: string;
+  um: string;
+  quantity: number;
+  unitPrice: number | null;
+  value: number;
+  total: number;
+};
+
+function fmtMoney(value: number, currency: string | null): string {
+  const code = (currency || "RON").toUpperCase();
+  try {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency: code, maximumFractionDigits: 2 }).format(value);
+  } catch {
+    return `${value.toFixed(2)} ${code}`.trim();
+  }
 }
 
 function renderBillingInvoiceEmail(input: {
@@ -482,8 +663,9 @@ function renderBillingInvoiceEmail(input: {
   regNumber: string | null;
   bankName: string | null;
   iban: string | null;
-  services: string | null;
-  amount: string;
+  articles: EmailArticle[];
+  totals: { base: number; vat: number; total: number };
+  vatPercent: number;
   currency: string | null;
   paymentTermDays: number | null;
   initiatedByName: string | null;
@@ -495,6 +677,49 @@ function renderBillingInvoiceEmail(input: {
   const existingInvoiceRow = isRefacere
     ? `<tr><td>Facturile despre care e vorba</td><td>${esc(input.number)}</td></tr>`
     : "";
+
+  const articleRows = input.articles.length
+    ? input.articles
+        .map((a) => {
+          const desc = a.textSupplement
+            ? `${esc(a.description)}<br><span style="color:#888;font-size:12px;">${esc(a.textSupplement)}</span>`
+            : esc(a.description);
+          return `            <tr>
+                <td>${desc}</td>
+                <td>${esc(a.um)}</td>
+                <td style="text-align:right;">${esc(a.quantity)}</td>
+                <td style="text-align:right;">${a.unitPrice == null ? "" : esc(fmtMoney(a.unitPrice, input.currency))}</td>
+                <td style="text-align:right;">${esc(fmtMoney(a.value, input.currency))}</td>
+                <td style="text-align:right;">${esc(fmtMoney(a.total, input.currency))}</td>
+            </tr>`;
+        })
+        .join("\n")
+    : `            <tr><td colspan="6" style="color:#888;">Fără articole</td></tr>`;
+
+  const articlesTable = `        <h2 style="font-size:16px;margin-top:24px;">Articole</h2>
+        <table>
+            <tr>
+                <th>Descriere</th>
+                <th>UM</th>
+                <th style="text-align:right;">Cant.</th>
+                <th style="text-align:right;">Preț unitar</th>
+                <th style="text-align:right;">Valoare</th>
+                <th style="text-align:right;">Total (cu TVA)</th>
+            </tr>
+${articleRows}
+            <tr>
+                <td colspan="5" style="text-align:right;"><strong>Total fără TVA</strong></td>
+                <td style="text-align:right;">${esc(fmtMoney(input.totals.base, input.currency))}</td>
+            </tr>
+            <tr>
+                <td colspan="5" style="text-align:right;"><strong>TVA (${esc(input.vatPercent)}%)</strong></td>
+                <td style="text-align:right;">${esc(fmtMoney(input.totals.vat, input.currency))}</td>
+            </tr>
+            <tr>
+                <td colspan="5" style="text-align:right;"><strong>Total de plată (cu TVA)</strong></td>
+                <td style="text-align:right;"><strong>${esc(fmtMoney(input.totals.total, input.currency))}</strong></td>
+            </tr>
+        </table>`;
 
   const html = `<!DOCTYPE html>
 <html lang="ro">
@@ -577,14 +802,6 @@ ${existingInvoiceRow}
                 <td>${esc(input.iban)}</td>
             </tr>
             <tr>
-                <td>Servicii</td>
-                <td>${esc(input.services)}</td>
-            </tr>
-            <tr>
-                <td>Suma</td>
-                <td>${esc(input.amount)}</td>
-            </tr>
-            <tr>
                 <td>Moneda</td>
                 <td>${esc(input.currency)}</td>
             </tr>
@@ -597,6 +814,8 @@ ${existingInvoiceRow}
                 <td>REF-${esc(input.id)}-REF</td>
             </tr>
         </table>
+
+${articlesTable}
         
         <p>Dacă ai nevoie de informații suplimentare, nu ezita să mă contactezi.</p>
         
@@ -629,6 +848,7 @@ export async function prepareGenerateInvoiceAction(invoiceId: string): Promise<R
           sourceName: true,
           address: true,
           country: true,
+          tvaPercent: true,
           taxId: true,
           regNumber: true,
           bankName: true,
@@ -637,6 +857,7 @@ export async function prepareGenerateInvoiceAction(invoiceId: string): Promise<R
       },
       client: { select: { id: true, name: true } },
       deal: { select: { salesId: true } },
+      lines: { orderBy: { createdAt: "asc" } },
     },
   });
   if (!inv) return { error: "Not found." };
@@ -644,6 +865,28 @@ export async function prepareGenerateInvoiceAction(invoiceId: string): Promise<R
   if (inv.status !== InvoiceStatus.IN_ASTEPTARE) return { error: "Only pending invoices can be generated." };
   // Assign the next FacturaNumar from the series (no-op if already numbered).
   const assignedNumber = await assignInvoiceNumber(invoiceId);
+
+  // Roll the articles up into the email's line table + totals.
+  const vatPercent = resolveInvoiceVatPercent(inv, inv.organization);
+  const emailArticles = inv.lines.map((line) => {
+    const quantity = line.quantity == null ? 1 : Number(line.quantity);
+    const unitPrice = line.unitPrice == null ? null : Number(line.unitPrice);
+    const value = lineNetValue({ quantity: line.quantity as unknown as number, unitPrice: line.unitPrice as unknown as number, value: line.value as unknown as number });
+    return {
+      description: line.serviceDescription ?? "",
+      textSupplement: line.textSupplement ?? "",
+      um: line.unitOfMeasure ?? "buc",
+      quantity,
+      unitPrice,
+      value: round2(value),
+      total: round2(value * (1 + vatPercent / 100)),
+    };
+  });
+  const emailTotals = computeInvoiceTotals(
+    inv.lines.map((l) => ({ quantity: l.quantity as unknown as number, unitPrice: l.unitPrice as unknown as number, value: l.value as unknown as number })),
+    vatPercent
+  );
+
   const { subject, html } = renderBillingInvoiceEmail({
     id: inv.id,
     number: assignedNumber ?? inv.number,
@@ -655,8 +898,9 @@ export async function prepareGenerateInvoiceAction(invoiceId: string): Promise<R
     regNumber: inv.organization.regNumber,
     bankName: inv.organization.bankName,
     iban: inv.organization.iban,
-    services: inv.servicesDescription,
-    amount: invoiceAmountText(inv.totalAmount, inv.amountRaw),
+    articles: emailArticles,
+    totals: emailTotals,
+    vatPercent,
     currency: inv.currency,
     paymentTermDays: inv.paymentTermDays,
     initiatedByName: user.name,

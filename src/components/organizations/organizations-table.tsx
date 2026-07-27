@@ -9,6 +9,7 @@ import { DeleteButton } from "@/components/shared/delete-button";
 import { OrgFormDialog, type OrgData } from "@/components/organizations/org-form-dialog";
 import { deleteOrganizationAction } from "@/server/organization-actions";
 import { formatPercent } from "@/lib/utils";
+import { resolveOrgVatPercent } from "@/lib/invoice-vat";
 import type { OrganizationRow } from "@/lib/organization-stats";
 
 export function OrganizationsTable({
@@ -68,7 +69,26 @@ export function OrganizationsTable({
                 <TableCell className="text-sm">{o.taxId ?? "—"}</TableCell>
                 <TableCell className="text-sm">{o.country ?? "—"}</TableCell>
                 <TableCell className="text-sm">{o.judet ?? "—"}</TableCell>
-                <TableCell className="text-right tabular-nums">{formatPercent(o.tvaPercent)}</TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {(() => {
+                    const effective = resolveOrgVatPercent(o);
+                    const overridden = effective !== Number(o.tvaPercent);
+                    return (
+                      <span
+                        title={
+                          overridden
+                            ? `Configured ${formatPercent(o.tvaPercent)}; ${formatPercent(effective)} applied for a foreign client (EU reverse charge / export).`
+                            : undefined
+                        }
+                      >
+                        {formatPercent(effective)}
+                        {overridden && (
+                          <span className="ml-1 text-xs text-muted-foreground">({formatPercent(o.tvaPercent)})</span>
+                        )}
+                      </span>
+                    );
+                  })()}
+                </TableCell>
                 <TableCell className="font-mono text-xs">{o.iban ?? "—"}</TableCell>
                 <TableCell className="text-right tabular-nums">
                   <Link href={`/invoices?organization=${o.id}`} className="hover:text-primary">

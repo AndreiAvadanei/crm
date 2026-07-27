@@ -229,6 +229,20 @@ export function countyCodeForName(county: string | null | undefined): string {
   return RO_COUNTY_CODE_FOLDED[foldDiacritics(value)] ?? "";
 }
 
+const COUNTRY_NAME_TO_CODE_FOLDED: Record<string, string> = Object.fromEntries(
+  Object.entries(COUNTRY_CODE_TO_NAME).map(([code, name]) => [foldDiacritics(name), code])
+);
+
+/** Normalize a country value from imports/exports to a 2-letter ISO code for storage. */
+export function countryToStorageCode(country: string | null | undefined): string | null {
+  const value = country?.trim();
+  if (!value) return null;
+  const upper = value.toUpperCase();
+  if (COUNTRY_CODE_TO_NAME[upper]) return upper;
+  const folded = foldDiacritics(value);
+  return COUNTRY_NAME_TO_CODE_FOLDED[folded] ?? (/^[A-Za-z]{2}$/.test(value) ? upper : null);
+}
+
 /** Convert supported ISO-2 country codes to picker values. */
 export function normalizeCountryValue(country: string | null | undefined): string {
   const value = country?.trim();

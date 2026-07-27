@@ -56,6 +56,7 @@ export type SagaInvoice = {
   tvaIncasare: boolean;
   infoSupl: string;
   moneda: string;
+  cotaTVA: number;
   lines: SagaLine[];
 };
 
@@ -94,8 +95,8 @@ function buildLineXml(line: SagaLine, index: number): string {
                     <Cantitate>${num(line.cantitate)}</Cantitate>
                     <Pret>${num(line.pret)}</Pret>
                     <Valoare>${num(line.valoare)}</Valoare>
-                    <ProcTVA>${line.procTVA}</ProcTVA>
                     <TVA>${num(line.tva)}</TVA>
+                    <ProcTVA>${line.procTVA}</ProcTVA>
                     <InformatiiSuplimentare>${escapeXml(line.infSupl)}</InformatiiSuplimentare>
                 </Linie>`;
 }
@@ -105,6 +106,7 @@ function buildFacturaXml(inv: SagaInvoice): string {
   const c = inv.client;
   const itemsXml = inv.lines.map((line, idx) => buildLineXml(line, idx)).join("");
   const scadenta = inv.scadenta ? `\n                <FacturaScadenta>${formatSagaDate(inv.scadenta)}</FacturaScadenta>` : "";
+  const cotaTVA = inv.cotaTVA > 0 ? `\n                <FacturaCotaTVA>TVA (${inv.cotaTVA}%)</FacturaCotaTVA>` : "";
 
   return `
         <Factura>
@@ -140,7 +142,7 @@ function buildFacturaXml(inv: SagaInvoice): string {
                 <FacturaTVAIncasare>${inv.tvaIncasare ? "Da" : "Nu"}</FacturaTVAIncasare>
                 <FacturaInformatiiSuplimentare>${escapeXml(inv.infoSupl)}</FacturaInformatiiSuplimentare>
                 <FacturaGreutate>0</FacturaGreutate>
-                <FacturaMoneda>${escapeXml(inv.moneda.toUpperCase())}</FacturaMoneda>
+                <FacturaMoneda>${escapeXml(inv.moneda.toUpperCase())}</FacturaMoneda>${cotaTVA}
             </Antet>
             <Detalii>
                 <Continut>${itemsXml}
@@ -152,5 +154,5 @@ function buildFacturaXml(inv: SagaInvoice): string {
 /** Build the full <Facturi> document from one or more invoices. */
 export function buildSagaFacturiXml(invoices: SagaInvoice[]): string {
   const body = invoices.map(buildFacturaXml).join("\n");
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<Facturi>\n${body}\n</Facturi>`;
+  return `<Facturi>\n${body}\n</Facturi>`;
 }

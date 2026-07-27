@@ -33,57 +33,81 @@ export function InvoiceListCard({
   title = "Invoices",
   invoices,
   add,
+  bare = false,
 }: {
   title?: string;
   invoices: InvoiceListItem[];
   /** Provide to show an "Add invoice" action. */
   add?: {
-    organizations: { id: string; name: string }[];
+    organizations: { id: string; name: string; defaultVatPercent?: number; configuredTvaPercent?: number }[];
     deals: { salesId: string; title: string }[];
     defaultSalesId?: string;
     defaultOrganizationId?: string;
   };
+  /** Render without the surrounding Card/header (e.g. inside a tab). */
+  bare?: boolean;
 }) {
+  const list = (
+    <div className="space-y-2">
+      {invoices.map((i) => (
+        <Link
+          key={i.id}
+          href={`/invoices/${i.id}`}
+          className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2 hover:bg-accent"
+        >
+          <div className="min-w-0">
+            <div className="font-medium">{i.number || i.externalRef || "(no number)"}</div>
+            <div className="truncate text-xs text-muted-foreground">{i.organizationName}</div>
+          </div>
+          <div className="flex shrink-0 items-center gap-3">
+            <Badge variant={invoiceStatusVariant(i.status)}>{INVOICE_STATUS_LABELS[i.status]}</Badge>
+            <span className={`tabular-nums text-sm ${i.totalAmount != null && i.totalAmount < 0 ? "text-destructive" : ""}`}>{fmt(i.totalAmount, i.currency)}</span>
+            <span className="hidden text-xs text-muted-foreground sm:inline">{formatDate(i.issueDate)}</span>
+          </div>
+        </Link>
+      ))}
+      {invoices.length === 0 && <p className="text-sm text-muted-foreground">No invoices yet.</p>}
+    </div>
+  );
+
+  const addButton = add && add.organizations.length > 0 && (
+    <InvoiceFormDialog
+      organizations={add.organizations}
+      deals={add.deals}
+      defaultSalesId={add.defaultSalesId}
+      defaultOrganizationId={add.defaultOrganizationId}
+      trigger={
+        bare ? (
+          <Button variant="outline" size="sm">
+            <Plus className="h-4 w-4" /> Add invoice
+          </Button>
+        ) : (
+          <Button variant="ghost" size="icon" aria-label="Add invoice">
+            <Plus className="h-4 w-4" />
+          </Button>
+        )
+      }
+    />
+  );
+
+  if (bare) {
+    return (
+      <div className="space-y-3">
+        {addButton && <div className="flex justify-end">{addButton}</div>}
+        {list}
+      </div>
+    );
+  }
+
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between space-y-0">
         <CardTitle>
           {title} ({invoices.length})
         </CardTitle>
-        {add && add.organizations.length > 0 && (
-          <InvoiceFormDialog
-            organizations={add.organizations}
-            deals={add.deals}
-            defaultSalesId={add.defaultSalesId}
-            defaultOrganizationId={add.defaultOrganizationId}
-            trigger={
-              <Button variant="ghost" size="icon" aria-label="Add invoice">
-                <Plus className="h-4 w-4" />
-              </Button>
-            }
-          />
-        )}
+        {addButton}
       </CardHeader>
-      <CardContent className="space-y-2">
-        {invoices.map((i) => (
-          <Link
-            key={i.id}
-            href={`/invoices/${i.id}`}
-            className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2 hover:bg-accent"
-          >
-            <div className="min-w-0">
-              <div className="font-medium">{i.number || i.externalRef || "(no number)"}</div>
-              <div className="truncate text-xs text-muted-foreground">{i.organizationName}</div>
-            </div>
-            <div className="flex shrink-0 items-center gap-3">
-              <Badge variant={invoiceStatusVariant(i.status)}>{INVOICE_STATUS_LABELS[i.status]}</Badge>
-              <span className="tabular-nums text-sm">{fmt(i.totalAmount, i.currency)}</span>
-              <span className="hidden text-xs text-muted-foreground sm:inline">{formatDate(i.issueDate)}</span>
-            </div>
-          </Link>
-        ))}
-        {invoices.length === 0 && <p className="text-sm text-muted-foreground">No invoices yet.</p>}
-      </CardContent>
+      <CardContent>{list}</CardContent>
     </Card>
   );
 }

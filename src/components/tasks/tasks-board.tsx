@@ -1,60 +1,82 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
-import { CheckCircle2, Loader2, Search, X } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { CheckCircle2, Loader2, X } from "lucide-react";
 import { bulkCompleteTasksAction } from "@/server/quick-actions";
-import { TaskRow, type TaskRowData } from "@/components/tasks/task-row";
+import { TaskItem } from "@/components/tasks/task-item";
+import { TaskSheet } from "@/components/tasks/task-sheet";
+import { TasksFilters } from "@/components/tasks/tasks-filter-bar";
+import { QuickAddTask, type QuickAddDeal } from "@/components/tasks/quick-add-task";
+import { type TaskItemData } from "@/components/tasks/task-common";
+import { SearchInput } from "@/components/shared/search-input";
+import { Pagination } from "@/components/shared/pagination";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/components/ui/toast";
 
-type Section = { rows: TaskRowData[]; title: string; empty: string };
+type Section = {
+  rows: TaskItemData[];
+  title: string;
+  empty: string;
+  total: number;
+  page: number;
+  pageParam: "overduePage" | "upcomingPage";
+};
+
+const TASK_PAGE_PARAMS: Section["pageParam"][] = ["overduePage", "upcomingPage"];
 
 /**
- * Client wrapper around the Tasks page lists. Adds a free-text search that
- * narrows the visible rows, multi-select checkboxes (with select-all), and a
- * sticky bulk-complete bar. Selection is keyed by task id so it survives
- * search filtering (a hidden-then-shown task keeps its checked state).
+ * Client wrapper around the Tasks page lists. One-line toolbar (backend search +
+ * filters popover + select-all), a sticky bulk-complete bar, and rows that open
+ * a full editor drawer on click. Search, filtering and pagination all run in the
+ * backend; selection is keyed by task id so it survives navigation.
  */
 export function TasksBoard({
   overdue,
   upcoming,
+  overdueTotal,
+  upcomingTotal,
+  overduePage,
+  upcomingPage,
+  pageSize,
   owners,
+  deals,
   admin,
 }: {
-  overdue: TaskRowData[];
-  upcoming: TaskRowData[];
+  overdue: TaskItemData[];
+  upcoming: TaskItemData[];
+  overdueTotal: number;
+  upcomingTotal: number;
+  overduePage: number;
+  upcomingPage: number;
+  pageSize: number;
   owners: { id: string; name: string }[];
+  deals: QuickAddDeal[];
   admin: boolean;
 }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { toast } = useToast();
-  const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [activeId, setActiveId] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
-  const q = query.trim().toLowerCase();
-  const match = (t: TaskRowData) =>
-    !q ||
-    t.title.toLowerCase().includes(q) ||
-    t.dealTitle.toLowerCase().includes(q) ||
-    t.dealSalesId.toLowerCase().includes(q) ||
-    (t.assigneeName?.toLowerCase().includes(q) ?? false);
-
-  const visibleOverdue = useMemo(() => overdue.filter(match), [overdue, q]);
-  const visibleUpcoming = useMemo(() => upcoming.filter(match), [upcoming, q]);
-  const visibleIds = useMemo(
-    () => [...visibleOverdue, ...visibleUpcoming].map((t) => t.id),
-    [visibleOverdue, visibleUpcoming]
+  const pageIds = useMemo(
+    () => [...overdue, ...upcoming].map((t) => t.id),
+    [overdue, upcoming]
   );
 
-  const selectedVisibleCount = visibleIds.filter((id) => selected.has(id)).length;
-  const allVisibleSelected = visibleIds.length > 0 && selectedVisibleCount === visibleIds.length;
-  const someVisibleSelected = selectedVisibleCount > 0;
+  const active = useMemo(
+    () => [...overdue, ...upcoming].find((t) => t.id === activeId) ?? null,
+    [overdue, upcoming, activeId]
+  );
+
+  const selectedPageCount = pageIds.filter((id) => selected.has(id)).length;
+  const allPageSelected = pageIds.length > 0 && selectedPageCount === pageIds.length;
+  const somePageSelected = selectedPageCount > 0;
 
   function toggleOne(id: string, checked: boolean) {
     setSelected((prev) => {
@@ -65,10 +87,10 @@ export function TasksBoard({
     });
   }
 
-  function toggleAllVisible(checked: boolean) {
+  function toggleAllPage(checked: boolean) {
     setSelected((prev) => {
       const next = new Set(prev);
-      for (const id of visibleIds) {
+      for (const id of pageIds) {
         if (checked) next.add(id);
         else next.delete(id);
       }
@@ -95,33 +117,61 @@ export function TasksBoard({
     });
   }
 
+  // Carry every current param through pagination links except the one this
+  // section owns (the Pagination component sets that). Keeps the sibling
+  // section's page — and all filters/search — intact while paging one column.
+  const paramsExcluding = (own: Section["pageParam"]) => {
+    const params: Record<string, string | undefined> = {};
+    for (const [key, value] of searchParams.entries()) {
+      if (key !== own) params[key] = value;
+    }
+    return params;
+  };
+
+  const q = searchParams.get("q")?.trim() ?? "";
+
   const sections: Section[] = [
-    { rows: visibleOverdue, title: "Overdue", empty: "Nothing overdue." },
-    { rows: visibleUpcoming, title: "Upcoming", empty: "No upcoming tasks." },
+    {
+      rows: overdue,
+      title: "Overdue",
+      empty: "Nothing overdue.",
+      total: overdueTotal,
+      page: overduePage,
+      pageParam: "overduePage",
+    },
+    {
+      rows: upcoming,
+      title: "Upcoming",
+      empty: "No upcoming tasks.",
+      total: upcomingTotal,
+      page: upcomingPage,
+      pageParam: "upcomingPage",
+    },
   ];
 
   return (
     <div>
-      {/* Search + select-all controls */}
-      <div className="flex flex-wrap items-center gap-3 px-4 pt-4 md:px-6">
-        <div className="relative max-w-sm flex-1">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search tasks, deals, assignees…"
-            className="pl-8"
-            aria-label="Search tasks"
-          />
-        </div>
-        <label className="flex cursor-pointer select-none items-center gap-2 text-sm text-muted-foreground">
+      {/* Quick composer: title + deal, Enter to add */}
+      <div className="px-4 pt-4 md:px-6">
+        <QuickAddTask deals={deals} owners={owners} admin={admin} />
+      </div>
+
+      {/* Toolbar: backend search + filters + select-all on one line */}
+      <div className="flex flex-wrap items-center gap-2 px-4 pt-4 md:px-6">
+        <SearchInput
+          placeholder="Search tasks, deals, assignees…"
+          wrapperClassName="min-w-0 flex-1 sm:max-w-sm"
+          clearParams={TASK_PAGE_PARAMS}
+        />
+        <TasksFilters owners={owners} showAssigneeFilter={admin} />
+        <label className="ml-auto flex cursor-pointer select-none items-center gap-2 text-sm text-muted-foreground">
           <Checkbox
-            checked={allVisibleSelected ? true : someVisibleSelected ? "indeterminate" : false}
-            onCheckedChange={(c) => toggleAllVisible(c !== false)}
-            disabled={visibleIds.length === 0}
-            aria-label="Select all visible tasks"
+            checked={allPageSelected ? true : somePageSelected ? "indeterminate" : false}
+            onCheckedChange={(c) => toggleAllPage(c !== false)}
+            disabled={pageIds.length === 0}
+            aria-label="Select all tasks on this page"
           />
-          Select all{q ? " matching" : ""} ({visibleIds.length})
+          Select page ({pageIds.length})
         </label>
       </div>
 
@@ -152,17 +202,18 @@ export function TasksBoard({
               >
                 {section.title}{" "}
                 <Badge variant={section.title === "Overdue" ? "destructive" : "secondary"}>
-                  {section.rows.length}
+                  {section.total}
                 </Badge>
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-2">
               {section.rows.map((t) => (
-                <TaskRow
+                <TaskItem
                   key={t.id}
                   task={t}
-                  owners={owners}
-                  admin={admin}
+                  showDeal
+                  showSnooze
+                  onOpen={() => setActiveId(t.id)}
                   selected={selected.has(t.id)}
                   onSelectChange={(checked) => toggleOne(t.id, checked)}
                 />
@@ -172,10 +223,30 @@ export function TasksBoard({
                   {q ? "No matching tasks." : section.empty}
                 </p>
               )}
+              {section.total > pageSize && (
+                <Pagination
+                  pathname="/tasks"
+                  params={paramsExcluding(section.pageParam)}
+                  pageParam={section.pageParam}
+                  page={section.page}
+                  total={section.total}
+                  pageSize={pageSize}
+                  itemLabel="task"
+                  className="mt-3"
+                />
+              )}
             </CardContent>
           </Card>
         ))}
       </div>
+
+      <TaskSheet
+        task={active}
+        owners={owners}
+        admin={admin}
+        open={activeId !== null && active !== null}
+        onOpenChange={(o) => !o && setActiveId(null)}
+      />
     </div>
   );
 }

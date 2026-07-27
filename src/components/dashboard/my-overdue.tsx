@@ -2,7 +2,8 @@ import Link from "next/link";
 import { AlertTriangle, ArrowRight, CalendarClock, CalendarDays, ListTodo } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { TaskRow, type TaskRowData } from "@/components/tasks/task-row";
+import { DashboardTaskList } from "@/components/dashboard/dashboard-task-list";
+import { type TaskItemData } from "@/components/tasks/task-common";
 import { formatCurrency, formatDate } from "@/lib/utils";
 
 export type OverdueDeal = {
@@ -109,8 +110,8 @@ export function MyWork({
   owners,
   admin,
 }: {
-  overdueTasks: TaskRowData[];
-  upcomingTasks: TaskRowData[];
+  overdueTasks: TaskItemData[];
+  upcomingTasks: TaskItemData[];
   overdueDeals: OverdueDeal[];
   upcomingDeals: OverdueDeal[];
   owners: { id: string; name: string }[];
@@ -134,9 +135,7 @@ export function MyWork({
           viewAllHref="/tasks?due=overdue&mine=1"
           empty="No overdue tasks. "
         >
-          {overdueTasks.map((t) => (
-            <TaskRow key={t.id} task={t} owners={owners} admin={admin} />
-          ))}
+          <DashboardTaskList tasks={overdueTasks} owners={owners} admin={admin} />
         </SectionCard>
 
         <SectionCard
@@ -147,9 +146,7 @@ export function MyWork({
           viewAllHref="/tasks?due=week&mine=1"
           empty="Nothing due in the next 7 days."
         >
-          {upcomingTasks.map((t) => (
-            <TaskRow key={t.id} task={t} owners={owners} admin={admin} />
-          ))}
+          <DashboardTaskList tasks={upcomingTasks} owners={owners} admin={admin} />
         </SectionCard>
       </div>
 

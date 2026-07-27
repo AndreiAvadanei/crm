@@ -3,6 +3,7 @@ import "server-only";
 import { prisma } from "@/lib/db";
 import { getBnrRonRate } from "@/lib/bnr";
 import { countryCodeForName, countyCodeForName, isEuCountry, isRomania } from "@/lib/ro-geo";
+import { resolveInvoiceVatPercent } from "@/lib/invoice-vat";
 import { DEFAULT_INVOICE_ISSUER } from "@/lib/invoice-constants";
 import {
   buildSagaFacturiXml,
@@ -196,18 +197,26 @@ async function buildSagaModel(
   const contractCurrency = (invoice.currency || "RON").toUpperCase();
 
   // VAT decision:
-  //  - Romanian client       -> the organization's VAT %, no reverse charge.
-  //  - EU B2B (has a tax id)  -> 0% with intra-community reverse charge (taxare inversă).
-  //  - any other foreign      -> 0% (export / out of scope), no reverse charge.
-  let tvaRate = dec(org.tvaPercent);
+  //  - Romanian client       -> the organization's VAT % (or invoice override).
+  //  - EU B2B (has a tax id)  -> 0% with intra-community reverse charge, unless
+  //    the invoice has an explicit vatPercent override (exception).
+  //  - any other foreign      -> 0% (export / out of scope), unless overridden.
+  const hasVatOverride = invoice.vatPercent != null;
+  const tvaRate = resolveInvoiceVatPercent(invoice, org);
   let taxareInversa = false;
   if (!isRo) {
-    tvaRate = 0;
-    if (isEuCountry(country) && org.taxId) {
+    if (!hasVatOverride) {
+      if (isEuCountry(country) && org.taxId) {
+        taxareInversa = true;
+        warnings.push("EU B2B client: applied 0% VAT with reverse charge (taxare inversă).");
+      } else {
+        warnings.push("Foreign client: applied 0% VAT.");
+      }
+    } else if (tvaRate > 0) {
+      warnings.push(`Foreign client: using invoice VAT override ${trimNum(tvaRate)}% (exception).`);
+    } else if (isEuCountry(country) && org.taxId) {
       taxareInversa = true;
-      warnings.push("EU B2B client: applied 0% VAT with reverse charge (taxare inversă).");
-    } else {
-      warnings.push("Foreign client: applied 0% VAT.");
+      warnings.push("Foreign client: 0% VAT (invoice override).");
     }
   } else if (tvaRate === 0) {
     warnings.push("Romanian client has no VAT % set — invoiced at 0%. Set the organization's VAT % if this is wrong.");
@@ -245,6 +254,7 @@ async function buildSagaModel(
     tvaIncasare: false,
     infoSupl: invoice.invoiceInfo || invoice.contractRef || "",
     moneda,
+    cotaTVA: taxareInversa ? 0 : tvaRate,
     lines: buildLines(invoice, tvaRate, rate, contractCurrency),
   };
 

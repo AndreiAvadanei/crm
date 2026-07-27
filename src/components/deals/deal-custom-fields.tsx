@@ -181,7 +181,12 @@ export function DealCustomFields({
             editor = (
               <div className="flex min-w-0 items-center justify-end gap-1">
                 <div className="min-w-0 flex-1">
-                  <InlineInput value={raw} align="right" onSave={(next) => save(next || null)} />
+                  <InlineInput
+                    value={raw}
+                    align="right"
+                    display={raw ? <span title={raw}>{raw}</span> : undefined}
+                    onSave={(next) => save(next || null)}
+                  />
                 </div>
                 {raw && (
                   <a

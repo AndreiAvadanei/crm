@@ -19,7 +19,7 @@ import {
   recencyCutoff,
   type DealStatus,
 } from "@/lib/filter-helpers";
-import { parseDealSort } from "@/lib/deal-sort";
+import { parseDealSort, resolveDealSortDir } from "@/lib/deal-sort";
 import { LIST_FETCH_CAP } from "@/lib/app-constants";
 
 export const metadata = {
@@ -37,6 +37,7 @@ export default async function DealsPage({
     stage?: string;
     status?: string;
     sort?: string;
+    dir?: string;
     amtMin?: string;
     amtMax?: string;
     dueFrom?: string;
@@ -104,14 +105,22 @@ export default async function DealsPage({
   // is easy to get wrong, so `date`/`size` are given an explicit JS nulls-last
   // fixup below (undated / amount-less deals always fall to the bottom).
   const sort = parseDealSort(sp.sort);
+  // Direction toggle: `dir` flips any sort the opposite way (defaults per sort).
+  const dir = resolveDealSortDir(sort, sp.dir);
+  const asc = dir === "asc";
   const orderBy: Prisma.DealOrderByWithRelationInput[] =
     sort === "name"
-      ? [{ title: "asc" }]
+      ? [{ title: dir }]
       : sort === "date"
-        ? [{ dueDate: "asc" }, { createdAt: "desc" }]
+        ? [{ dueDate: dir }, { createdAt: "desc" }]
         : sort === "size"
-          ? [{ amountEur: "desc" }, { createdAt: "desc" }]
-          : [{ boardOrder: "asc" }, { createdAt: "desc" }];
+          ? [{ amountEur: dir }, { createdAt: "desc" }]
+          : sort === "activity"
+            ? // "activity" is a cross-table rollup (comments/tasks/attachments/
+              // audit logs) that can't be expressed as a Prisma orderBy, so we
+              // seed with the deal's own updatedAt and re-sort in JS below.
+              [{ updatedAt: dir }, { createdAt: "desc" }]
+            : [{ boardOrder: "asc" }, { createdAt: "desc" }];
 
   const pipeline = await prisma.pipeline.findFirst({
     where: { isDefault: true },
@@ -139,12 +148,15 @@ export default async function DealsPage({
   // unreliable here). Re-sort in JS so empty values never jump around:
   //  - date: soonest due first, undated deals last
   //  - size: largest amount first, amount-less deals last
+  // Nulls (undated / amount-less deals) always sink to the bottom regardless of
+  // direction; only the non-null comparison flips with `asc`.
   if (sort === "date") {
     deals.sort((a, b) => {
       if (!a.dueDate && !b.dueDate) return 0;
       if (!a.dueDate) return 1;
       if (!b.dueDate) return -1;
-      return a.dueDate.getTime() - b.dueDate.getTime();
+      const diff = a.dueDate.getTime() - b.dueDate.getTime();
+      return asc ? diff : -diff;
     });
   } else if (sort === "size") {
     deals.sort((a, b) => {
@@ -153,7 +165,7 @@ export default async function DealsPage({
       if (av == null && bv == null) return 0;
       if (av == null) return 1;
       if (bv == null) return -1;
-      return bv - av;
+      return asc ? av - bv : bv - av;
     });
   }
 
@@ -169,14 +181,15 @@ export default async function DealsPage({
     return dueDate < startOfToday;
   };
 
-  // "Stalled / no resolution" filter: open deals (not won/lost) with no activity
-  // for at least N days. Activity = the latest of the deal's own update and any
-  // comment / task / attachment / audit-log touch (same definition as the
-  // clients list's last-activity rollup). Only computed when the filter is set.
+  // Cross-source "last activity" per deal: the latest of any comment / task /
+  // attachment / audit-log (field change) touch. Combined with the deal's own
+  // updatedAt via `dealActivityMs` below (same definition as the clients list's
+  // last-activity rollup). Computed only when the stale filter or the
+  // "Last activity" sort needs it, via a handful of grouped queries (no N+1).
   const staleDays = parseNumber(sp.stale);
-  let visibleDeals = deals;
-  if (staleDays != null && deals.length) {
-    const cutoffMs = recencyCutoff(staleDays).getTime();
+  const needsActivity = staleDays != null || sort === "activity";
+  const lastActivity = new Map<string, number>();
+  if (needsActivity && deals.length) {
     const ids = deals.map((d) => d.id);
     const [comments, tasks, attachments, audits] = await Promise.all([
       prisma.comment.groupBy({ by: ["dealId"], where: { dealId: { in: ids } }, _max: { createdAt: true } }),
@@ -184,7 +197,6 @@ export default async function DealsPage({
       prisma.attachment.groupBy({ by: ["dealId"], where: { dealId: { in: ids } }, _max: { createdAt: true } }),
       prisma.auditLog.groupBy({ by: ["entityId"], where: { entity: "Deal", entityId: { in: ids } }, _max: { createdAt: true } }),
     ]);
-    const lastActivity = new Map<string, number>();
     const bump = (id: string | null, d: Date | null | undefined) => {
       if (!id || !d) return;
       const t = d.getTime();
@@ -197,14 +209,31 @@ export default async function DealsPage({
     }
     for (const a of attachments) bump(a.dealId, a._max.createdAt);
     for (const a of audits) bump(a.entityId, a._max.createdAt);
+  }
+  // Most recent activity for a deal, rolling in its own record update.
+  const dealActivityMs = (d: (typeof deals)[number]) =>
+    Math.max(d.updatedAt.getTime(), lastActivity.get(d.id) ?? 0);
 
+  // "Stalled / no resolution" filter: open deals (not won/lost) with no activity
+  // for at least N days.
+  let visibleDeals = deals;
+  if (staleDays != null) {
+    const cutoffMs = recencyCutoff(staleDays).getTime();
     visibleDeals = deals.filter((d) => {
       const f = stageFlags.get(d.stageId);
       // Won/lost deals are "resolved" by definition — exclude them.
       if (f?.isWon || f?.isLost) return false;
-      const last = Math.max(d.updatedAt.getTime(), lastActivity.get(d.id) ?? 0);
       // Keep only deals whose most recent activity is older than the cutoff.
-      return last < cutoffMs;
+      return dealActivityMs(d) < cutoffMs;
+    });
+  }
+
+  // "Last activity" sort: most recently touched first. Done in JS because the
+  // rollup spans multiple tables (the DB seed sorted by updatedAt only).
+  if (sort === "activity") {
+    visibleDeals = [...visibleDeals].sort((a, b) => {
+      const diff = dealActivityMs(a) - dealActivityMs(b);
+      return asc ? diff : -diff;
     });
   }
 
@@ -307,7 +336,7 @@ export default async function DealsPage({
         <div className="px-4 pb-6 md:px-6">
           <DealsTable
             deals={dealRows}
-            stages={stages.map((s) => ({ id: s.id, name: s.name, color: s.color }))}
+            stages={stages.map((s) => ({ id: s.id, name: s.name, color: s.color, phase: s.phase }))}
             owners={owners}
             tags={tags}
             admin={admin}

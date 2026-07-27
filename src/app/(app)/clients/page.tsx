@@ -8,9 +8,7 @@ import { parseCsvIds, parseNumber } from "@/lib/filter-helpers";
 import { CLIENTS_PAGE_SIZE, LIST_FETCH_CAP } from "@/lib/app-constants";
 import { PageHeader } from "@/components/app/page-header";
 import { Button } from "@/components/ui/button";
-import { SearchInput } from "@/components/shared/search-input";
-import { ClientSortSelect } from "@/components/clients/client-sort-select";
-import { ClientsFilterBar } from "@/components/clients/clients-filter-bar";
+import { ClientsToolbar } from "@/components/clients/clients-toolbar";
 import { ClientFormDialog } from "@/components/clients/client-form-dialog";
 import { ClientsTable, type ClientRow } from "@/components/clients/clients-table";
 import { Pagination } from "@/components/shared/pagination";
@@ -99,11 +97,7 @@ export default async function ClientsPage({
       </PageHeader>
 
       <div className="space-y-4 p-4 md:p-6">
-        <div className="flex flex-wrap items-center gap-3">
-          <SearchInput placeholder="Search clients…" />
-          <ClientSortSelect />
-        </div>
-        <ClientsFilterBar
+        <ClientsToolbar
           owners={owners}
           tags={tags}
           sizes={facets.sizes}

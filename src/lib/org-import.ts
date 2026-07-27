@@ -1,6 +1,7 @@
 import "server-only";
 import * as XLSX from "xlsx";
 import { prisma } from "@/lib/db";
+import { countryToStorageCode } from "@/lib/ro-geo";
 
 // Importer for the SAGA/WinMentor "clienti" export (.xls/.xlsx). Each row is a
 // company that maps to a billing Organization (and its owning Client). Upsert is
@@ -22,6 +23,7 @@ export interface OrgImportPreviewRow {
   sourceName: string;
   taxId: string | null;
   location: string | null;
+  tvaPercent: string | null;
   action: OrgImportPreviewAction;
   reason?: string;
 }
@@ -71,6 +73,16 @@ function boolish(v: unknown): boolean {
   return s === "1" || s?.toLowerCase() === "true";
 }
 
+/** Plătitor TVA: checked in the export → platform default %; otherwise 0%. */
+function tvaPercentFromIsTva(isTva: boolean, defaultTvaPercent: string): string {
+  return isTva ? defaultTvaPercent : "0";
+}
+
+function normalizeCountry(raw: string | null): string | null {
+  if (!raw) return null;
+  return countryToStorageCode(raw) ?? raw;
+}
+
 /** Parse dates like "6/16/25" (M/D/YY) or ISO; returns null when empty/invalid. */
 function parseDate(v: unknown): Date | null {
   const s = clean(v);
@@ -94,7 +106,8 @@ function mapRow(r: Row) {
   const denumire = clean(r.denumire);
   if (!denumire) return null;
 
-  const tara = clean(r.tara);
+  const taraRaw = clean(r.tara);
+  const tara = normalizeCountry(taraRaw);
   const reg_com = clean(r.reg_com);
   const banca = clean(r.banca);
   const cont_banca = clean(r.cont_banca);
@@ -105,7 +118,7 @@ function mapRow(r: Row) {
     data: {
       legalName: denumire,
       taxId: clean(r.cod_fiscal),
-      // Canonical columns mirrored from the RO field set.
+      // Canonical columns mirrored from the RO field set (country stored as ISO-2).
       country: tara,
       regNumber: reg_com,
       bankName: banca,
@@ -169,7 +182,11 @@ function workbookRows(buffer: Buffer): { rows: Row[]; errors: string[] } {
 }
 
 /** Parse the workbook and classify what each row would do without writing data. */
-export async function previewOrganizationsFromBuffer(buffer: Buffer): Promise<OrgImportPreviewResult> {
+export async function previewOrganizationsFromBuffer(
+  buffer: Buffer,
+  opts: { defaultTvaPercent?: string } = {}
+): Promise<OrgImportPreviewResult> {
+  const defaultTva = opts.defaultTvaPercent ?? "21";
   const { rows, errors } = workbookRows(buffer);
   const result: OrgImportPreviewResult = {
     total: rows.length,
@@ -205,6 +222,7 @@ export async function previewOrganizationsFromBuffer(buffer: Buffer): Promise<Or
         sourceName: "(fără denumire)",
         taxId: null,
         location: null,
+        tvaPercent: null,
         action: "skip",
         reason,
       });
@@ -219,11 +237,13 @@ export async function previewOrganizationsFromBuffer(buffer: Buffer): Promise<Or
       result.created++;
     }
     namesSeenInFile.add(mapped.sourceName);
+    const tvaPercent = tvaPercentFromIsTva(mapped.data.is_tva, defaultTva);
     result.rows.push({
       rowNumber,
       sourceName: mapped.sourceName,
       taxId: mapped.data.taxId,
-      location: [mapped.data.localitate, mapped.data.judet].filter(Boolean).join(", ") || null,
+      location: [mapped.data.tara, mapped.data.localitate, mapped.data.judet].filter(Boolean).join(", ") || null,
+      tvaPercent,
       action: willUpdate ? "update" : "create",
       reason: alreadySeenInFile && !existingNames.has(mapped.sourceName) ? "Duplicate name in file" : undefined,
     });
@@ -238,6 +258,7 @@ export async function importOrganizationsFromBuffer(
   buffer: Buffer,
   opts: { defaultTvaPercent?: string } = {}
 ): Promise<OrgImportResult> {
+  const defaultTva = opts.defaultTvaPercent ?? "21";
   const { rows, errors } = workbookRows(buffer);
   const result: OrgImportResult = { total: rows.length, created: 0, updated: 0, skipped: 0, errors: [...errors] };
   if (errors.length > 0) return result;
@@ -253,8 +274,15 @@ export async function importOrganizationsFromBuffer(
         where: { sourceName: mapped.sourceName },
         select: { id: true },
       });
+      const tvaPercent = tvaPercentFromIsTva(mapped.data.is_tva, defaultTva);
       if (existing) {
-        await prisma.organization.update({ where: { id: existing.id }, data: mapped.data });
+        await prisma.organization.update({
+          where: { id: existing.id },
+          data: {
+            ...mapped.data,
+            tvaPercent,
+          },
+        });
         result.updated++;
       } else {
         let client = await prisma.client.findFirst({
@@ -273,7 +301,7 @@ export async function importOrganizationsFromBuffer(
             clientId: client.id,
             sourceName: mapped.sourceName,
             isDefault: orgCount === 0,
-            tvaPercent: opts.defaultTvaPercent ?? "21",
+            tvaPercent,
             ...mapped.data,
           },
         });

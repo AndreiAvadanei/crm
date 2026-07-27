@@ -34,13 +34,26 @@ export type GenerateInvoiceInfo = {
   clientName: string | null;
   salesId: string | null;
   issuerName: string | null;
-  amountRaw: string | null;
+  totalBaseAmount: number | null;
+  vatAmount: number | null;
   totalAmount: number | null;
+  predictedBaseAmount: number | null;
+  predictedTotalAmount: number | null;
+  articlesSummary: string | null;
+  articleCount: number;
   currency: string | null;
   paymentTermDays: number | null;
-  servicesDescription: string | null;
   org: OrganizationBillingInfo;
 };
+
+function fmtMoney(value: number | null, currency: string | null): string {
+  if (value == null) return "—";
+  try {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency: (currency || "RON").toUpperCase(), maximumFractionDigits: 2 }).format(value);
+  } catch {
+    return `${value.toFixed(2)} ${currency ?? ""}`.trim();
+  }
+}
 
 function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -87,14 +100,37 @@ export function GenerateInvoiceDialog({ invoice, trigger }: { invoice: GenerateI
             <InfoRow label="Client" value={invoice.clientName ?? "—"} />
             <InfoRow label="Deal" value={invoice.salesId ?? "—"} />
             <InfoRow label="Issuer" value={invoice.issuerName ?? "—"} />
-            <InfoRow label="Amount (free text)" value={invoice.amountRaw || "—"} />
             <InfoRow label="Currency" value={invoice.currency ?? "—"} />
             <InfoRow label="Payment term" value={invoice.paymentTermDays ? `${invoice.paymentTermDays} days` : "—"} />
-            {invoice.servicesDescription && (
+            {(() => {
+              const base = invoice.totalBaseAmount ?? invoice.predictedBaseAmount;
+              const total = invoice.totalAmount ?? invoice.predictedTotalAmount;
+              const vat = invoice.vatAmount ?? (total != null && base != null ? Math.round((total - base) * 100) / 100 : null);
+              const predicted = invoice.totalBaseAmount == null;
+              return (
+                <>
+                  <InfoRow label="Articles" value={invoice.articleCount} />
+                  <InfoRow label="Net total" value={fmtMoney(base, invoice.currency)} />
+                  <InfoRow label="VAT" value={fmtMoney(vat, invoice.currency)} />
+                  <InfoRow
+                    label="Total (incl. VAT)"
+                    value={
+                      <>
+                        {fmtMoney(total, invoice.currency)}
+                        {predicted && total != null && (
+                          <span className="ml-1 text-xs font-normal text-muted-foreground">(from articles)</span>
+                        )}
+                      </>
+                    }
+                  />
+                </>
+              );
+            })()}
+            {invoice.articlesSummary && (
               <div className="pt-2">
                 <div className="text-xs font-medium text-muted-foreground">Services</div>
                 <div className="mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap rounded bg-muted/40 p-2 text-xs">
-                  {invoice.servicesDescription}
+                  {invoice.articlesSummary}
                 </div>
               </div>
             )}

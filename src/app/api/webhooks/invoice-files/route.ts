@@ -7,6 +7,8 @@ import { saveFile } from "@/lib/storage";
 import { logActivity } from "@/lib/activity";
 import { getInvoiceWebhookSecret } from "@/lib/settings";
 import { extractInvoiceFromPdf, parseInvoiceDate, parseInvoiceTotal } from "@/lib/openai-invoice";
+import { splitGrossTotal } from "@/lib/invoice-totals";
+import { resolveInvoiceVatPercent } from "@/lib/invoice-vat";
 
 export const runtime = "nodejs";
 // Inbound PDFs are base64 in the JSON body — allow a generous time budget for
@@ -79,7 +81,7 @@ export async function POST(req: NextRequest) {
   // The CRM emits REF-<Invoice.id>-REF; also accept the import keys as a fallback.
   const invoice = await prisma.invoice.findFirst({
     where: { OR: [{ id: ref }, { externalRecordId: ref }, { externalRef: ref }] },
-    include: { organization: { select: { clientId: true, sourceName: true } } },
+    include: { organization: { select: { clientId: true, sourceName: true, country: true, tvaPercent: true } } },
   });
   if (!invoice) return NextResponse.json({ error: "Invoice not found" }, { status: 404 });
 
@@ -129,8 +131,16 @@ export async function POST(req: NextRequest) {
   if (numbers.length) data.number = numbers.join("\n");
   const parsedTotal = parseInvoiceTotal(totals[0] ?? null);
   if (parsedTotal != null) {
-    data.totalAmount = new Prisma.Decimal(parsedTotal);
+    // The PDF total is the authoritative gross amount. Split it back into base +
+    // VAT at the client's rate so the stored breakdown stays consistent
+    // (base + VAT = total), and refresh the outstanding amount when unpaid.
+    const vatPercent = resolveInvoiceVatPercent(invoice, invoice.organization);
+    const split = splitGrossTotal(parsedTotal, vatPercent);
+    data.totalAmount = new Prisma.Decimal(split.total);
+    data.totalBaseAmount = new Prisma.Decimal(split.base);
+    data.vatAmount = new Prisma.Decimal(split.vat);
     data.totalRaw = totals[0];
+    if (!invoice.paid) data.unpaidAmount = new Prisma.Decimal(split.total);
   }
   const parsedDate = parseInvoiceDate(dates[0] ?? null);
   if (parsedDate) data.issueDate = parsedDate;

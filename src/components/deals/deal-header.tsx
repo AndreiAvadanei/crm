@@ -10,16 +10,14 @@ import {
   InlineInput,
   InlineSelect,
   InlineTagEditor,
-  InlineTextarea,
 } from "@/components/shared/inline-edit";
 import { quickUpdateDealAction } from "@/server/quick-actions";
-import { formatCurrency, formatDate } from "@/lib/utils";
+import { formatCurrency, formatDate, cn } from "@/lib/utils";
 
 type Props = {
   dealId: string;
   salesId: string;
   title: string;
-  description: string | null;
   stageId: string;
   stages: { id: string; name: string }[];
   amountEur: number | null;
@@ -34,20 +32,28 @@ type Props = {
   isAdmin: boolean;
 };
 
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
+function Cell({
+  label,
+  children,
+  className,
+}: {
+  label: string;
+  children: React.ReactNode;
+  className?: string;
+}) {
   return (
-    <div className="flex items-start justify-between gap-3">
-      <span className="pt-1 text-muted-foreground">{label}</span>
-      <div className="min-w-0 flex-1 text-right">{children}</div>
+    <div className={cn("min-w-0 space-y-1", className)}>
+      <div className="text-xs font-medium text-muted-foreground">{label}</div>
+      <div className="min-w-0 text-sm">{children}</div>
     </div>
   );
 }
 
-export function DealInlineSettings({
+/** Deal properties (all inline-editable), stacked for the right sidebar. */
+export function DealHeader({
   dealId,
   salesId,
   title,
-  description,
   stageId,
   stages,
   amountEur,
@@ -63,30 +69,29 @@ export function DealInlineSettings({
 }: Props) {
   return (
     <Card>
-      <CardContent className="space-y-3 pt-6 text-sm">
+      <CardContent className="space-y-4 p-4 md:p-5">
         <div className="flex items-center justify-between gap-3">
           <span className="font-mono text-xs text-muted-foreground">{salesId}</span>
           <InlineSelect
             value={stageId}
             options={stages.map((s) => ({ value: s.id, label: s.name }))}
+            className="font-medium"
             onSave={(next) => quickUpdateDealAction(dealId, { stageId: next })}
           />
         </div>
 
-        <Row label="Title">
+        <Cell label="Title">
           <InlineInput
             value={title}
-            align="right"
-            triggerClassName="font-semibold"
+            triggerClassName="font-semibold text-base"
             onSave={(next) => quickUpdateDealAction(dealId, { title: next })}
           />
-        </Row>
+        </Cell>
 
-        <Row label="Amount">
+        <Cell label="Amount">
           <InlineInput
             value={amountEur != null ? String(amountEur) : ""}
             type="number"
-            align="right"
             display={
               <span className="inline-flex items-center gap-1.5 font-medium">
                 <Banknote className="h-4 w-4 text-muted-foreground" />
@@ -101,33 +106,33 @@ export function DealInlineSettings({
               return quickUpdateDealAction(dealId, { amountEur: n });
             }}
           />
-        </Row>
+        </Cell>
 
-        <Row label="Client">
-          <div className="flex items-center justify-end gap-1.5">
+        <Cell label="Client">
+          <div className="flex items-center gap-1.5">
+            <InlineCombobox
+              value={clientId ?? ""}
+              placeholder="No client"
+              align="start"
+              options={clients.map((c) => ({ value: c.id, label: c.name }))}
+              onSave={(next) => quickUpdateDealAction(dealId, { clientId: next })}
+            />
             {clientId && (
               <Link
                 href={`/clients/${clientId}`}
                 title="Open client"
-                className="text-muted-foreground hover:text-primary"
+                className="shrink-0 text-muted-foreground hover:text-primary"
               >
                 <ExternalLink className="h-3.5 w-3.5" />
               </Link>
             )}
-            <InlineCombobox
-              value={clientId ?? ""}
-              placeholder="No client"
-              options={clients.map((c) => ({ value: c.id, label: c.name }))}
-              onSave={(next) => quickUpdateDealAction(dealId, { clientId: next })}
-            />
           </div>
-        </Row>
+        </Cell>
 
-        <Row label="Due date">
+        <Cell label="Due date">
           <InlineInput
             value={dueDate ?? ""}
             type="date"
-            align="right"
             display={
               <span className="inline-flex items-center gap-1.5">
                 <CalendarClock className="h-4 w-4 text-muted-foreground" />
@@ -136,9 +141,9 @@ export function DealInlineSettings({
             }
             onSave={(next) => quickUpdateDealAction(dealId, { dueDate: next || null })}
           />
-        </Row>
+        </Cell>
 
-        <Row label="Owner">
+        <Cell label="Owner">
           {isAdmin ? (
             <InlineSelect
               value={ownerId ?? ""}
@@ -154,24 +159,15 @@ export function DealInlineSettings({
           ) : (
             <span className="text-muted-foreground">—</span>
           )}
-        </Row>
+        </Cell>
 
-        <Row label="Tags">
+        <Cell label="Tags">
           <InlineTagEditor
             allTags={allTags}
             value={selectedTagIds}
             onSave={(ids) => quickUpdateDealAction(dealId, { tagIds: ids })}
           />
-        </Row>
-
-        <div className="space-y-1 border-t pt-3">
-          <span className="text-muted-foreground">Description</span>
-          <InlineTextarea
-            value={description ?? ""}
-            placeholder="Add a description…"
-            onSave={(next) => quickUpdateDealAction(dealId, { description: next || null })}
-          />
-        </div>
+        </Cell>
       </CardContent>
     </Card>
   );

@@ -9,6 +9,7 @@ import { DeleteButton } from "@/components/shared/delete-button";
 import { OrgFormDialog, type OrgData } from "@/components/organizations/org-form-dialog";
 import { deleteOrganizationAction } from "@/server/organization-actions";
 import { formatPercent } from "@/lib/utils";
+import { resolveOrgVatPercent } from "@/lib/invoice-vat";
 
 export type ClientOrg = OrgData & { invoiceCount: number };
 
@@ -50,7 +51,11 @@ export function ClientOrganizationsCard({
               <div className="text-xs text-muted-foreground">
                 {o.taxId ? `CUI ${o.taxId}` : "No tax id"}
                 {o.country ? ` · ${o.country}` : ""}
-                {` · TVA ${formatPercent(o.tvaPercent)}`}
+                {(() => {
+                  const effective = resolveOrgVatPercent(o);
+                  const overridden = effective !== Number(o.tvaPercent);
+                  return ` · TVA ${formatPercent(effective)}${overridden ? ` (cfg ${formatPercent(o.tvaPercent)})` : ""}`;
+                })()}
               </div>
               {o.iban && <div className="font-mono text-xs text-muted-foreground">{o.iban}</div>}
             </div>

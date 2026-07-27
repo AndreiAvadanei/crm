@@ -8,25 +8,60 @@ import {
   type DueWindow,
   type TaskStatusFilter,
 } from "@/lib/filter-helpers";
-import { LIST_FETCH_CAP } from "@/lib/app-constants";
+import { LIST_FETCH_CAP, TASKS_PAGE_SIZE } from "@/lib/app-constants";
 import { PageHeader } from "@/components/app/page-header";
-import { type TaskRowData } from "@/components/tasks/task-row";
-import { TasksFilterBar } from "@/components/tasks/tasks-filter-bar";
+import { type TaskItemData } from "@/components/tasks/task-common";
 import { TasksBoard } from "@/components/tasks/tasks-board";
 
 export const metadata = {
   title: "Tasks",
 };
 
+const TASK_ORDER_BY: Prisma.TaskOrderByWithRelationInput[] = [
+  // Urgency first (CRITICAL -> LOW), then soonest due date, then newest.
+  { urgency: "desc" },
+  { dueDate: "asc" },
+  { createdAt: "desc" },
+];
+
+const TASK_INCLUDE = {
+  deal: { select: { salesId: true, title: true } },
+  assignee: true,
+} satisfies Prisma.TaskInclude;
+
+function toRow(t: Prisma.TaskGetPayload<{ include: typeof TASK_INCLUDE }>): TaskItemData {
+  return {
+    id: t.id,
+    title: t.title,
+    type: t.type,
+    status: t.status,
+    urgency: t.urgency,
+    dueDate: t.dueDate ? t.dueDate.toISOString().slice(0, 10) : null,
+    dealSalesId: t.deal.salesId,
+    dealTitle: t.deal.title,
+    assigneeId: t.assigneeId,
+    assigneeName: t.assignee?.name ?? null,
+    assigneeColor: t.assignee?.avatarColor ?? null,
+  };
+}
+
+function parsePage(v?: string): number {
+  const n = Number.parseInt(v ?? "", 10);
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
 export default async function TasksPage({
   searchParams,
 }: {
   searchParams: Promise<{
+    q?: string;
     type?: string;
     status?: string;
     assignee?: string;
     due?: string;
     mine?: string;
+    overduePage?: string;
+    upcomingPage?: string;
   }>;
 }) {
   const user = await requireFullAuth();
@@ -37,57 +72,91 @@ export default async function TasksPage({
 
   // Base RBAC scope: tasks on deals the user can see. Sales users are further
   // locked to their own assigned tasks (admins can target any assignee).
-  const where: Prisma.TaskWhereInput = { deal: dealWhere };
+  const and: Prisma.TaskWhereInput[] = [{ deal: dealWhere }];
 
   const statusFilter = sp.status as TaskStatusFilter | undefined;
-  if (statusFilter === "done") where.status = "DONE";
-  else if (statusFilter !== "all") where.status = "OPEN"; // default
+  if (statusFilter === "done") and.push({ status: "DONE" });
+  else if (statusFilter !== "all") and.push({ status: "OPEN" }); // default
 
-  if (!admin) where.assigneeId = user.id;
-  else if (sp.mine === "1") where.assigneeId = user.id;
-  else if (sp.assignee) where.assigneeId = sp.assignee;
+  if (!admin) and.push({ assigneeId: user.id });
+  else if (sp.mine === "1") and.push({ assigneeId: user.id });
+  else if (sp.assignee) and.push({ assigneeId: sp.assignee });
 
-  if (sp.type) where.type = sp.type as TaskType;
+  if (sp.type) and.push({ type: sp.type as TaskType });
 
-  if (sp.due) where.dueDate = dueWindowRange(sp.due as DueWindow, now);
+  if (sp.due) and.push({ dueDate: dueWindowRange(sp.due as DueWindow, now) });
 
-  const [tasks, owners] = await Promise.all([
+  const q = sp.q?.trim();
+  if (q) {
+    and.push({
+      OR: [
+        { title: { contains: q } },
+        { deal: { title: { contains: q } } },
+        { deal: { salesId: { contains: q } } },
+        { assignee: { name: { contains: q } } },
+      ],
+    });
+  }
+
+  const base: Prisma.TaskWhereInput = { AND: and };
+
+  // Split into overdue (open + past due) and everything else. Kept null-safe so
+  // open tasks without a due date always land in "upcoming" (never dropped).
+  const overdueWhere: Prisma.TaskWhereInput = {
+    AND: [base, { status: "OPEN", dueDate: { lt: now } }],
+  };
+  const upcomingWhere: Prisma.TaskWhereInput = {
+    AND: [
+      base,
+      { OR: [{ status: { not: "OPEN" } }, { dueDate: null }, { dueDate: { gte: now } }] },
+    ],
+  };
+
+  const overduePage = parsePage(sp.overduePage);
+  const upcomingPage = parsePage(sp.upcomingPage);
+
+  const [overdueTotal, overdueRows, upcomingTotal, upcomingRows, owners, deals] = await Promise.all([
+    prisma.task.count({ where: overdueWhere }),
     prisma.task.findMany({
-      where,
-      include: { deal: { select: { salesId: true, title: true } }, assignee: true },
-      // Urgency first (CRITICAL -> LOW), then soonest due date, then newest.
-      orderBy: [{ urgency: "desc" }, { dueDate: "asc" }, { createdAt: "desc" }],
-      // Rows are split into overdue/upcoming in memory below; a cap under the
-      // real count would clip whole sections (MySQL clusters NULL due dates at
-      // the front), so load the full visible set (see LIST_FETCH_CAP).
-      take: LIST_FETCH_CAP,
+      where: overdueWhere,
+      include: TASK_INCLUDE,
+      orderBy: TASK_ORDER_BY,
+      skip: (overduePage - 1) * TASKS_PAGE_SIZE,
+      take: TASKS_PAGE_SIZE,
+    }),
+    prisma.task.count({ where: upcomingWhere }),
+    prisma.task.findMany({
+      where: upcomingWhere,
+      include: TASK_INCLUDE,
+      orderBy: TASK_ORDER_BY,
+      skip: (upcomingPage - 1) * TASKS_PAGE_SIZE,
+      take: TASKS_PAGE_SIZE,
     }),
     admin ? getOwners() : Promise.resolve([]),
+    // Deals the user can act on, for the quick-add task composer.
+    prisma.deal.findMany({
+      where: dealWhere,
+      orderBy: [{ salesId: "desc" }],
+      select: { id: true, salesId: true, title: true },
+      take: LIST_FETCH_CAP,
+    }),
   ]);
-
-  const rows: TaskRowData[] = tasks.map((t) => ({
-    id: t.id,
-    title: t.title,
-    type: t.type,
-    urgency: t.urgency,
-    dueDate: t.dueDate ? t.dueDate.toISOString().slice(0, 10) : null,
-    overdue: !!(t.dueDate && t.dueDate < now),
-    dealSalesId: t.deal.salesId,
-    dealTitle: t.deal.title,
-    assigneeId: t.assigneeId,
-    assigneeName: t.assignee?.name ?? null,
-    assigneeColor: t.assignee?.avatarColor ?? null,
-  }));
-  const overdue = rows.filter((t) => t.overdue);
-  const upcoming = rows.filter((t) => !t.overdue);
 
   return (
     <div className="pb-10">
       <PageHeader title="Tasks" description={admin ? "All open next-actions on visible deals" : "Your open next-actions"} />
-      <div className="px-4 pt-4 md:px-6">
-        <TasksFilterBar owners={owners} showAssigneeFilter={admin} />
-      </div>
-      <TasksBoard overdue={overdue} upcoming={upcoming} owners={owners} admin={admin} />
+      <TasksBoard
+        overdue={overdueRows.map(toRow)}
+        upcoming={upcomingRows.map(toRow)}
+        overdueTotal={overdueTotal}
+        upcomingTotal={upcomingTotal}
+        overduePage={overduePage}
+        upcomingPage={upcomingPage}
+        pageSize={TASKS_PAGE_SIZE}
+        owners={owners}
+        deals={deals}
+        admin={admin}
+      />
     </div>
   );
 }

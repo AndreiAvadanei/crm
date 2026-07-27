@@ -473,6 +473,9 @@ model Invoice {
   totalBaseAmount Decimal?     @db.Decimal(14, 2)
   // Accounting export VAT amount ("tva").
   vatAmount      Decimal?      @db.Decimal(14, 2)
+  // VAT rate (%) locked on this invoice. Defaults from the org country rules but
+  // can be overridden per invoice (e.g. foreign client billed with domestic VAT).
+  vatPercent     Decimal?      @db.Decimal(5, 2)
   // Outstanding balance from accounting ("neachitat").
   unpaidAmount   Decimal?      @db.Decimal(14, 2)
   // Raw total string ("Total de pe factura"), kept verbatim.

@@ -20,7 +20,7 @@ import { PageHeader } from "@/components/app/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { DashboardFilters } from "@/components/dashboard/dashboard-filters";
 import { MyWork } from "@/components/dashboard/my-overdue";
-import type { TaskRowData } from "@/components/tasks/task-row";
+import type { TaskItemData } from "@/components/tasks/task-common";
 import { ScorecardTable } from "@/components/dashboard/scorecard-table";
 import {
   FunnelChart,
@@ -213,13 +213,13 @@ export default async function DashboardPage({
       admin ? getOwners() : Promise.resolve([] as { id: string; name: string }[]),
     ]);
 
-  const toTaskRow = (t: (typeof overdueTaskRows)[number], overdue: boolean): TaskRowData => ({
+  const toTaskRow = (t: (typeof overdueTaskRows)[number]): TaskItemData => ({
     id: t.id,
     title: t.title,
     type: t.type,
+    status: t.status,
     urgency: t.urgency,
     dueDate: t.dueDate ? t.dueDate.toISOString().slice(0, 10) : null,
-    overdue,
     dealSalesId: t.deal.salesId,
     dealTitle: t.deal.title,
     assigneeId: t.assigneeId,
@@ -235,8 +235,8 @@ export default async function DashboardPage({
     stageName: dl.stage.name,
   });
 
-  const myOverdueTasks = overdueTaskRows.map((t) => toTaskRow(t, true));
-  const myUpcomingTasks = upcomingTaskRows.map((t) => toTaskRow(t, false));
+  const myOverdueTasks = overdueTaskRows.map((t) => toTaskRow(t));
+  const myUpcomingTasks = upcomingTaskRows.map((t) => toTaskRow(t));
   const myOverdueDeals = overdueDealRows.map(toDealRow);
   const myUpcomingDeals = upcomingDealRows.map(toDealRow);
 

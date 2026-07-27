@@ -15,6 +15,7 @@ import { Prisma } from "@/generated/prisma";
 import { requireUser } from "@/lib/auth/guards";
 import { isAdmin, canEditDeal, canEditClient, canLinkClientToDeal } from "@/lib/rbac";
 import { notifyDealShared } from "@/lib/notifications";
+import { sanitizeCommentHtml, commentHasContent } from "@/lib/sanitize";
 import {
   changeList,
   diffText,
@@ -82,7 +83,10 @@ export async function quickUpdateDealAction(dealId: string, patch: DealPatch): P
     data.title = title;
   }
   if (patch.description !== undefined) {
-    data.description = patch.description?.trim() || null;
+    // Description is rich HTML from the editor — sanitize to the safe allowlist
+    // (same as comments) and store null when it has no visible content.
+    const clean = sanitizeCommentHtml(patch.description ?? "");
+    data.description = commentHasContent(clean) ? clean : null;
   }
   if (patch.stageId !== undefined) {
     const stage = await prisma.stage.findUnique({ where: { id: patch.stageId } });
@@ -317,8 +321,12 @@ export async function quickUpdateClientAction(clientId: string, patch: ClientPat
 }
 
 // --- Tasks -----------------------------------------------------------------
+const TASK_TYPES = ["TASK", "CALL", "EMAIL", "MEETING", "NOTE"] as const;
+type TaskTypeValue = (typeof TASK_TYPES)[number];
+
 export type TaskPatch = {
   title?: string;
+  type?: TaskTypeValue;
   dueDate?: string | null;
   assigneeId?: string | null;
   status?: "OPEN" | "DONE";
@@ -338,6 +346,10 @@ export async function quickUpdateTaskAction(taskId: string, patch: TaskPatch): P
     const title = patch.title.trim();
     if (!title) return { error: "Task title required." };
     data.title = title;
+  }
+  if (patch.type !== undefined) {
+    if (!TASK_TYPES.includes(patch.type)) return { error: "Invalid task type." };
+    data.type = patch.type;
   }
   if (patch.dueDate !== undefined) {
     data.dueDate = patch.dueDate ? new Date(patch.dueDate) : null;
@@ -367,8 +379,10 @@ export async function quickUpdateTaskAction(taskId: string, patch: TaskPatch): P
     const statusLabel = (st?: string) => (st === "DONE" ? "Done" : st === "OPEN" ? "Open" : null);
     const urgencyLabel = (u?: string) =>
       u ? u.charAt(0) + u.slice(1).toLowerCase() : null;
+    const typeLabel = (t?: string) => (t ? t.charAt(0) + t.slice(1).toLowerCase() : null);
     changes = changeList(
       patch.title !== undefined ? diffText("title", "Title", task.title, patch.title.trim()) : null,
+      patch.type !== undefined ? diffPlain("type", "Type", typeLabel(task.type), typeLabel(patch.type)) : null,
       patch.dueDate !== undefined
         ? diffDate("dueDate", "Due date", task.dueDate, patch.dueDate ? new Date(patch.dueDate) : null)
         : null,
@@ -395,6 +409,109 @@ export async function quickUpdateTaskAction(taskId: string, patch: TaskPatch): P
   revalidatePath("/tasks");
   revalidatePath("/deals/[salesId]", "page");
   return { ok: true };
+}
+
+export type NewTaskInput = {
+  dealId: string;
+  title: string;
+  type?: TaskTypeValue;
+  urgency?: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  dueDate?: string | null;
+  assigneeId?: string | null;
+};
+
+/**
+ * Fast task creation from the cross-deal Tasks page. A task always belongs to a
+ * deal, so the caller must pass the target `dealId`; RBAC is enforced against
+ * that deal. Non-admins can only create tasks assigned to themselves.
+ */
+export async function quickCreateTaskAction(
+  input: NewTaskInput
+): Promise<Result & { id?: string }> {
+  const user = await requireUser();
+  if (!input.dealId) return { error: "Pick a deal." };
+  if (!(await canEditDeal(user, input.dealId))) return { error: "Not allowed." };
+  const title = input.title.trim();
+  if (!title) return { error: "Task title required." };
+
+  const type: TaskTypeValue = input.type && TASK_TYPES.includes(input.type) ? input.type : "TASK";
+  const urgency =
+    input.urgency && ["LOW", "MEDIUM", "HIGH", "CRITICAL"].includes(input.urgency)
+      ? input.urgency
+      : "MEDIUM";
+  // Only admins may hand a task to someone else; everyone else self-assigns.
+  const assigneeId = isAdmin(user) && input.assigneeId ? input.assigneeId : user.id;
+
+  const created = await prisma.task.create({
+    data: {
+      dealId: input.dealId,
+      title,
+      type,
+      urgency,
+      assigneeId,
+      dueDate: input.dueDate ? new Date(input.dueDate) : null,
+    },
+  });
+
+  const deal = await prisma.deal.findUnique({
+    where: { id: input.dealId },
+    select: { salesId: true, title: true },
+  });
+  await audit(user.id, "task_created", "Deal", input.dealId, {
+    taskTitle: title,
+    salesId: deal?.salesId,
+    title: deal?.title,
+  });
+
+  revalidatePath("/tasks");
+  revalidatePath("/deals/[salesId]", "page");
+  return { ok: true, id: created.id };
+}
+
+/**
+ * Push a task's due date out by `days`. Snoozing counts from the later of today
+ * and the current due date, so an overdue task lands `days` from now while a
+ * future task simply slips `days` further out. Dates are stored at UTC midnight
+ * to match the `yyyy-mm-dd` convention used everywhere else.
+ */
+export async function snoozeTaskAction(
+  taskId: string,
+  days: number
+): Promise<Result & { dueDate?: string }> {
+  const user = await requireUser();
+  const n = Math.trunc(days);
+  if (!Number.isFinite(n) || n <= 0) return { error: "Invalid snooze duration." };
+
+  const task = await prisma.task.findUnique({
+    where: { id: taskId },
+    include: { deal: { select: { salesId: true, title: true } } },
+  });
+  if (!task || !(await canEditDeal(user, task.dealId))) return { error: "Not allowed." };
+
+  const today = new Date();
+  const todayMidnightUtc = new Date(
+    Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())
+  );
+  const base =
+    task.dueDate && task.dueDate.getTime() > todayMidnightUtc.getTime()
+      ? new Date(task.dueDate)
+      : todayMidnightUtc;
+  const next = new Date(base.getTime());
+  next.setUTCHours(0, 0, 0, 0);
+  next.setUTCDate(next.getUTCDate() + n);
+
+  await prisma.task.update({ where: { id: taskId }, data: { dueDate: next } });
+
+  await audit(user.id, "task_updated", "Deal", task.dealId, {
+    taskTitle: task.title,
+    salesId: task.deal?.salesId,
+    title: task.deal?.title,
+    changes: changeList(diffDate("dueDate", "Due date", task.dueDate, next)),
+  });
+
+  revalidatePath("/tasks");
+  revalidatePath("/deals/[salesId]", "page");
+  return { ok: true, dueDate: next.toISOString().slice(0, 10) };
 }
 
 /**

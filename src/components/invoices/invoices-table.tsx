@@ -213,13 +213,13 @@ function InlineTextCell({
   placeholder,
 }: {
   invoice: InvoiceRow;
-  field: "contractRef" | "servicesDescription";
+  field: "contractRef";
   canManage: boolean;
   placeholder?: string;
 }) {
   const router = useRouter();
   const { toast } = useToast();
-  const initial = (field === "contractRef" ? invoice.contractRef : invoice.servicesDescription) ?? "";
+  const initial = invoice.contractRef ?? "";
   const [editing, setEditing] = React.useState(false);
   const [value, setValue] = React.useState(initial);
   const [busy, setBusy] = React.useState(false);
@@ -397,6 +397,257 @@ function formatAmount(value: number | null, currency: string | null): string {
   }
 }
 
+function amountTone(value: number | null | undefined): string {
+  return value != null && value < 0 ? "text-destructive" : "";
+}
+
+function invoiceTotal(i: InvoiceRow): number | null {
+  return i.totalAmount ?? i.predictedTotalAmount;
+}
+
+type OrgGroup = {
+  organizationId: string;
+  organizationName: string;
+  invoices: InvoiceRow[];
+};
+
+function groupInvoicesByOrganization(invoices: InvoiceRow[]): OrgGroup[] {
+  const map = new Map<string, OrgGroup>();
+  for (const inv of invoices) {
+    const group = map.get(inv.organizationId);
+    if (group) group.invoices.push(inv);
+    else {
+      map.set(inv.organizationId, {
+        organizationId: inv.organizationId,
+        organizationName: inv.organizationName,
+        invoices: [inv],
+      });
+    }
+  }
+  return Array.from(map.values()).sort((a, b) =>
+    a.organizationName.localeCompare(b.organizationName, undefined, { sensitivity: "base" })
+  );
+}
+
+function sumByCurrency(invoices: InvoiceRow[]): { currency: string; total: number }[] {
+  const map = new Map<string, number>();
+  for (const i of invoices) {
+    const amt = i.totalAmount ?? i.predictedTotalAmount;
+    if (amt == null) continue;
+    const c = (i.currency || "RON").toUpperCase();
+    map.set(c, (map.get(c) ?? 0) + amt);
+  }
+  return Array.from(map.entries())
+    .map(([currency, total]) => ({ currency, total }))
+    .sort((a, b) => b.total - a.total);
+}
+
+function OrgGroupHeader({ group, colSpan }: { group: OrgGroup; colSpan: number }) {
+  const pathname = usePathname();
+  const params = useSearchParams();
+  const totals = sumByCurrency(group.invoices);
+  const filterHref = React.useMemo(() => {
+    const sp = new URLSearchParams(Array.from(params.entries()));
+    sp.set("organization", group.organizationId);
+    sp.delete("page");
+    return `${pathname}?${sp.toString()}`;
+  }, [pathname, params, group.organizationId]);
+
+  return (
+    <TableRow className="bg-muted/40 hover:bg-muted/40">
+      <TableCell colSpan={colSpan} className="py-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <Link href={filterHref} className="truncate font-medium hover:text-primary" title="Filter to this organization">
+              {group.organizationName}
+            </Link>
+            <span className="shrink-0 text-xs text-muted-foreground">
+              {group.invoices.length} {group.invoices.length === 1 ? "invoice" : "invoices"}
+            </span>
+          </div>
+          {totals.length > 0 && (
+            <div className="flex flex-wrap items-baseline gap-x-3 text-sm tabular-nums">
+              {totals.map((t) => (
+                <span key={t.currency} className={amountTone(t.total)}>
+                  {formatAmount(t.total, t.currency)}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      </TableCell>
+    </TableRow>
+  );
+}
+
+function InvoiceTableRow({
+  invoice: i,
+  canManage,
+  deals,
+  selected,
+  toggleOne,
+  hideOrganization,
+}: {
+  invoice: InvoiceRow;
+  canManage: boolean;
+  deals: DealOption[];
+  selected: Set<string>;
+  toggleOne: (id: string) => void;
+  hideOrganization?: boolean;
+}) {
+  const toIssue = !i.issueDate && !!i.expectedInvoiceDate;
+  const isNegative = (() => {
+    const t = invoiceTotal(i);
+    return t != null && t < 0;
+  })();
+
+  return (
+    <TableRow
+      data-selected={selected.has(i.id) ? "true" : undefined}
+      className={`group data-[selected=true]:bg-primary/5 ${
+        isNegative
+          ? "bg-destructive/10 hover:bg-destructive/15 [&>td:first-child]:border-l-2 [&>td:first-child]:border-l-destructive"
+          : toIssue
+            ? "bg-amber-500/10 hover:bg-amber-500/15 [&>td:first-child]:border-l-2 [&>td:first-child]:border-l-amber-500"
+            : ""
+      }`}
+    >
+      {canManage && (
+        <TableCell className="w-px">
+          <Checkbox
+            checked={selected.has(i.id)}
+            onCheckedChange={() => toggleOne(i.id)}
+            aria-label={`Select invoice ${i.number ?? i.id}`}
+          />
+        </TableCell>
+      )}
+      <TableCell>
+        <Link href={`/invoices/${i.id}`} className="font-medium hover:text-primary">
+          {i.number || i.externalRef || "(no number)"}
+        </Link>
+      </TableCell>
+      {!hideOrganization && (
+        <TableCell className="max-w-[16rem]">
+          <div className="flex items-center gap-1">
+            <Link
+              href={`/organizations?q=${encodeURIComponent(i.organizationName)}`}
+              className="truncate hover:text-primary"
+              title={`Go to ${i.organizationName}`}
+            >
+              {i.organizationName}
+            </Link>
+            <CopyButton value={i.organizationName} label="organization" />
+          </div>
+        </TableCell>
+      )}
+      <TableCell>
+        <div className="flex items-center gap-1">
+          {i.clientId ? (
+            <Link href={`/clients/${i.clientId}`} className="hover:text-primary">
+              {i.clientName}
+            </Link>
+          ) : (
+            i.clientName || "—"
+          )}
+          <CopyButton value={i.clientName} label="client name" />
+        </div>
+      </TableCell>
+      <TableCell>
+        <DealCell invoice={i} canManage={canManage} deals={deals} />
+      </TableCell>
+      <TableCell>
+        <div className="flex flex-wrap items-center gap-1">
+          <Badge variant={invoiceStatusVariant(i.status)}>{INVOICE_STATUS_LABELS[i.status]}</Badge>
+          {toIssue && (
+            <Badge className="border-transparent bg-amber-500/15 text-amber-600 dark:text-amber-400">To issue</Badge>
+          )}
+        </div>
+      </TableCell>
+      <TableCell>
+        <span className="text-xs text-muted-foreground" title={i.issuerName ?? undefined}>
+          {issuerShort(i.issuerName)}
+        </span>
+      </TableCell>
+      <TableCell className="text-right tabular-nums">
+        <AmountCell value={i.totalBaseAmount} predicted={i.predictedBaseAmount} currency={i.currency} />
+      </TableCell>
+      <TableCell className="text-right tabular-nums">
+        <AmountCell value={i.totalAmount} predicted={i.predictedTotalAmount} currency={i.currency} />
+      </TableCell>
+      <TableCell className="text-right tabular-nums">
+        {i.paid ? (
+          <span className="text-muted-foreground">—</span>
+        ) : (
+          <span className={amountTone(i.unpaidAmount)}>{formatAmount(i.unpaidAmount, i.currency)}</span>
+        )}
+      </TableCell>
+      <TableCell className="text-center">
+        {i.articleCount > 0 ? (
+          <Badge variant="secondary">{i.articleCount}</Badge>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        )}
+      </TableCell>
+      <TableCell>
+        <div className="flex items-center gap-1">
+          <InlineTextCell invoice={i} field="contractRef" canManage={canManage} placeholder="Nr. 234/…" />
+          <CopyButton value={i.contractRef} label="contract" />
+        </div>
+      </TableCell>
+      <TableCell>
+        <div className="flex items-center gap-1">
+          {(() => {
+            const summary = i.articlesSummary || i.servicesDescription;
+            return (
+              <span title={summary || undefined} className="block max-w-[14rem] truncate text-xs text-muted-foreground">
+                {summary || "—"}
+              </span>
+            );
+          })()}
+          <CopyButton value={i.articlesSummary || i.servicesDescription} label="services" />
+        </div>
+      </TableCell>
+      <TableCell className="text-xs text-muted-foreground">{formatDate(i.issueDate)}</TableCell>
+      <TableCell>
+        <ExpectedDateCell invoice={i} canManage={canManage} />
+      </TableCell>
+      <TableCell className="text-center">
+        <PaidCell invoice={i} canManage={canManage} />
+      </TableCell>
+      <TableCell className="text-right">
+        <DocLinks urls={parseUrls(i.fileUrls)} />
+      </TableCell>
+      {canManage && (
+        <TableCell className="text-right">
+          <div className="flex items-center justify-end gap-1">
+            {i.status === "IN_ASTEPTARE" && <GenerateInvoiceDialog invoice={i} />}
+            <DeleteButton
+              iconOnly
+              onDelete={deleteInvoiceAction.bind(null, i.id)}
+              title="Delete invoice?"
+              description="This action cannot be undone."
+            />
+          </div>
+        </TableCell>
+      )}
+    </TableRow>
+  );
+}
+
+/** Show the stored amount, or a "~" prefixed prediction from the articles when missing. */
+function AmountCell({ value, predicted, currency }: { value: number | null; predicted: number | null; currency: string | null }) {
+  const tone = amountTone(value ?? predicted);
+  if (value != null) return <span className={tone}>{formatAmount(value, currency)}</span>;
+  if (predicted != null) {
+    return (
+      <span className={`italic ${tone || "text-muted-foreground"}`} title="Predicted from articles (not yet set on the invoice)">
+        ~{formatAmount(predicted, currency)}
+      </span>
+    );
+  }
+  return <span className="text-muted-foreground">—</span>;
+}
+
 /** Sticky bar with bulk Saga actions, shown when one or more rows are selected. */
 function BulkBar({
   ids,
@@ -458,13 +709,17 @@ export function InvoicesTable({
   invoices,
   canManage,
   deals = [],
+  groupByOrganization = false,
 }: {
   invoices: InvoiceRow[];
   canManage: boolean;
   deals?: DealOption[];
+  groupByOrganization?: boolean;
 }) {
   const router = useRouter();
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
+  const colSpan = (canManage ? 18 : 16) - (groupByOrganization ? 1 : 0);
+  const orgGroups = groupByOrganization ? groupInvoicesByOrganization(invoices) : null;
 
   // Drop selections that are no longer on the page (e.g. after filtering/paging).
   React.useEffect(() => {
@@ -503,7 +758,7 @@ export function InvoicesTable({
               </TableHead>
             )}
             <SortHeader label="Number" sortKey="number" />
-            <SortHeader label="Organization" sortKey="organization" />
+            {!groupByOrganization && <SortHeader label="Organization" sortKey="organization" />}
             <SortHeader label="Client" sortKey="client" />
             <SortHeader label="Deal" sortKey="deal" />
             <SortHeader label="Status" sortKey="status" />
@@ -522,121 +777,36 @@ export function InvoicesTable({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {invoices.map((i) => {
-            const toIssue = !i.issueDate && !!i.expectedInvoiceDate;
-            return (
-            <TableRow
-              key={i.id}
-              data-selected={selected.has(i.id) ? "true" : undefined}
-              className={`group data-[selected=true]:bg-primary/5 ${toIssue ? "bg-amber-500/10 hover:bg-amber-500/15 [&>td:first-child]:border-l-2 [&>td:first-child]:border-l-amber-500" : ""}`}
-            >
-              {canManage && (
-                <TableCell className="w-px">
-                  <Checkbox
-                    checked={selected.has(i.id)}
-                    onCheckedChange={() => toggleOne(i.id)}
-                    aria-label={`Select invoice ${i.number ?? i.id}`}
-                  />
-                </TableCell>
-              )}
-              <TableCell>
-                <Link href={`/invoices/${i.id}`} className="font-medium hover:text-primary">
-                  {i.number || i.externalRef || "(no number)"}
-                </Link>
-              </TableCell>
-              <TableCell className="max-w-[16rem]">
-                <div className="flex items-center gap-1">
-                  <Link
-                    href={`/organizations?q=${encodeURIComponent(i.organizationName)}`}
-                    className="truncate hover:text-primary"
-                    title={`Go to ${i.organizationName}`}
-                  >
-                    {i.organizationName}
-                  </Link>
-                  <CopyButton value={i.organizationName} label="organization" />
-                </div>
-              </TableCell>
-              <TableCell>
-                <div className="flex items-center gap-1">
-                  {i.clientId ? (
-                    <Link href={`/clients/${i.clientId}`} className="hover:text-primary">
-                      {i.clientName}
-                    </Link>
-                  ) : (
-                    i.clientName || "—"
-                  )}
-                  <CopyButton value={i.clientName} label="client name" />
-                </div>
-              </TableCell>
-              <TableCell>
-                <DealCell invoice={i} canManage={canManage} deals={deals} />
-              </TableCell>
-              <TableCell>
-                <div className="flex flex-wrap items-center gap-1">
-                  <Badge variant={invoiceStatusVariant(i.status)}>{INVOICE_STATUS_LABELS[i.status]}</Badge>
-                  {toIssue && (
-                    <Badge className="border-transparent bg-amber-500/15 text-amber-600 dark:text-amber-400">To issue</Badge>
-                  )}
-                </div>
-              </TableCell>
-              <TableCell>
-                <span className="text-xs text-muted-foreground" title={i.issuerName ?? undefined}>
-                  {issuerShort(i.issuerName)}
-                </span>
-              </TableCell>
-              <TableCell className="text-right tabular-nums">{formatAmount(i.totalBaseAmount, i.currency)}</TableCell>
-              <TableCell className="text-right tabular-nums">{formatAmount(i.totalAmount, i.currency)}</TableCell>
-              <TableCell className="text-right tabular-nums">
-                {i.paid ? <span className="text-muted-foreground">—</span> : formatAmount(i.unpaidAmount, i.currency)}
-              </TableCell>
-              <TableCell className="text-center">
-                {i.articleCount > 0 ? (
-                  <Badge variant="secondary">{i.articleCount}</Badge>
-                ) : (
-                  <span className="text-muted-foreground">—</span>
-                )}
-              </TableCell>
-              <TableCell>
-                <div className="flex items-center gap-1">
-                  <InlineTextCell invoice={i} field="contractRef" canManage={canManage} placeholder="Nr. 234/…" />
-                  <CopyButton value={i.contractRef} label="contract" />
-                </div>
-              </TableCell>
-              <TableCell>
-                <div className="flex items-center gap-1">
-                  <InlineTextCell invoice={i} field="servicesDescription" canManage={canManage} placeholder="Services…" />
-                  <CopyButton value={i.servicesDescription} label="services" />
-                </div>
-              </TableCell>
-              <TableCell className="text-xs text-muted-foreground">{formatDate(i.issueDate)}</TableCell>
-              <TableCell>
-                <ExpectedDateCell invoice={i} canManage={canManage} />
-              </TableCell>
-              <TableCell className="text-center">
-                <PaidCell invoice={i} canManage={canManage} />
-              </TableCell>
-              <TableCell className="text-right">
-                <DocLinks urls={parseUrls(i.fileUrls)} />
-              </TableCell>
-              {canManage && (
-                <TableCell className="text-right">
-                  <div className="flex items-center justify-end gap-1">
-                    {i.status === "IN_ASTEPTARE" && <GenerateInvoiceDialog invoice={i} />}
-                    <DeleteButton
-                      iconOnly
-                      onDelete={deleteInvoiceAction.bind(null, i.id)}
-                      title="Delete invoice?"
-                      description="This action cannot be undone."
+          {orgGroups
+            ? orgGroups.map((group) => (
+                <React.Fragment key={group.organizationId}>
+                  <OrgGroupHeader group={group} colSpan={colSpan} />
+                  {group.invoices.map((i) => (
+                    <InvoiceTableRow
+                      key={i.id}
+                      invoice={i}
+                      canManage={canManage}
+                      deals={deals}
+                      selected={selected}
+                      toggleOne={toggleOne}
+                      hideOrganization
                     />
-                  </div>
-                </TableCell>
-              )}
-            </TableRow>
-            );
-          })}
+                  ))}
+                </React.Fragment>
+              ))
+            : invoices.map((i) => (
+                <InvoiceTableRow
+                  key={i.id}
+                  invoice={i}
+                  canManage={canManage}
+                  deals={deals}
+                  selected={selected}
+                  toggleOne={toggleOne}
+                />
+              ))}
           {invoices.length === 0 && (
             <TableRow>
-              <TableCell colSpan={canManage ? 18 : 16} className="py-10 text-center text-sm text-muted-foreground">
+              <TableCell colSpan={colSpan} className="py-10 text-center text-sm text-muted-foreground">
                 No invoices found.
               </TableCell>
             </TableRow>

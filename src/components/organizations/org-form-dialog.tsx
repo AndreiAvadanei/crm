@@ -320,6 +320,11 @@ export function OrgFormDialog({
                 <input id="blocat" type="checkbox" checked={!!form.blocat} onChange={(e) => set("blocat", e.target.checked)} className="h-4 w-4" />
                 <Label htmlFor="blocat">Blocat</Label>
               </div>
+              <p className="text-xs text-muted-foreground sm:col-span-2">
+                {ro
+                  ? `Romanian client: invoices apply this rate (${form.tvaPercent || 0}%).`
+                  : "Foreign client: invoices apply 0% VAT (EU reverse charge / export), regardless of this value."}
+              </p>
             </div>
 
             {/* --- Commercial --- */}

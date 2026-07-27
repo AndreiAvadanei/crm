@@ -1,17 +1,15 @@
 "use client";
 
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
-import { useState, useTransition } from "react";
-import { SlidersHorizontal, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { useTransition } from "react";
+import { Rows3, X } from "lucide-react";
 import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
+  FilterPopover,
+  FilterField,
+  FilterChips,
+  type FilterChip,
+} from "@/components/shared/filter-bar";
+import { cn } from "@/lib/utils";
 
 const STATUS_OPTIONS = [
   { value: "", label: "All statuses" },
@@ -26,6 +24,10 @@ const DATE_FIELD_OPTIONS = [
   { value: "expected", label: "By expected date" },
   { value: "issued", label: "By issue date" },
 ];
+
+const STATUS_LABELS: Record<string, string> = Object.fromEntries(
+  STATUS_OPTIONS.filter((s) => s.value).map((s) => [s.value, s.label])
+);
 
 /** First/last day (yyyy-mm-dd) of a yyyy-mm month string. */
 function monthBounds(m: string): { from: string; to: string } {
@@ -101,7 +103,7 @@ export function InvoiceTabs({
   ];
 
   return (
-    <div className="inline-flex rounded-lg border bg-card p-1">
+    <div className="inline-flex shrink-0 rounded-lg border bg-card p-1">
       {tabs.map((t) => {
         const active = tab === t.value;
         return (
@@ -143,7 +145,6 @@ export function InvoiceFilters({
   const pathname = usePathname();
   const params = useSearchParams();
   const [, startTransition] = useTransition();
-  const [open, setOpen] = useState(false);
 
   function setParam(key: string, value: string) {
     setParams({ [key]: value });
@@ -159,8 +160,8 @@ export function InvoiceFilters({
     startTransition(() => router.replace(`${pathname}?${sp.toString()}`));
   }
 
-  const selectClass = "h-8 w-full rounded-md border border-input bg-background px-2 text-sm";
-  const inputClass = "h-8 rounded-md border border-input bg-background px-2 text-sm";
+  const selectClass = "form-control h-9 w-full cursor-pointer px-3";
+  const inputClass = "form-control h-9 w-full px-2.5";
 
   const orgApplied = params.get("organization");
   const status = params.get("status") ?? "";
@@ -171,30 +172,44 @@ export function InvoiceFilters({
   const to = params.get("to") ?? "";
   const month = deriveMonth(from, to);
   const noDates = params.get("noDates") === "1";
+  const unpaidDaysRaw = params.get("unpaidDays") ?? "";
+  const unpaidDays = unpaidDaysRaw && Number.parseInt(unpaidDaysRaw, 10) > 0 ? unpaidDaysRaw : "";
+  const unpaid = params.get("unpaid") === "1" || Boolean(unpaidDays);
+  const groupByOrg = params.get("groupBy") === "organization";
 
   const datePrefix = dateField === "issued" ? "Issued" : dateField === "expected" ? "Expected" : "Date";
   const dateValueLabel = month ? monthLabel(month) : `${from || "…"} – ${to || "…"}`;
 
-  // Removable chips for everything applied via the modal, so it's always clear what's filtering.
-  type Chip = { key: string; label: string; onRemove: () => void };
-  const chips: Chip[] = [];
+  // Chips summarize every applied filter so it's always clear what's narrowing.
+  const chips: FilterChip[] = [];
+  if (status) chips.push({ key: "status", label: STATUS_LABELS[status] ?? status, onRemove: () => setParam("status", "") });
   if (currency) chips.push({ key: "currency", label: `Currency: ${currency}`, onRemove: () => setParam("currency", "") });
   if (issuer) chips.push({ key: "issuer", label: `Issuer: ${issuer}`, onRemove: () => setParam("issuer", "") });
+  if (unpaid || unpaidDays)
+    chips.push({
+      key: "unpaid",
+      label: unpaidDays ? `Unpaid ≥ ${unpaidDays} days` : "Unpaid",
+      onRemove: () => setParams({ unpaid: "", unpaidDays: "" }),
+    });
   if (noDates) chips.push({ key: "noDates", label: "No date set", onRemove: () => setParam("noDates", "") });
-  else if (from || to) {
+  else if (from || to)
     chips.push({
       key: "date",
       label: `${datePrefix}: ${dateValueLabel}`,
       onRemove: () => setParams({ from: "", to: "", dateField: "" }),
     });
-  }
+  if (groupByOrg) chips.push({ key: "groupBy", label: "Grouped by org", onRemove: () => setParam("groupBy", "") });
 
-  const advancedCount = chips.length;
+  // Popover badge counts the narrowing filters (grouping is a display option).
+  const activeCount = chips.filter((c) => c.key !== "groupBy").length;
+
+  const clearAll = () =>
+    setParams({ status: "", currency: "", issuer: "", dateField: "", from: "", to: "", noDates: "", unpaid: "", unpaidDays: "" });
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="flex flex-1 flex-wrap items-center gap-2">
       {orgApplied && (
-        <span className="inline-flex h-8 items-center gap-2 rounded-md border border-primary/40 bg-primary/10 px-3 text-sm text-primary">
+        <span className="inline-flex h-9 items-center gap-2 rounded-md border border-primary/40 bg-primary/10 px-3 text-sm text-primary">
           <span className="text-muted-foreground">Organization:</span>
           <span className="font-medium">{appliedOrgName ?? orgApplied}</span>
           <button
@@ -208,176 +223,179 @@ export function InvoiceFilters({
         </span>
       )}
 
-      <select
-        className="h-8 rounded-md border border-input bg-background px-2 text-sm"
-        value={status}
-        title="Status"
-        onChange={(e) => setParam("status", e.target.value)}
-      >
-        {STATUS_OPTIONS.map((s) => (
-          <option key={s.value} value={s.value}>
-            {s.label}
-          </option>
-        ))}
-      </select>
+      <FilterPopover activeCount={activeCount} onClear={clearAll}>
+        <FilterField label="Status">
+          <select className={selectClass} value={status} onChange={(e) => setParam("status", e.target.value)}>
+            {STATUS_OPTIONS.map((s) => (
+              <option key={s.value} value={s.value}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+        </FilterField>
 
-      <Button type="button" variant="outline" size="sm" onClick={() => setOpen(true)}>
-        <SlidersHorizontal className="h-3.5 w-3.5" />
-        Filters
-        {advancedCount > 0 && (
-          <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
-            {advancedCount}
-          </span>
+        {currencies.length > 0 && (
+          <FilterField label="Currency">
+            <select className={selectClass} value={currency} onChange={(e) => setParam("currency", e.target.value)}>
+              <option value="">All currencies</option>
+              {currencies.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </FilterField>
         )}
-      </Button>
 
-      {chips.map((chip) => (
-        <span
-          key={chip.key}
-          className="inline-flex h-8 items-center gap-1.5 rounded-md border border-input bg-muted/40 px-2.5 text-sm"
-        >
-          {chip.label}
-          <button
-            type="button"
-            aria-label={`Remove ${chip.label} filter`}
-            className="-mr-1 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-            onClick={chip.onRemove}
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </span>
-      ))}
+        {issuers.length > 0 && (
+          <FilterField label="Issuer">
+            <select className={selectClass} value={issuer} onChange={(e) => setParam("issuer", e.target.value)}>
+              <option value="">All issuers</option>
+              {issuers.map((i) => (
+                <option key={i} value={i}>
+                  {i}
+                </option>
+              ))}
+            </select>
+          </FilterField>
+        )}
 
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Filters</DialogTitle>
-          </DialogHeader>
+        <div className="space-y-2 rounded-lg border p-3 sm:col-span-2">
+          <span className="text-xs font-medium text-muted-foreground">Payment</span>
+          <label className="inline-flex cursor-pointer items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="h-4 w-4 cursor-pointer"
+              checked={unpaid}
+              onChange={(e) => {
+                if (e.target.checked) setParam("unpaid", "1");
+                else setParams({ unpaid: "", unpaidDays: "" });
+              }}
+            />
+            Unpaid only
+          </label>
+          <div className="space-y-1.5">
+            <span className="text-xs text-muted-foreground">Outstanding at least (days since issue date)</span>
+            <input
+              type="number"
+              min={1}
+              placeholder="Optional, e.g. 30"
+              className={cn(inputClass, "disabled:opacity-50")}
+              value={unpaidDays}
+              disabled={!unpaid}
+              onChange={(e) => {
+                const v = e.target.value.trim();
+                if (!v) setParam("unpaidDays", "");
+                else {
+                  const n = Math.max(1, Number.parseInt(v, 10) || 1);
+                  setParams({ unpaid: "1", unpaidDays: String(n) });
+                }
+              }}
+            />
+          </div>
+          {tab === "to_invoice" && (unpaid || unpaidDays) && (
+            <p className="text-xs text-muted-foreground">
+              Day threshold applies to issued invoices; switch to the Invoiced tab to use it.
+            </p>
+          )}
+        </div>
 
-          <div className="space-y-4">
-            {currencies.length > 0 && (
-              <div className="space-y-1.5">
-                <Label>Currency</Label>
-                <select className={selectClass} value={currency} onChange={(e) => setParam("currency", e.target.value)}>
-                  <option value="">All currencies</option>
-                  {currencies.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            {issuers.length > 0 && (
-              <div className="space-y-1.5">
-                <Label>Issuer</Label>
-                <select className={selectClass} value={issuer} onChange={(e) => setParam("issuer", e.target.value)}>
-                  <option value="">All issuers</option>
-                  {issuers.map((i) => (
-                    <option key={i} value={i}>
-                      {i}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            <div className="space-y-2 rounded-lg border p-3">
-              <div className="flex items-center justify-between">
-                <Label>Date range</Label>
-                {tab !== "invoiced" && (
-                  <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4 cursor-pointer"
-                      checked={noDates}
-                      onChange={(e) => setParam("noDates", e.target.checked ? "1" : "")}
-                    />
-                    No date set
-                  </label>
-                )}
-              </div>
-
-              <div className="space-y-1.5">
-                <span className="text-xs text-muted-foreground">Apply to</span>
-                <select
-                  className={`${selectClass} disabled:opacity-50`}
-                  value={dateField}
-                  disabled={noDates}
-                  onChange={(e) => setParam("dateField", e.target.value)}
-                >
-                  {DATE_FIELD_OPTIONS.map((d) => (
-                    <option key={d.value} value={d.value}>
-                      {d.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="space-y-1.5">
-                <span className="text-xs text-muted-foreground">Whole month</span>
+        <div className="space-y-2 rounded-lg border p-3 sm:col-span-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-muted-foreground">Date range</span>
+            {tab !== "invoiced" && (
+              <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
                 <input
-                  type="month"
-                  className={`${inputClass} w-full disabled:opacity-50`}
-                  value={month}
-                  disabled={noDates}
-                  onChange={(e) => {
-                    if (!e.target.value) setParams({ from: "", to: "" });
-                    else {
-                      const b = monthBounds(e.target.value);
-                      setParams({ from: b.from, to: b.to });
-                    }
-                  }}
+                  type="checkbox"
+                  className="h-4 w-4 cursor-pointer"
+                  checked={noDates}
+                  onChange={(e) => setParam("noDates", e.target.checked ? "1" : "")}
                 />
-              </div>
+                No date set
+              </label>
+            )}
+          </div>
 
-              <div className="space-y-1.5">
-                <span className="text-xs text-muted-foreground">Custom range</span>
-                <div className="flex items-center gap-1 text-sm text-muted-foreground">
-                  <input type="date" className={`${inputClass} w-full disabled:opacity-50`} value={from} title="From" disabled={noDates} onChange={(e) => setParam("from", e.target.value)} />
-                  <span>–</span>
-                  <input type="date" className={`${inputClass} w-full disabled:opacity-50`} value={to} title="To" disabled={noDates} onChange={(e) => setParam("to", e.target.value)} />
-                </div>
-              </div>
+          <div className="space-y-1.5">
+            <span className="text-xs text-muted-foreground">Apply to</span>
+            <select
+              className={cn(selectClass, "disabled:opacity-50")}
+              value={dateField}
+              disabled={noDates}
+              onChange={(e) => setParam("dateField", e.target.value)}
+            >
+              {DATE_FIELD_OPTIONS.map((d) => (
+                <option key={d.value} value={d.value}>
+                  {d.label}
+                </option>
+              ))}
+            </select>
+          </div>
 
-              <div className="flex flex-wrap gap-1.5">
-                {datePresets().map((p) => {
-                  const active = !noDates && from === p.from && to === p.to;
-                  return (
-                    <button
-                      key={p.label}
-                      type="button"
-                      disabled={noDates}
-                      className={`inline-flex h-8 items-center rounded-md border px-2.5 text-sm disabled:opacity-50 ${
-                        active ? "border-primary/40 bg-primary/10 text-primary" : "border-input text-muted-foreground hover:bg-muted"
-                      }`}
-                      onClick={() => setParams({ from: p.from, to: p.to })}
-                    >
-                      {p.label}
-                    </button>
-                  );
-                })}
-              </div>
+          <div className="space-y-1.5">
+            <span className="text-xs text-muted-foreground">Whole month</span>
+            <input
+              type="month"
+              className={cn(inputClass, "disabled:opacity-50")}
+              value={month}
+              disabled={noDates}
+              onChange={(e) => {
+                if (!e.target.value) setParams({ from: "", to: "" });
+                else {
+                  const b = monthBounds(e.target.value);
+                  setParams({ from: b.from, to: b.to });
+                }
+              }}
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <span className="text-xs text-muted-foreground">Custom range</span>
+            <div className="flex items-center gap-1 text-sm text-muted-foreground">
+              <input type="date" className={cn(inputClass, "disabled:opacity-50")} value={from} title="From" disabled={noDates} onChange={(e) => setParam("from", e.target.value)} />
+              <span>–</span>
+              <input type="date" className={cn(inputClass, "disabled:opacity-50")} value={to} title="To" disabled={noDates} onChange={(e) => setParam("to", e.target.value)} />
             </div>
           </div>
 
-          <DialogFooter className="sm:justify-between">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              disabled={advancedCount === 0}
-              onClick={() => setParams({ currency: "", issuer: "", dateField: "", from: "", to: "", noDates: "" })}
-            >
-              Clear all
-            </Button>
-            <Button type="button" size="sm" onClick={() => setOpen(false)}>
-              Done
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          <div className="flex flex-wrap gap-1.5">
+            {datePresets().map((p) => {
+              const active = !noDates && from === p.from && to === p.to;
+              return (
+                <button
+                  key={p.label}
+                  type="button"
+                  disabled={noDates}
+                  className={`inline-flex h-8 items-center rounded-md border px-2.5 text-sm disabled:opacity-50 ${
+                    active ? "border-primary/40 bg-primary/10 text-primary" : "border-input text-muted-foreground hover:bg-muted"
+                  }`}
+                  onClick={() => setParams({ from: p.from, to: p.to })}
+                >
+                  {p.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <FilterField label="Display">
+          <button
+            type="button"
+            onClick={() => setParam("groupBy", groupByOrg ? "" : "organization")}
+            className={cn(
+              "inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-md border px-3 text-sm font-medium transition-colors",
+              groupByOrg
+                ? "border-foreground/25 bg-accent text-foreground"
+                : "border-input bg-background text-foreground hover:bg-accent/60"
+            )}
+          >
+            <Rows3 className="h-3.5 w-3.5" />
+            Group by organization
+          </button>
+        </FilterField>
+      </FilterPopover>
+
+      <FilterChips chips={chips} />
     </div>
   );
 }

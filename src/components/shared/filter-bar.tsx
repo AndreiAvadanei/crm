@@ -7,13 +7,14 @@
 
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useCallback, useState, useTransition } from "react";
-import { Check, ChevronDown, X } from "lucide-react";
+import { Check, ChevronDown, SlidersHorizontal, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type { Option } from "@/lib/filter-helpers";
 import { parseCsvIds } from "@/lib/filter-helpers";
 import { cn } from "@/lib/utils";
@@ -61,11 +62,13 @@ export function FilterSelect({
   options,
   placeholder,
   ariaLabel,
+  className,
 }: {
   param: string;
   options: Option[];
   placeholder: string;
   ariaLabel?: string;
+  className?: string;
 }) {
   const { params, setParams } = useFilterUrl();
   const current = params.get(param) ?? "";
@@ -75,7 +78,7 @@ export function FilterSelect({
       aria-label={ariaLabel ?? placeholder}
       value={current}
       onChange={(e) => setParams({ [param]: e.target.value || null })}
-      className={cn(selectCls, active && "border-foreground/25 bg-accent")}
+      className={cn(selectCls, active && "border-foreground/25 bg-accent", className)}
     >
       <option value="">{placeholder}</option>
       {options.map((o) => (
@@ -93,11 +96,13 @@ export function FilterToggleChip({
   label,
   icon,
   value = "1",
+  className,
 }: {
   param: string;
   label: string;
   icon?: React.ReactNode;
   value?: string;
+  className?: string;
 }) {
   const { params, setParams } = useFilterUrl();
   const active = params.get(param) === value;
@@ -110,7 +115,8 @@ export function FilterToggleChip({
         "inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-md border px-3 text-sm font-medium transition-colors [&_svg]:size-4",
         active
           ? "border-foreground/25 bg-accent text-foreground"
-          : "border-input bg-background text-foreground hover:bg-accent/60"
+          : "border-input bg-background text-foreground hover:bg-accent/60",
+        className
       )}
     >
       {icon}
@@ -215,10 +221,12 @@ export function FilterTagMulti({
   tags,
   param = "tag",
   label = "Tags",
+  className,
 }: {
   tags: { id: string; name: string; color: string }[];
   param?: string;
   label?: string;
+  className?: string;
 }) {
   const { params, setParams } = useFilterUrl();
   const selected = parseCsvIds(params.get(param));
@@ -241,7 +249,8 @@ export function FilterTagMulti({
             "inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-md border px-3 text-sm font-medium transition-colors",
             count
               ? "border-foreground/25 bg-accent text-foreground"
-              : "border-input bg-background text-foreground hover:bg-accent/60"
+              : "border-input bg-background text-foreground hover:bg-accent/60",
+            className
           )}
         >
           {label}
@@ -299,5 +308,134 @@ export function ClearFiltersButton({ keys }: { keys: string[] }) {
     >
       <X className="h-4 w-4" /> Clear filters ({activeCount})
     </Button>
+  );
+}
+
+/**
+ * Labeled field wrapper for controls placed inside a FilterPopover. Sits in one
+ * grid cell by default; pass `span="full"` to stretch across both columns
+ * (used for tall/wide blocks like date ranges).
+ */
+export function FilterField({
+  label,
+  hint,
+  children,
+  span,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+  span?: "full";
+}) {
+  return (
+    <div className={cn("space-y-1.5", span === "full" && "sm:col-span-2")}>
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-xs font-medium text-muted-foreground">{label}</span>
+        {hint && <span className="text-[11px] text-muted-foreground/70">{hint}</span>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/**
+ * Single "Filters" entry point: one button (with an active-count badge) that
+ * opens a popover holding every secondary filter. Keeps the toolbar to one line
+ * and surfaces all options behind a single, obvious click.
+ */
+export function FilterPopover({
+  activeCount,
+  children,
+  label = "Filters",
+  onClear,
+  align = "end",
+  className,
+  columns = 2,
+}: {
+  activeCount: number;
+  children: React.ReactNode;
+  label?: string;
+  onClear?: () => void;
+  align?: "start" | "center" | "end";
+  className?: string;
+  columns?: 1 | 2;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            "inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-3 text-sm font-medium transition-colors [&_svg]:size-4",
+            activeCount > 0
+              ? "border-foreground/25 bg-accent text-foreground"
+              : "border-input bg-background text-foreground hover:bg-accent/60",
+            className
+          )}
+        >
+          <SlidersHorizontal />
+          {label}
+          {activeCount > 0 && (
+            <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground">
+              {activeCount}
+            </span>
+          )}
+          <ChevronDown className="opacity-60" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align={align}
+        className={cn("max-w-[92vw]", columns === 2 ? "w-[34rem]" : "w-80")}
+      >
+        <div className="flex items-center justify-between pb-2">
+          <span className="text-sm font-semibold">{label}</span>
+          {onClear && activeCount > 0 && (
+            <button
+              type="button"
+              onClick={onClear}
+              className="text-xs font-medium text-muted-foreground hover:text-foreground"
+            >
+              Clear all
+            </button>
+          )}
+        </div>
+        <div
+          className={cn(
+            "grid max-h-[70vh] gap-x-4 gap-y-3 overflow-y-auto",
+            columns === 2 ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-1"
+          )}
+        >
+          {children}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+export type FilterChip = { key: string; label: string; onRemove: () => void };
+
+/** Removable chips summarizing the currently-applied filters. */
+export function FilterChips({ chips }: { chips: FilterChip[] }) {
+  if (chips.length === 0) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {chips.map((chip) => (
+        <span
+          key={chip.key}
+          className="inline-flex h-7 items-center gap-1.5 rounded-full border border-input bg-muted/50 pl-2.5 pr-1 text-xs font-medium"
+        >
+          {chip.label}
+          <button
+            type="button"
+            aria-label={`Remove ${chip.label} filter`}
+            onClick={chip.onRemove}
+            className="rounded-full p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </span>
+      ))}
+    </div>
   );
 }

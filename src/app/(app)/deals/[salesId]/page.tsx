@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { Pencil } from "lucide-react";
+import { Pencil, Receipt, History } from "lucide-react";
 import { requireFullAuth } from "@/lib/auth/guards";
 import { prisma } from "@/lib/db";
 import { canViewDeal, isAdmin, clientVisibilityWhere } from "@/lib/rbac";
@@ -12,9 +12,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { DealFormDialog } from "@/components/deals/deal-form-dialog";
-import { DealInlineSettings } from "@/components/deals/deal-inline-settings";
+import { DealHeader } from "@/components/deals/deal-header";
+import { DealDescription } from "@/components/deals/deal-description";
 import { DealCustomFields } from "@/components/deals/deal-custom-fields";
 import { DeleteButton } from "@/components/shared/delete-button";
+import { DealTabs } from "@/components/deals/deal-tabs";
 import { TasksPanel } from "@/components/deals/tasks-panel";
 import { CommentsPanel } from "@/components/deals/comments-panel";
 import { FilesPanel } from "@/components/deals/files-panel";
@@ -23,6 +25,7 @@ import { InvoiceListCard } from "@/components/invoices/invoice-list-card";
 import { deleteDealAction } from "@/server/deal-actions";
 import { formatDate, relativeTime } from "@/lib/utils";
 import { activityPhrase } from "@/lib/activity-format";
+import { resolveOrgVatPercent } from "@/lib/invoice-vat";
 
 type DealDetailPageProps = {
   params: Promise<{ salesId: string }>;
@@ -147,7 +150,7 @@ export default async function DealDetailPage({ params }: DealDetailPageProps) {
     ? await prisma.organization.findMany({
         where: { clientId: deal.clientId },
         orderBy: { sourceName: "asc" },
-        select: { id: true, sourceName: true },
+        select: { id: true, sourceName: true, country: true, tvaPercent: true },
       })
     : [];
   const canManageInvoices = admin || deal.client?.ownerId === user.id;
@@ -226,126 +229,161 @@ export default async function DealDetailPage({ params }: DealDetailPageProps) {
         )}
       </PageHeader>
 
-      <div className="grid gap-6 p-4 md:grid-cols-3 md:p-6">
-        {/* Sidebar — all settings editable inline */}
-        <div className="space-y-6 md:col-span-1">
-          <DealInlineSettings
-            dealId={deal.id}
-            salesId={deal.salesId}
-            title={deal.title}
-            description={deal.description}
-            stageId={deal.stageId}
-            stages={stages.map((s) => ({ id: s.id, name: s.name }))}
-            amountEur={deal.amountEur ? Number(deal.amountEur) : null}
-            clientId={deal.clientId}
-            clients={clientOptions}
-            dueDate={deal.dueDate ? deal.dueDate.toISOString().slice(0, 10) : null}
-            ownerId={deal.ownerId}
-            owner={deal.owner ? { name: deal.owner.name, color: deal.owner.avatarColor } : null}
-            owners={owners}
-            selectedTagIds={deal.tags.map((t) => t.id)}
-            allTags={tags}
-            isAdmin={admin}
-          />
-
-          {defs.length > 0 && (
+      <div className="p-4 md:p-6">
+        <div className="grid gap-6 lg:grid-cols-3">
+          {/* Main column — description, tasks, files, comments, then tabs */}
+          <div className="space-y-6 lg:col-span-2">
             <Card>
               <CardHeader>
-                <CardTitle>Custom fields</CardTitle>
+                <CardTitle>Description</CardTitle>
               </CardHeader>
               <CardContent>
-                <DealCustomFields dealId={deal.id} defs={fieldDefViews} values={fieldValues} />
+                <DealDescription dealId={deal.id} description={deal.description} />
               </CardContent>
             </Card>
-          )}
 
-          {/* Tasks live under custom fields — inline editable */}
-          <Card>
-            <CardHeader className="flex-row items-center justify-between space-y-0">
-              <CardTitle>Tasks &amp; next actions</CardTitle>
-              <Badge variant="secondary">{openTasks} open</Badge>
-            </CardHeader>
-            <CardContent>
-              <TasksPanel dealId={deal.id} tasks={taskItems} owners={owners} admin={admin} />
-            </CardContent>
-          </Card>
-        </div>
+            <Card>
+              <CardHeader className="flex-row items-center justify-between space-y-0">
+                <CardTitle>Tasks &amp; next actions</CardTitle>
+                <Badge variant="secondary">{openTasks} open</Badge>
+              </CardHeader>
+              <CardContent>
+                <TasksPanel dealId={deal.id} tasks={taskItems} owners={owners} admin={admin} />
+              </CardContent>
+            </Card>
 
-        {/* Main — comments & files always visible */}
-        <div className="space-y-6 md:col-span-2">
-          <Card>
-            <CardHeader className="flex-row items-center justify-between space-y-0">
-              <CardTitle>Comments</CardTitle>
-              <Badge variant="secondary">{deal.comments.length}</Badge>
-            </CardHeader>
-            <CardContent>
-              <CommentsPanel
-                dealId={deal.id}
-                notifyCandidates={notifyCandidates}
-                defaultNotifyIds={defaultNotifyIds}
-                comments={deal.comments.map((c) => ({
-                  id: c.id,
-                  body: c.body,
-                  createdAt: c.createdAt.toISOString(),
-                  authorName: c.author?.name ?? null,
-                  authorColor: c.author?.avatarColor ?? null,
-                  canDelete: admin || c.authorId === user.id,
-                }))}
-              />
-            </CardContent>
-          </Card>
+            <Card>
+              <CardHeader className="flex-row items-center justify-between space-y-0">
+                <CardTitle>Files</CardTitle>
+                <Badge variant="secondary">{deal.attachments.length}</Badge>
+              </CardHeader>
+              <CardContent>
+                <FilesPanel
+                  dealId={deal.id}
+                  attachments={deal.attachments.map((a) => ({
+                    id: a.id,
+                    filename: a.filename,
+                    size: a.size,
+                    createdAt: a.createdAt.toISOString(),
+                    sourceUrl: a.sourceUrl,
+                    onDisk: a.storageKey.length > 0,
+                  }))}
+                />
+              </CardContent>
+            </Card>
 
-          <Card>
-            <CardHeader className="flex-row items-center justify-between space-y-0">
-              <CardTitle>Files</CardTitle>
-              <Badge variant="secondary">{deal.attachments.length}</Badge>
-            </CardHeader>
-            <CardContent>
-              <FilesPanel
-                dealId={deal.id}
-                attachments={deal.attachments.map((a) => ({
-                  id: a.id,
-                  filename: a.filename,
-                  size: a.size,
-                  createdAt: a.createdAt.toISOString(),
-                  sourceUrl: a.sourceUrl,
-                  onDisk: a.storageKey.length > 0,
-                }))}
-              />
-            </CardContent>
-          </Card>
+            <Card>
+              <CardHeader className="flex-row items-center justify-between space-y-0">
+                <CardTitle>Comments</CardTitle>
+                <Badge variant="secondary">{deal.comments.length}</Badge>
+              </CardHeader>
+              <CardContent>
+                <CommentsPanel
+                  dealId={deal.id}
+                  notifyCandidates={notifyCandidates}
+                  defaultNotifyIds={defaultNotifyIds}
+                  comments={deal.comments.map((c) => ({
+                    id: c.id,
+                    body: c.body,
+                    createdAt: c.createdAt.toISOString(),
+                    authorName: c.author?.name ?? null,
+                    authorColor: c.author?.avatarColor ?? null,
+                    canDelete: admin || c.authorId === user.id,
+                  }))}
+                />
+              </CardContent>
+            </Card>
 
-          <InvoiceListCard
-            invoices={invoiceItems}
-            add={
-              canManageInvoices
-                ? { organizations: dealOrgs.map((o) => ({ id: o.id, name: o.sourceName })), deals: dealOptions, defaultSalesId: deal.salesId, defaultOrganizationId: defaultOrgId }
-                : undefined
-            }
-          />
+            <DealTabs
+              defaultValue="invoices"
+              tabs={[
+                {
+                  value: "invoices",
+                  label: "Invoices",
+                  icon: <Receipt className="h-4 w-4" />,
+                  count: invoiceItems.length,
+                  node: (
+                    <InvoiceListCard
+                      bare
+                      invoices={invoiceItems}
+                      add={
+                        canManageInvoices
+                          ? {
+                              organizations: dealOrgs.map((o) => ({
+                                id: o.id,
+                                name: o.sourceName,
+                                defaultVatPercent: resolveOrgVatPercent(o),
+                                configuredTvaPercent: Number(o.tvaPercent) || 21,
+                              })),
+                              deals: dealOptions,
+                              defaultSalesId: deal.salesId,
+                              defaultOrganizationId: defaultOrgId,
+                            }
+                          : undefined
+                      }
+                    />
+                  ),
+                },
+                {
+                  value: "activity",
+                  label: "Activity",
+                  icon: <History className="h-4 w-4" />,
+                  count: activity.length,
+                  node: (
+                    <div className="space-y-3 text-sm">
+                      {activity.map((a) => (
+                        <div key={a.id} className="flex items-start justify-between gap-3 border-b pb-2 last:border-0">
+                          <span>
+                            <span className="font-medium">{a.actor?.name ?? "System"}</span>{" "}
+                            <span className="text-muted-foreground">
+                              {activityPhrase(a.action, a.meta as Record<string, unknown> | null)}
+                            </span>
+                          </span>
+                          <span className="shrink-0 text-xs text-muted-foreground">{relativeTime(a.createdAt)}</span>
+                        </div>
+                      ))}
+                      <div className="flex items-center justify-between text-muted-foreground">
+                        <span>Created</span>
+                        <span className="text-xs">{formatDate(deal.createdAt)}</span>
+                      </div>
+                    </div>
+                  ),
+                },
+              ]}
+            />
+          </div>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Activity</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm">
-              {activity.map((a) => (
-                <div key={a.id} className="flex items-start justify-between gap-3 border-b pb-2 last:border-0">
-                  <span>
-                    <span className="font-medium">{a.actor?.name ?? "System"}</span>{" "}
-                    <span className="text-muted-foreground">
-                      {activityPhrase(a.action, a.meta as Record<string, unknown> | null)}
-                    </span>
-                  </span>
-                  <span className="shrink-0 text-xs text-muted-foreground">{relativeTime(a.createdAt)}</span>
-                </div>
-              ))}
-              <div className="flex items-center justify-between text-muted-foreground">
-                <span>Created</span>
-                <span className="text-xs">{formatDate(deal.createdAt)}</span>
-              </div>
-            </CardContent>
-          </Card>
+          {/* Right column — deal properties + custom fields */}
+          <div className="space-y-6">
+            <DealHeader
+              dealId={deal.id}
+              salesId={deal.salesId}
+              title={deal.title}
+              stageId={deal.stageId}
+              stages={stages.map((s) => ({ id: s.id, name: s.name }))}
+              amountEur={deal.amountEur ? Number(deal.amountEur) : null}
+              clientId={deal.clientId}
+              clients={clientOptions}
+              dueDate={deal.dueDate ? deal.dueDate.toISOString().slice(0, 10) : null}
+              ownerId={deal.ownerId}
+              owner={deal.owner ? { name: deal.owner.name, color: deal.owner.avatarColor } : null}
+              owners={owners}
+              selectedTagIds={deal.tags.map((t) => t.id)}
+              allTags={tags}
+              isAdmin={admin}
+            />
+
+            {defs.length > 0 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Custom fields</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <DealCustomFields dealId={deal.id} defs={fieldDefViews} values={fieldValues} />
+                </CardContent>
+              </Card>
+            )}
+          </div>
         </div>
       </div>
     </div>

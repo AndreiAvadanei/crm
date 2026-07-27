@@ -2,10 +2,11 @@
 
 import { UserCheck } from "lucide-react";
 import {
-  FilterBar,
   FilterSelect,
   FilterToggleChip,
-  ClearFiltersButton,
+  FilterPopover,
+  FilterField,
+  useFilterUrl,
 } from "@/components/shared/filter-bar";
 import {
   TASK_TYPE_OPTIONS,
@@ -15,48 +16,63 @@ import {
 
 const TASK_FILTER_KEYS = ["type", "status", "assignee", "due", "mine"];
 
-export function TasksFilterBar({
+/** One-button filter popover for the cross-deal Tasks page (URL-param driven). */
+export function TasksFilters({
   owners,
   showAssigneeFilter,
 }: {
   owners: { id: string; name: string }[];
   showAssigneeFilter: boolean;
 }) {
+  const { params, setParams } = useFilterUrl();
+  const activeCount = TASK_FILTER_KEYS.filter((k) => params.get(k)).length;
+  const clearAll = () => setParams(Object.fromEntries(TASK_FILTER_KEYS.map((k) => [k, null])));
+
   return (
-    <FilterBar>
-      <FilterSelect
-        param="type"
-        placeholder="All types"
-        ariaLabel="Filter by task type"
-        options={TASK_TYPE_OPTIONS}
-      />
+    <FilterPopover activeCount={activeCount} onClear={clearAll} columns={1} className="h-9">
+      <FilterField label="Type">
+        <FilterSelect
+          param="type"
+          placeholder="All types"
+          ariaLabel="Filter by task type"
+          options={TASK_TYPE_OPTIONS}
+          className="w-full"
+        />
+      </FilterField>
 
-      <FilterSelect
-        param="status"
-        placeholder="Open"
-        ariaLabel="Filter by status"
-        options={TASK_STATUS_OPTIONS.filter((o) => o.value !== "open")}
-      />
+      <FilterField label="Status">
+        <FilterSelect
+          param="status"
+          placeholder="Open"
+          ariaLabel="Filter by status"
+          options={TASK_STATUS_OPTIONS.filter((o) => o.value !== "open")}
+          className="w-full"
+        />
+      </FilterField>
 
-      <FilterSelect
-        param="due"
-        placeholder="Any due date"
-        ariaLabel="Filter by due window"
-        options={DUE_WINDOW_OPTIONS}
-      />
+      <FilterField label="Due">
+        <FilterSelect
+          param="due"
+          placeholder="Any due date"
+          ariaLabel="Filter by due window"
+          options={DUE_WINDOW_OPTIONS}
+          className="w-full"
+        />
+      </FilterField>
 
       {showAssigneeFilter && (
-        <FilterSelect
-          param="assignee"
-          placeholder="All assignees"
-          ariaLabel="Filter by assignee"
-          options={owners.map((o) => ({ value: o.id, label: o.name }))}
-        />
+        <FilterField label="Assignee">
+          <FilterSelect
+            param="assignee"
+            placeholder="All assignees"
+            ariaLabel="Filter by assignee"
+            options={owners.map((o) => ({ value: o.id, label: o.name }))}
+            className="w-full"
+          />
+        </FilterField>
       )}
 
-      <FilterToggleChip param="mine" label="Assigned to me" icon={<UserCheck />} />
-
-      <ClearFiltersButton keys={TASK_FILTER_KEYS} />
-    </FilterBar>
+      <FilterToggleChip param="mine" label="Assigned to me" icon={<UserCheck />} className="w-full justify-center" />
+    </FilterPopover>
   );
 }

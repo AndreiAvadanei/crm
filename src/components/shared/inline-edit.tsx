@@ -91,7 +91,11 @@ export function InlineInput({
         title="Click to edit"
         className={cn(triggerCls, align === "right" && "justify-end text-right", triggerClassName)}
       >
-        {display ?? (value ? value : <span className="text-muted-foreground">{placeholder}</span>)}
+        {/* Long, unbroken values (e.g. URLs) must truncate rather than overflow
+            the cell — min-w-0 lets the flex child shrink so `truncate` applies. */}
+        <span className="min-w-0 truncate">
+          {display ?? (value ? value : <span className="text-muted-foreground">{placeholder}</span>)}
+        </span>
       </button>
     );
   }

@@ -66,7 +66,13 @@ export async function fetchAnafCompany(rawCui: string): Promise<AnafCompany | nu
   const base = process.env.ANAF_API_BASE || "https://demoanaf.ro/api/company";
   try {
     const res = await fetch(`${base}/${cui}`, {
-      headers: { Accept: "application/json" },
+      // demoanaf.ro gates non-browser User-Agents behind an x402 paywall (402),
+      // so present a browser UA to keep the free lookup working.
+      headers: {
+        Accept: "application/json",
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+      },
       // Don't cache; the registry data changes and lookups are explicit.
       cache: "no-store",
       signal: AbortSignal.timeout(15_000),

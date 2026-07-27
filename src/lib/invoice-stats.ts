@@ -1,7 +1,11 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { invoiceVisibilityWhere } from "@/lib/rbac";
+import { computeInvoiceTotals } from "@/lib/invoice-totals";
+import { resolveInvoiceVatPercent } from "@/lib/invoice-vat";
 import { Prisma, InvoiceStatus, type User } from "@/generated/prisma";
+
+const numOrNull = (v: unknown): number | null => (v == null ? null : Number(v));
 
 export { INVOICE_STATUS_LABELS } from "@/lib/invoice-constants";
 
@@ -19,6 +23,10 @@ export interface InvoiceListOpts {
   to?: string;
   /** Only invoices with neither an issue nor an expected date set. */
   noDates?: boolean;
+  /** Only unpaid invoices (`paid = false`). */
+  unpaidOnly?: boolean;
+  /** When set with unpaid, only issued invoices at least this many days old (by issue date). */
+  unpaidMinDays?: number;
   /** Workflow tab: "to_invoice" (not issued) | "invoiced" (issued) | undefined (all). */
   tab?: InvoiceTab;
   /** Column to sort by (defaults to tab-aware smart ordering). */
@@ -94,11 +102,16 @@ export interface InvoiceRow {
   totalBaseAmount: number | null;
   vatAmount: number | null;
   unpaidAmount: number | null;
+  /** Base/total predicted from the articles when the stored amounts are missing. */
+  predictedBaseAmount: number | null;
+  predictedTotalAmount: number | null;
   issueDate: Date | null;
   expectedInvoiceDate: Date | null;
   paid: boolean;
   createdAt: Date;
   servicesDescription: string | null;
+  /** Comma-joined article descriptions (source of truth for the services column). */
+  articlesSummary: string | null;
   contractRef: string | null;
   fileUrls: string | null;
   issuerName: string | null;
@@ -168,6 +181,14 @@ async function buildInvoiceWhere(user: User, opts: InvoiceListOpts): Promise<Pri
       // "All dates": match either the issue or the expected date in the range.
       and.push({ OR: [{ issueDate: range }, { expectedInvoiceDate: range }] });
     }
+  }
+  const unpaidFilter = opts.unpaidOnly || (opts.unpaidMinDays != null && opts.unpaidMinDays > 0);
+  if (unpaidFilter) and.push({ paid: false });
+  if (opts.unpaidMinDays != null && opts.unpaidMinDays > 0) {
+    const cutoff = new Date();
+    cutoff.setUTCDate(cutoff.getUTCDate() - opts.unpaidMinDays);
+    cutoff.setUTCHours(23, 59, 59, 999);
+    and.push({ issueDate: { not: null, lte: cutoff } });
   }
   return { AND: and };
 }
@@ -267,11 +288,12 @@ export async function getPaginatedInvoices(user: User, opts: InvoiceListOpts): P
             iban: true,
             address: true,
             country: true,
+            tvaPercent: true,
           },
         },
         client: { select: { id: true, name: true } },
         deal: { select: { salesId: true } },
-        _count: { select: { lines: true } },
+        lines: { select: { serviceDescription: true, quantity: true, unitPrice: true, value: true } },
       },
     }),
     prisma.invoice.aggregate({ where, _sum: { totalAmount: true } }),
@@ -279,7 +301,18 @@ export async function getPaginatedInvoices(user: User, opts: InvoiceListOpts): P
   ]);
 
   return {
-    invoices: rows.map((i) => ({
+    invoices: rows.map((i) => {
+      // Predict amounts from the articles when the invoice has no stored base total.
+      const vatPercent = resolveInvoiceVatPercent(i, i.organization);
+      const lineInputs = i.lines.map((l) => ({
+        quantity: numOrNull(l.quantity),
+        unitPrice: numOrNull(l.unitPrice),
+        value: numOrNull(l.value),
+      }));
+      const predicted = i.lines.length ? computeInvoiceTotals(lineInputs, vatPercent) : null;
+      const articlesSummary =
+        i.lines.map((l) => l.serviceDescription).filter((s): s is string => !!s && s.trim().length > 0).join(", ") || null;
+      return {
       id: i.id,
       number: i.number,
       externalRef: i.externalRef,
@@ -296,16 +329,19 @@ export async function getPaginatedInvoices(user: User, opts: InvoiceListOpts): P
       totalBaseAmount: i.totalBaseAmount == null ? null : Number(i.totalBaseAmount),
       vatAmount: i.vatAmount == null ? null : Number(i.vatAmount),
       unpaidAmount: i.unpaidAmount == null ? null : Number(i.unpaidAmount),
+      predictedBaseAmount: predicted?.base ?? null,
+      predictedTotalAmount: predicted?.total ?? null,
       issueDate: i.issueDate,
       expectedInvoiceDate: i.expectedInvoiceDate,
       paid: i.paid,
       createdAt: i.createdAt,
       servicesDescription: i.servicesDescription,
+      articlesSummary,
       contractRef: i.contractRef,
       fileUrls: i.fileUrls,
       issuerName: i.issuerName,
       paymentTermDays: i.paymentTermDays,
-      articleCount: i._count.lines,
+      articleCount: i.lines.length,
       org: {
         legalName: i.organization.legalName,
         taxId: i.organization.taxId,
@@ -315,7 +351,8 @@ export async function getPaginatedInvoices(user: User, opts: InvoiceListOpts): P
         address: i.organization.address,
         country: i.organization.country,
       },
-    })),
+      };
+    }),
     total,
     page,
     pageSize: opts.pageSize,

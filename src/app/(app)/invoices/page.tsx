@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { clientVisibilityWhere, dealVisibilityWhere, isAdmin } from "@/lib/rbac";
 import { getPaginatedInvoices, getInvoiceTabCounts, getInvoiceIssuerTotals, type InvoiceTab } from "@/lib/invoice-stats";
 import { getActiveIssuers, getIssuerFilterNames } from "@/lib/issuers";
+import { resolveOrgVatPercent } from "@/lib/invoice-vat";
 import { getActiveSeries } from "@/lib/series";
 import { getActivePartNumbers } from "@/lib/part-number-catalog";
 import { InvoiceStatus } from "@/generated/prisma";
@@ -29,14 +30,20 @@ function parseStatus(v?: string): InvoiceStatus | undefined {
 export default async function InvoicesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; status?: string; client?: string; organization?: string; currency?: string; issuer?: string; dateField?: string; from?: string; to?: string; noDates?: string; tab?: string; sort?: string; dir?: string; page?: string }>;
+  searchParams: Promise<{ q?: string; status?: string; client?: string; organization?: string; currency?: string; issuer?: string; dateField?: string; from?: string; to?: string; noDates?: string; unpaid?: string; unpaidDays?: string; groupBy?: string; tab?: string; sort?: string; dir?: string; page?: string }>;
 }) {
   const user = await requireFullAuth();
-  const { q, status, client, organization, currency, issuer, dateField, from, to, noDates, tab, sort, dir, page } = await searchParams;
+  const { q, status, client, organization, currency, issuer, dateField, from, to, noDates, unpaid, unpaidDays, groupBy, tab, sort, dir, page } = await searchParams;
   const dateFieldOpt: "expected" | "issued" | undefined = dateField === "expected" || dateField === "issued" ? dateField : undefined;
   const noDatesOpt = noDates === "1";
+  const unpaidDaysOpt = (() => {
+    const n = Number.parseInt(unpaidDays ?? "", 10);
+    return Number.isFinite(n) && n > 0 ? n : undefined;
+  })();
+  const unpaidOnlyOpt = unpaid === "1" || unpaidDaysOpt != null;
   const tabOpt: InvoiceTab = tab === "invoiced" ? "invoiced" : "to_invoice";
   const dirOpt = dir === "asc" ? "asc" : dir === "desc" ? "desc" : undefined;
+  const groupByOrganization = groupBy === "organization";
 
   const filterOpts = {
     search: q,
@@ -49,6 +56,8 @@ export default async function InvoicesPage({
     from,
     to,
     noDates: noDatesOpt,
+    unpaidOnly: unpaidOnlyOpt,
+    unpaidMinDays: unpaidDaysOpt,
   };
 
   const [clientVis, dealVis] = await Promise.all([clientVisibilityWhere(user), dealVisibilityWhere(user)]);
@@ -66,7 +75,7 @@ export default async function InvoicesPage({
     prisma.organization.findMany({
       where: { client: clientVis },
       orderBy: { sourceName: "asc" },
-      select: { id: true, sourceName: true },
+      select: { id: true, sourceName: true, country: true, tvaPercent: true },
       take: LIST_FETCH_CAP,
     }),
     prisma.deal.findMany({
@@ -87,7 +96,12 @@ export default async function InvoicesPage({
   ]);
   const total = invoicePage.total;
   const currencies = currencyRows.map((r) => r.currency!).filter(Boolean).sort();
-  const orgOptions = orgs.map((o) => ({ id: o.id, name: o.sourceName }));
+  const orgOptions = orgs.map((o) => ({
+    id: o.id,
+    name: o.sourceName,
+    defaultVatPercent: resolveOrgVatPercent(o),
+    configuredTvaPercent: Number(o.tvaPercent) || 21,
+  }));
   const appliedOrgName = organization ? orgOptions.find((o) => o.id === organization)?.name ?? null : null;
 
   return (
@@ -125,19 +139,17 @@ export default async function InvoicesPage({
       </PageHeader>
 
       <div className="space-y-3 p-4 md:px-6 md:py-4">
-        <div className="flex flex-wrap items-center gap-3">
-          <InvoiceTabs tab={tabOpt} toInvoiceCount={tabCounts.toInvoice} invoicedCount={tabCounts.invoiced} />
-          <IssuerTotals totals={issuerTotals} />
-        </div>
         <div className="flex flex-wrap items-center gap-2">
-          <SearchInput placeholder="Search number, SAL, services…" className="h-8" />
+          <InvoiceTabs tab={tabOpt} toInvoiceCount={tabCounts.toInvoice} invoicedCount={tabCounts.invoiced} />
+          <SearchInput placeholder="Search number, SAL, services…" wrapperClassName="w-full sm:max-w-xs" />
           <InvoiceFilters currencies={currencies} issuers={issuerNames} appliedOrgName={appliedOrgName} tab={tabOpt} />
         </div>
-        <InvoicesTable invoices={invoicePage.invoices} canManage deals={deals} />
+        <IssuerTotals totals={issuerTotals} />
+        <InvoicesTable invoices={invoicePage.invoices} canManage deals={deals} groupByOrganization={groupByOrganization} />
         {total > CLIENTS_PAGE_SIZE && (
           <Pagination
             pathname="/invoices"
-            params={{ q, status, client, organization, currency, issuer, dateField, from, to, noDates, tab, sort, dir, page }}
+            params={{ q, status, client, organization, currency, issuer, dateField, from, to, noDates, unpaid: unpaidOnlyOpt ? "1" : undefined, unpaidDays: unpaidDaysOpt != null ? String(unpaidDaysOpt) : undefined, groupBy: groupByOrganization ? "organization" : undefined, tab, sort, dir, page }}
             page={invoicePage.page}
             total={total}
             pageSize={invoicePage.pageSize}

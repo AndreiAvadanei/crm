@@ -5,14 +5,14 @@ import { cn } from "@/lib/utils";
 
 type PaginationParams = Record<string, string | undefined>;
 
-function pageHref(pathname: string, params: PaginationParams, page: number): string {
+function pageHref(pathname: string, params: PaginationParams, pageParam: string, page: number): string {
   const sp = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (value) sp.set(key, value);
   }
 
-  if (page <= 1) sp.delete("page");
-  else sp.set("page", String(page));
+  if (page <= 1) sp.delete(pageParam);
+  else sp.set(pageParam, String(page));
 
   const qs = sp.toString();
   return qs ? `${pathname}?${qs}` : pathname;
@@ -26,6 +26,7 @@ export function Pagination({
   pageSize,
   itemLabel,
   className,
+  pageParam = "page",
 }: {
   pathname: string;
   params: PaginationParams;
@@ -34,6 +35,8 @@ export function Pagination({
   pageSize: number;
   itemLabel: string;
   className?: string;
+  /** URL param that carries the page number (defaults to `page`). */
+  pageParam?: string;
 }) {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const start = total === 0 ? 0 : (page - 1) * pageSize + 1;
@@ -58,7 +61,7 @@ export function Pagination({
           </Button>
         ) : (
           <Button asChild variant="outline" size="sm">
-            <Link href={pageHref(pathname, params, previousPage)}>
+            <Link href={pageHref(pathname, params, pageParam, previousPage)}>
               <ChevronLeft /> Previous
             </Link>
           </Button>
@@ -72,7 +75,7 @@ export function Pagination({
           </Button>
         ) : (
           <Button asChild variant="outline" size="sm">
-            <Link href={pageHref(pathname, params, nextPage)}>
+            <Link href={pageHref(pathname, params, pageParam, nextPage)}>
               Next <ChevronRight />
             </Link>
           </Button>

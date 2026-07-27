@@ -268,7 +268,8 @@ export async function previewOrganizationsImportAction(
 
   try {
     const buffer = Buffer.from(await file.arrayBuffer());
-    const result = await previewOrganizationsFromBuffer(buffer);
+    const defaultTvaPercent = await getDefaultOrganizationTvaPercent();
+    const result = await previewOrganizationsFromBuffer(buffer, { defaultTvaPercent });
     return { ok: true, result };
   } catch (e) {
     return { error: `Previzualizare eșuată: ${(e as Error).message}` };

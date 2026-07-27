@@ -1,0 +1,10 @@
+- de facut maparea facturile cu part numbers
+- de facut migrare
+- trebuie testat tot flow-ul de emis facturi
+- de verificat facturarea recurenta
+- de verificat cashflow-urile
+- de adus recurentele din proiectul vechi aici
+- filtru pentru unpaid invoices for more than xx days
+
+- poate facem si remindere la clienti sa plateasca
+- de importat in cashflow datele din platforma asta de acum nu din excel

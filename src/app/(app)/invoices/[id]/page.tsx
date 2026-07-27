@@ -15,6 +15,8 @@ import { DeleteButton } from "@/components/shared/delete-button";
 import { getActiveIssuers } from "@/lib/issuers";
 import { getActiveSeries } from "@/lib/series";
 import { getActivePartNumbers } from "@/lib/part-number-catalog";
+import { computeInvoiceTotals } from "@/lib/invoice-totals";
+import { resolveInvoiceVatPercent, resolveOrgVatPercent } from "@/lib/invoice-vat";
 import { SagaXmlDownloadButton } from "@/components/invoices/saga-xml-button";
 import { InvoiceFormDialog, type InvoiceData } from "@/components/invoices/invoice-form-dialog";
 import { GenerateInvoiceDialog } from "@/components/invoices/generate-invoice-dialog";
@@ -38,6 +40,10 @@ function fmtAmount(value: number | null, currency: string | null): string {
   } catch {
     return `${value.toFixed(2)} ${currency ?? ""}`.trim();
   }
+}
+
+function amountTone(value: number | null | undefined): string {
+  return value != null && value < 0 ? "text-destructive" : "";
 }
 
 function asOriginalValues(value: unknown): Record<string, unknown> {
@@ -96,10 +102,28 @@ export default async function InvoiceDetailPage({ params }: Props) {
 
   const admin = isAdmin(user);
   const canManage = admin || invoice.organization.client.ownerId === user.id;
-  const total = invoice.totalAmount == null ? null : Number(invoice.totalAmount);
-  const totalBase = invoice.totalBaseAmount == null ? null : Number(invoice.totalBaseAmount);
-  const vatAmount = invoice.vatAmount == null ? null : Number(invoice.vatAmount);
+  // Articles are the source of truth: predict amounts when the stored totals are missing.
+  const vatPercent = resolveInvoiceVatPercent(invoice, invoice.organization);
+  const predicted = invoice.lines.length
+    ? computeInvoiceTotals(
+        invoice.lines.map((l) => ({
+          quantity: l.quantity == null ? null : Number(l.quantity),
+          unitPrice: l.unitPrice == null ? null : Number(l.unitPrice),
+          value: l.value == null ? null : Number(l.value),
+        })),
+        vatPercent
+      )
+    : null;
+  const storedTotal = invoice.totalAmount == null ? null : Number(invoice.totalAmount);
+  const storedBase = invoice.totalBaseAmount == null ? null : Number(invoice.totalBaseAmount);
+  const storedVat = invoice.vatAmount == null ? null : Number(invoice.vatAmount);
+  const total = storedTotal ?? predicted?.total ?? null;
+  const totalBase = storedBase ?? predicted?.base ?? null;
+  const vatAmount = storedVat ?? predicted?.vat ?? null;
+  const isPredicted = storedBase == null && predicted != null;
   const unpaidAmount = invoice.unpaidAmount == null ? null : Number(invoice.unpaidAmount);
+  const articlesSummary =
+    invoice.lines.map((l) => l.serviceDescription).filter((s): s is string => !!s && s.trim().length > 0).join(", ") || null;
   const issueDateInput = invoice.issueDate ? invoice.issueDate.toISOString().slice(0, 10) : null;
   const original = asOriginalValues(invoice.originalValues);
 
@@ -108,7 +132,7 @@ export default async function InvoiceDetailPage({ params }: Props) {
         prisma.organization.findMany({
           where: { client: clientVis },
           orderBy: { sourceName: "asc" },
-          select: { id: true, sourceName: true },
+          select: { id: true, sourceName: true, country: true, tvaPercent: true },
           take: LIST_FETCH_CAP,
         }),
         prisma.deal.findMany({
@@ -131,7 +155,6 @@ export default async function InvoiceDetailPage({ params }: Props) {
     status: invoice.status,
     currency: invoice.currency,
     totalAmount: total,
-    amountRaw: invoice.amountRaw,
     paymentTermDays: invoice.paymentTermDays,
     issueDate: issueDateInput,
     expectedInvoiceDate: invoice.expectedInvoiceDate ? invoice.expectedInvoiceDate.toISOString().slice(0, 10) : null,
@@ -142,10 +165,10 @@ export default async function InvoiceDetailPage({ params }: Props) {
     relatedInvoiceId: invoice.relatedInvoiceId,
     selfIssued: invoice.selfIssued,
     seriesId: invoice.seriesId,
-    servicesDescription: invoice.servicesDescription,
     contractRef: invoice.contractRef,
     fileUrls: invoice.fileUrls,
     paid: invoice.paid,
+    vatPercent,
     lines: invoice.lines.map((line) => ({
       serviceDescription: line.serviceDescription ?? "",
       textSupplement: line.textSupplement ?? "",
@@ -177,11 +200,15 @@ export default async function InvoiceDetailPage({ params }: Props) {
                   clientName: invoice.client?.name ?? invoice.organization.client.name,
                   salesId: formData.salesId,
                   issuerName: invoice.issuerName,
-                  amountRaw: invoice.amountRaw,
-                  totalAmount: total,
+                  totalBaseAmount: storedBase,
+                  vatAmount: storedVat,
+                  totalAmount: storedTotal,
+                  predictedBaseAmount: predicted?.base ?? null,
+                  predictedTotalAmount: predicted?.total ?? null,
+                  articlesSummary,
+                  articleCount: invoice.lines.length,
                   currency: invoice.currency,
                   paymentTermDays: invoice.paymentTermDays,
-                  servicesDescription: invoice.servicesDescription,
                   org: {
                     legalName: invoice.organization.legalName,
                     taxId: invoice.organization.taxId,
@@ -198,7 +225,12 @@ export default async function InvoiceDetailPage({ params }: Props) {
             <SagaXmlDownloadButton invoiceId={invoice.id} />
             <InvoiceFormDialog
               invoice={formData}
-              organizations={orgs.map((o) => ({ id: o.id, name: o.sourceName }))}
+              organizations={orgs.map((o) => ({
+                id: o.id,
+                name: o.sourceName,
+                defaultVatPercent: resolveOrgVatPercent(o),
+                configuredTvaPercent: Number(o.tvaPercent) || 21,
+              }))}
               deals={deals}
               issuers={issuers}
               series={seriesList}
@@ -228,7 +260,7 @@ export default async function InvoiceDetailPage({ params }: Props) {
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
               <Row label="Status"><Badge variant={invoiceStatusVariant(invoice.status)}>{INVOICE_STATUS_LABELS[invoice.status]}</Badge></Row>
-              <Row label="Total">{fmtAmount(total, invoice.currency)}</Row>
+              <Row label="Total"><span className={amountTone(total)}>{fmtAmount(total, invoice.currency)}</span></Row>
               <Row label="Currency">{invoice.currency ?? "—"}</Row>
               <Row label="Issue date">{formatDate(invoice.issueDate)}</Row>
               <Row label="Expected to invoice">{formatDate(invoice.expectedInvoiceDate)}</Row>
@@ -308,11 +340,19 @@ export default async function InvoiceDetailPage({ params }: Props) {
               <Detail label="Invoice number" values={original} keys={["nr_iesire"]}>{invoice.number ?? "—"}</Detail>
               <Detail label="Issued date" values={original} keys={["data"]}>{formatDate(invoice.issueDate)}</Detail>
               <Detail label="Currency" values={original} keys={["cod_valuta"]}>{invoice.currency ?? "—"}</Detail>
-              <Detail label="Base total" values={original} keys={["baza_tva", "total"]}>{fmtAmount(totalBase, invoice.currency)}</Detail>
+              <Detail label="Base total" values={original} keys={["baza_tva", "total"]}>
+                <span className={amountTone(totalBase)}>
+                  {fmtAmount(totalBase, invoice.currency)}{isPredicted && totalBase != null ? " (predicted)" : ""}
+                </span>
+              </Detail>
               <Detail label="VAT" values={original} keys={["tva", "tva_val"]}>{fmtAmount(vatAmount, invoice.currency)}</Detail>
-              <Detail label="Total" values={original} keys={["total", "baza_tva"]}>{fmtAmount(total, invoice.currency)}</Detail>
+              <Detail label="Total" values={original} keys={["total", "baza_tva"]}>
+                <span className={amountTone(total)}>
+                  {fmtAmount(total, invoice.currency)}{isPredicted && total != null ? " (predicted)" : ""}
+                </span>
+              </Detail>
               <Detail label="Outstanding" values={original} keys={["neachitat"]}>
-                {invoice.paid ? "Paid" : fmtAmount(unpaidAmount, invoice.currency)}
+                {invoice.paid ? "Paid" : <span className={amountTone(unpaidAmount)}>{fmtAmount(unpaidAmount, invoice.currency)}</span>}
               </Detail>
               <Detail label="Payment term" values={original} keys={["scadent"]}>
                 {invoice.paymentTermDays != null ? `${invoice.paymentTermDays} days` : "—"}
@@ -331,16 +371,10 @@ export default async function InvoiceDetailPage({ params }: Props) {
               <Detail label="Expected to invoice">{formatDate(invoice.expectedInvoiceDate)}</Detail>
               <Detail label="Issuer">{invoice.issuerName ?? "—"}</Detail>
               <Detail label="Created by">{invoice.createdByName ?? "—"}</Detail>
-              <Detail label="Amount note">{invoice.amountRaw ?? "—"}</Detail>
               <Detail label="Contract reference">{invoice.contractRef ?? "—"}</Detail>
-              <div>
-                <div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Requested services</div>
-                {invoice.servicesDescription ? (
-                  <p className="whitespace-pre-wrap rounded-md bg-muted/30 p-3">{invoice.servicesDescription}</p>
-                ) : (
-                  <p className="text-muted-foreground">No description.</p>
-                )}
-              </div>
+              <p className="text-xs text-muted-foreground">
+                Services and amounts are taken from the articles below.
+              </p>
             </CardContent>
           </Card>
 
@@ -396,13 +430,13 @@ export default async function InvoiceDetailPage({ params }: Props) {
                             </span>
                           </TableCell>
                           <TableCell className="text-right tabular-nums">
-                            <span className="inline-flex items-center justify-end gap-1">
+                            <span className={`inline-flex items-center justify-end gap-1 ${amountTone(decimalNumber(line.value))}`}>
                               {fmtAmount(decimalNumber(line.value), invoice.currency)}
                               <OriginalInfo values={lineOriginal} keys={["valoare"]} />
                             </span>
                           </TableCell>
                           <TableCell className="text-right tabular-nums">
-                            <span className="inline-flex items-center justify-end gap-1">
+                            <span className={`inline-flex items-center justify-end gap-1 ${amountTone(decimalNumber(line.total))}`}>
                               {fmtAmount(decimalNumber(line.total), invoice.currency)}
                               <OriginalInfo values={lineOriginal} keys={["total1"]} />
                             </span>
