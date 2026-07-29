@@ -391,6 +391,8 @@ function DealTableRow({
               onDelete={() => deleteDealAction(d.id)}
               onDeleted={() => router.refresh()}
               idleTitle="Delete deal"
+              title="Delete deal?"
+              description="Tasks, comments and files will be hidden with the deal."
             />
           )}
         </div>

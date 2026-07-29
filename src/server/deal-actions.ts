@@ -293,10 +293,12 @@ export async function deleteDealAction(dealId: string): Promise<Result> {
     include: { stage: true, client: true },
   });
   if (!deal) return { error: "Not found." };
+  if (deal.deletedAt) return { error: "Not found." };
   if (!isAdmin(user) && deal.ownerId !== user.id) return { error: "Not allowed." };
-  const atts = await prisma.attachment.findMany({ where: { dealId } });
-  await Promise.all(atts.map((a) => deleteFile(a.storageKey)));
-  await prisma.deal.delete({ where: { id: dealId } });
+  // Soft delete: mark the deal hidden but keep it (and its tasks, comments,
+  // files and invoices) in the database. Attachment files are intentionally
+  // preserved so the deal can be restored later.
+  await prisma.deal.update({ where: { id: dealId }, data: { deletedAt: new Date() } });
   // For deletes, surface the key values that were removed ("value → —").
   const changes = changeList(
     diffCurrency("amount", "Amount", deal.amountEur != null ? Number(deal.amountEur) : null, null),

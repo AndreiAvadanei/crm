@@ -199,13 +199,13 @@ export default async function DashboardPage({
       }),
       prisma.deal.findMany({
         // Open deals (not won/lost closed) that I own.
-        where: { ownerId: user.id, closedAt: null, dueDate: { lt: today } },
+        where: { ownerId: user.id, closedAt: null, deletedAt: null, dueDate: { lt: today } },
         include: dealInclude,
         orderBy: { dueDate: "asc" },
         take: HOME_CAP,
       }),
       prisma.deal.findMany({
-        where: { ownerId: user.id, closedAt: null, dueDate: { gte: today, lt: in7Days } },
+        where: { ownerId: user.id, closedAt: null, deletedAt: null, dueDate: { gte: today, lt: in7Days } },
         include: dealInclude,
         orderBy: { dueDate: "asc" },
         take: HOME_CAP,

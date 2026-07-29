@@ -17,6 +17,7 @@ import { useToast } from "@/components/ui/toast";
 export function DeleteButton({
   onDelete,
   redirectTo,
+  back = false,
   label = "Delete",
   title = "Delete this item?",
   description = "This action cannot be undone.",
@@ -25,6 +26,11 @@ export function DeleteButton({
 }: {
   onDelete: () => Promise<{ ok?: boolean; error?: string }>;
   redirectTo?: string;
+  // When true, close by navigating back instead of pushing `redirectTo`. Used
+  // for the deal modal so deleting dismisses the dialog and returns to the list
+  // (with its filters intact) rather than refreshing the now-deleted route,
+  // which would render a 404.
+  back?: boolean;
   label?: string;
   title?: string;
   description?: string;
@@ -43,6 +49,12 @@ export function DeleteButton({
     if (res?.error) return toast({ title: res.error, variant: "error" });
     toast({ title: "Deleted", variant: "success" });
     setOpen(false);
+    // `back` closes the modal without refreshing the deleted route (the delete
+    // action already revalidates the list). Otherwise redirect + refresh.
+    if (back) {
+      router.back();
+      return;
+    }
     if (redirectTo) router.push(redirectTo);
     router.refresh();
   }

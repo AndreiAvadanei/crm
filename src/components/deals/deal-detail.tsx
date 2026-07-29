@@ -229,7 +229,8 @@ export async function DealDetail({
       {canDelete && (
         <DeleteButton
           variant="outline"
-          redirectTo="/deals"
+          redirectTo={variant === "modal" ? undefined : "/deals"}
+          back={variant === "modal"}
           onDelete={deleteDealAction.bind(null, deal.id)}
           title="Delete deal?"
           description="Tasks, comments and files will be removed."

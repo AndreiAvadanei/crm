@@ -190,7 +190,8 @@ function DealCard({
               onDelete={onDelete}
               onDeleted={onDeleted}
               idleTitle="Delete deal"
-              confirmLabel="Sure?"
+              title="Delete deal?"
+              description="Tasks, comments and files will be hidden with the deal."
             />
           )}
           {interactive && canShare && shareUsers && (

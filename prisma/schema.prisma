@@ -235,6 +235,9 @@ model Deal {
   boardOrder  Int       @default(0)
   dueDate     DateTime?
   closedAt    DateTime?
+  // Soft-delete marker: non-null means the deal is hidden from all views but
+  // retained in the database. Never hard-deleted via the UI.
+  deletedAt   DateTime?
   tags        Tag[]     @relation("DealTags")
   tasks       Task[]
   comments    Comment[]
@@ -247,6 +250,7 @@ model Deal {
   @@index([ownerId])
   @@index([stageId])
   @@index([createdAt])
+  @@index([deletedAt])
 }
 
 model Task {

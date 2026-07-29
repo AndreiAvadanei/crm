@@ -1,128 +1,103 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type SyntheticEvent } from "react";
+import { useState, type SyntheticEvent } from "react";
 import { Loader2, Trash2 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 
 /**
- * Inline delete control with a two-step confirmation. The first click "arms"
- * the button, showing an "Are you sure?" confirm state that stays disabled for
- * `confirmDelayMs` (default 2s) — a deliberate cooling-off window so the delete
- * can't be fired by accident. A live countdown ticks down; once it reaches zero
- * the confirm becomes clickable and the second click runs the delete. All
- * pointer/click events are stopped so it can live safely inside draggable /
- * linked containers.
+ * Inline delete control that opens an "Are you sure?" confirmation dialog before
+ * running the delete. The trigger stays a small icon button so it can live in
+ * dense rows / cards; all pointer/click events on it are stopped so it works
+ * safely inside draggable or linked containers. The dialog itself is portaled,
+ * so its buttons never bubble back into those containers.
  */
 export function ConfirmDeleteButton({
   onDelete,
   onDeleted,
-  confirmDelayMs = 2000,
   idleTitle = "Delete",
-  confirmLabel = "Are you sure?",
+  title = "Delete this item?",
+  description = "This action cannot be undone.",
+  confirmLabel = "Delete",
   className,
   iconClassName,
 }: {
   onDelete: () => Promise<{ ok?: boolean; error?: string }>;
   onDeleted?: () => void;
-  confirmDelayMs?: number;
   idleTitle?: string;
+  title?: string;
+  description?: string;
   confirmLabel?: string;
   className?: string;
   iconClassName?: string;
 }) {
   const { toast } = useToast();
-  const [confirming, setConfirming] = useState(false);
+  const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  // Seconds left before the confirm becomes clickable (0 = ready).
-  const [secondsLeft, setSecondsLeft] = useState(0);
-  const interval = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const clearTimer = useCallback(() => {
-    if (interval.current) {
-      clearInterval(interval.current);
-      interval.current = null;
-    }
-  }, []);
-
-  useEffect(() => clearTimer, [clearTimer]);
 
   const stop = (e: SyntheticEvent) => {
     e.preventDefault();
     e.stopPropagation();
   };
 
-  async function handleClick(e: SyntheticEvent) {
+  async function confirm(e: SyntheticEvent) {
     stop(e);
     if (busy) return;
-
-    // First click: arm the confirm state and start the cooling-off countdown.
-    if (!confirming) {
-      const total = Math.ceil(confirmDelayMs / 1000);
-      setConfirming(true);
-      setSecondsLeft(total);
-      clearTimer();
-      interval.current = setInterval(() => {
-        setSecondsLeft((s) => {
-          if (s <= 1) {
-            clearTimer();
-            return 0;
-          }
-          return s - 1;
-        });
-      }, 1000);
-      return;
-    }
-
-    // Armed but still in the cooling-off window — ignore clicks.
-    if (secondsLeft > 0) return;
-
-    // Second click (armed + ready): perform the delete.
-    clearTimer();
     setBusy(true);
     const res = await onDelete();
     setBusy(false);
     if (res?.error) {
-      setConfirming(false);
       toast({ title: res.error, variant: "error" });
       return;
     }
+    setOpen(false);
     toast({ title: "Deleted", variant: "success" });
     onDeleted?.();
   }
 
-  if (confirming) {
-    const waiting = secondsLeft > 0;
-    return (
+  return (
+    <>
       <button
         type="button"
         onPointerDown={stop}
-        onClick={handleClick}
-        disabled={busy || waiting}
-        title={waiting ? `Wait ${secondsLeft}s…` : `${confirmLabel} — click to delete`}
+        onClick={(e) => {
+          stop(e);
+          setOpen(true);
+        }}
+        title={idleTitle}
         className={cn(
-          "flex items-center gap-1 rounded bg-destructive px-1.5 py-0.5 text-[11px] font-semibold text-destructive-foreground transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60",
+          "rounded p-1 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive",
           className
         )}
       >
-        {busy ? <Loader2 className={cn("h-3 w-3 animate-spin", iconClassName)} /> : <Trash2 className={cn("h-3 w-3", iconClassName)} />}
-        {waiting ? `${confirmLabel} (${secondsLeft})` : confirmLabel}
+        <Trash2 className={cn("h-3.5 w-3.5", iconClassName)} />
       </button>
-    );
-  }
 
-  return (
-    <button
-      type="button"
-      onPointerDown={stop}
-      onClick={handleClick}
-      title={idleTitle}
-      className={cn(
-        "rounded p-1 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive",
-        className
-      )}
-    >
-      <Trash2 className={cn("h-3.5 w-3.5", iconClassName)} />
-    </button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-sm" onClick={stop} onPointerDown={stop}>
+          <DialogHeader>
+            <DialogTitle>{title}</DialogTitle>
+            <DialogDescription>{description}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={(e) => { stop(e); setOpen(false); }} disabled={busy}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={confirm} disabled={busy}>
+              {busy && <Loader2 className="h-4 w-4 animate-spin" />} {confirmLabel}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

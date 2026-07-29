@@ -32,7 +32,7 @@ export default async function ImportPage() {
   }
 
   const [dealCount, clientCount, taskCount] = await Promise.all([
-    prisma.deal.count(),
+    prisma.deal.count({ where: { deletedAt: null } }),
     prisma.client.count(),
     prisma.task.count(),
   ]);

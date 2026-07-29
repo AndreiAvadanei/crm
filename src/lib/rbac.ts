@@ -34,12 +34,13 @@ async function scopeForUser(user: User, subject: "DEAL" | "CLIENT") {
 }
 
 export async function dealVisibilityWhere(user: User): Promise<Prisma.DealWhereInput> {
-  if (isAdmin(user)) return {};
+  // Soft-deleted deals are hidden from every view, for admins and sales alike.
+  if (isAdmin(user)) return { deletedAt: null };
   const { sharedIds, ruleConditions } = await scopeForUser(user, "DEAL");
   const or: Prisma.DealWhereInput[] = [{ ownerId: user.id }];
   if (sharedIds.length) or.push({ id: { in: sharedIds } });
   for (const c of ruleConditions) or.push(c as Prisma.DealWhereInput);
-  return { OR: or };
+  return { deletedAt: null, OR: or };
 }
 
 export async function clientVisibilityWhere(user: User): Promise<Prisma.ClientWhereInput> {
@@ -78,7 +79,8 @@ export async function canViewInvoice(user: User, invoiceId: string): Promise<boo
 }
 
 export async function canViewDeal(user: User, dealId: string): Promise<boolean> {
-  if (isAdmin(user)) return true;
+  // `dealVisibilityWhere` already excludes soft-deleted deals (including for
+  // admins), so a deleted deal is never viewable — it resolves to a 404.
   const where = await dealVisibilityWhere(user);
   const found = await prisma.deal.findFirst({ where: { AND: [{ id: dealId }, where] }, select: { id: true } });
   return !!found;
