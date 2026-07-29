@@ -483,23 +483,27 @@ function heatStyle(value: number, max: number): React.CSSProperties {
   return { backgroundColor: `color-mix(in oklab, var(--success) ${Math.round(8 + ratio * 55)}%, transparent)` };
 }
 
-// Badge styling that gets progressively "hotter" the longer a client has been
-// inactive: active (green) -> 1yr (amber) -> 2yr (orange) -> 3-4yr (red) -> 5yr+ (deep red).
-function inactivityBadge(years: number): { className: string; label: string } {
-  if (years <= 0) return { className: "bg-[var(--success)]/15 text-[var(--success)]", label: "active" };
-  if (years === 1) return { className: "bg-amber-500/15 text-amber-600 dark:text-amber-400", label: "1 yr" };
-  if (years === 2) return { className: "bg-orange-500/20 text-orange-600 dark:text-orange-400", label: "2 yr" };
-  if (years <= 4) return { className: "bg-red-500/20 text-red-600 dark:text-red-400", label: `${years} yr` };
-  return { className: "bg-red-600/30 text-red-700 dark:text-red-300", label: `${years} yr` };
+// Inactivity buckets that get progressively "hotter" the longer a client has
+// been inactive: active (green) -> 1yr (amber) -> 2yr (orange) -> 3-4yr (red) ->
+// 5yr+ (deep red). Each bucket owns a matcher so the legend, the per-row badge
+// and the click-to-filter logic all stay in sync.
+type InactivityBucket = { id: string; label: string; className: string; match: (years: number) => boolean };
+
+const INACTIVITY_BUCKETS: InactivityBucket[] = [
+  { id: "active", label: "Active", className: "bg-[var(--success)]/15 text-[var(--success)]", match: (y) => y <= 0 },
+  { id: "1", label: "1 yr", className: "bg-amber-500/15 text-amber-600 dark:text-amber-400", match: (y) => y === 1 },
+  { id: "2", label: "2 yr", className: "bg-orange-500/20 text-orange-600 dark:text-orange-400", match: (y) => y === 2 },
+  { id: "3-4", label: "3–4 yr", className: "bg-red-500/20 text-red-600 dark:text-red-400", match: (y) => y >= 3 && y <= 4 },
+  { id: "5+", label: "5+ yr", className: "bg-red-600/30 text-red-700 dark:text-red-300", match: (y) => y >= 5 },
+];
+
+function bucketFor(years: number): InactivityBucket {
+  return INACTIVITY_BUCKETS.find((b) => b.match(years)) ?? INACTIVITY_BUCKETS[0];
 }
 
-const INACTIVITY_LEGEND: { label: string; className: string }[] = [
-  { label: "Active", className: "bg-[var(--success)]/15 text-[var(--success)]" },
-  { label: "1 yr", className: "bg-amber-500/15 text-amber-600 dark:text-amber-400" },
-  { label: "2 yr", className: "bg-orange-500/20 text-orange-600 dark:text-orange-400" },
-  { label: "3–4 yr", className: "bg-red-500/20 text-red-600 dark:text-red-400" },
-  { label: "5+ yr", className: "bg-red-600/30 text-red-700 dark:text-red-300" },
-];
+function inactivityBadge(years: number): { className: string; label: string } {
+  return { className: bucketFor(years).className, label: years <= 0 ? "active" : `${years} yr` };
+}
 
 type Convert = (amount: number, currency: string) => number;
 
@@ -658,6 +662,7 @@ function ClientActivityMatrix({
   const [onlyInactive, setOnlyInactive] = React.useState(false);
   const [showAll, setShowAll] = React.useState(false);
   const [yearsToShow, setYearsToShow] = React.useState<number | "all">("all");
+  const [inactivityFilter, setInactivityFilter] = React.useState<string | null>(null);
 
   const LIMIT = 60;
 
@@ -697,6 +702,9 @@ function ClientActivityMatrix({
 
   const sorted = React.useMemo(() => {
     let list = rows;
+    if (inactivityFilter) {
+      list = list.filter((r) => bucketFor(Math.max(0, latestYear - r.lastActive)).id === inactivityFilter);
+    }
     if (typeof sortBy === "number" && onlyInactive) {
       list = list.filter((r) => (r.byYear.get(sortBy) ?? 0) <= 0);
     }
@@ -710,7 +718,7 @@ function ClientActivityMatrix({
     }
     const metric = (r: Row) => (sortBy === "total" ? r.total : r.byYear.get(sortBy) ?? 0);
     return [...list].sort((a, b) => metric(b) - metric(a));
-  }, [rows, sortBy, onlyInactive, latestYear]);
+  }, [rows, sortBy, onlyInactive, latestYear, inactivityFilter]);
 
   const filtered = React.useMemo(
     () => (showAll ? sorted : sorted.slice(0, LIMIT)),
@@ -776,11 +784,35 @@ function ClientActivityMatrix({
             </label>
           )}
           <div className="flex items-center gap-1.5">
-            {INACTIVITY_LEGEND.map((l) => (
-              <span key={l.label} className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${l.className}`}>
-                {l.label}
-              </span>
-            ))}
+            {INACTIVITY_BUCKETS.map((b) => {
+              const active = inactivityFilter === b.id;
+              return (
+                <button
+                  key={b.id}
+                  type="button"
+                  onClick={() => setInactivityFilter(active ? null : b.id)}
+                  title={`Show only clients inactive ${b.label}`}
+                  className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium transition ${b.className} ${
+                    active
+                      ? "ring-2 ring-inset ring-[var(--ring)]"
+                      : inactivityFilter
+                        ? "opacity-40 hover:opacity-100"
+                        : "hover:opacity-80"
+                  }`}
+                >
+                  {b.label}
+                </button>
+              );
+            })}
+            {inactivityFilter && (
+              <button
+                type="button"
+                onClick={() => setInactivityFilter(null)}
+                className="text-[10px] text-muted-foreground underline underline-offset-2"
+              >
+                clear
+              </button>
+            )}
           </div>
         </div>
       </CardHeader>
@@ -807,10 +839,19 @@ function ClientActivityMatrix({
                   <td className="px-2 py-1.5">
                     {(() => {
                       const badge = inactivityBadge(inactiveYears);
+                      const bucket = bucketFor(inactiveYears);
+                      const active = inactivityFilter === bucket.id;
                       return (
-                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${badge.className}`}>
+                        <button
+                          type="button"
+                          onClick={() => setInactivityFilter(active ? null : bucket.id)}
+                          title={`Filter by ${bucket.label} inactive`}
+                          className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium transition hover:ring-2 hover:ring-inset hover:ring-[var(--ring)] ${badge.className} ${
+                            active ? "ring-2 ring-inset ring-[var(--ring)]" : ""
+                          }`}
+                        >
                           {badge.label}
-                        </span>
+                        </button>
                       );
                     })()}
                   </td>
@@ -832,9 +873,10 @@ function ClientActivityMatrix({
           </tbody>
         </table>
         <p className="mt-3 text-xs text-muted-foreground">
-          {showAll || sorted.length <= LIMIT
+          {(showAll || sorted.length <= LIMIT
             ? `Showing all ${filtered.length} clients by the selected metric.`
-            : `Showing top ${LIMIT} of ${sorted.length} clients by the selected metric.`}
+            : `Showing top ${LIMIT} of ${sorted.length} clients by the selected metric.`) +
+            (inactivityFilter ? ` Filtered to ${INACTIVITY_BUCKETS.find((b) => b.id === inactivityFilter)?.label ?? ""} inactive.` : "")}
         </p>
       </CardContent>
     </Card>
