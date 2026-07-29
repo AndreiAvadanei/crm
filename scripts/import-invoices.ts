@@ -217,6 +217,7 @@ async function main() {
   }
 
   let created = 0, updated = 0;
+  const skippedDup: string[] = [];
   for (const rec of records) {
     const { externalRecordId, ...rest } = rec;
     const payload = {
@@ -227,12 +228,27 @@ async function main() {
     if (existing) {
       await prisma.invoice.update({ where: { externalRecordId }, data: payload });
       updated++;
-    } else {
-      await prisma.invoice.create({ data: { externalRecordId, ...payload } });
-      created++;
+      continue;
     }
+    // Guard against double-importing an invoice that already exists from another
+    // source (e.g. the SAGA XLS importer keys on `accounting:{number}` while this
+    // importer keys on the Airtable Record ID). Match by invoice number so we
+    // don't create a second row for the same physical invoice.
+    if (rest.number) {
+      const byNumber = await prisma.invoice.findFirst({
+        where: { number: rest.number },
+        select: { id: true, externalRecordId: true },
+      });
+      if (byNumber) {
+        skippedDup.push(`${rest.number} (existing: ${byNumber.externalRecordId})`);
+        continue;
+      }
+    }
+    await prisma.invoice.create({ data: { externalRecordId, ...payload } });
+    created++;
   }
-  console.log(`\nCommitted. Created: ${created}  Updated: ${updated}`);
+  console.log(`\nCommitted. Created: ${created}  Updated: ${updated}  Skipped (duplicate number): ${skippedDup.length}`);
+  if (skippedDup.length) console.log(`  ${skippedDup.join("\n  ")}`);
   await prisma.$disconnect();
 }
 

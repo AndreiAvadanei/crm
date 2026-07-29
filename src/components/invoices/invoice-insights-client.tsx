@@ -657,8 +657,29 @@ function ClientActivityMatrix({
   const [sortBy, setSortBy] = React.useState<number | "total" | "inactive">("total");
   const [onlyInactive, setOnlyInactive] = React.useState(false);
   const [showAll, setShowAll] = React.useState(false);
+  const [yearsToShow, setYearsToShow] = React.useState<number | "all">("all");
 
   const LIMIT = 60;
+
+  // Most-recent N years to render as columns. Totals / inactivity are always
+  // computed from full history; this only controls which year columns show.
+  const visibleYears = React.useMemo(
+    () => (yearsToShow === "all" ? years : years.slice(-yearsToShow)),
+    [years, yearsToShow]
+  );
+
+  const yearOptions = React.useMemo(() => {
+    const opts = [3, 5, 10].filter((n) => n < years.length);
+    return opts;
+  }, [years.length]);
+
+  // If the year we're sorting/filtering by is no longer visible, fall back to total.
+  React.useEffect(() => {
+    if (typeof sortBy === "number" && !visibleYears.includes(sortBy)) {
+      setSortBy("total");
+      setOnlyInactive(false);
+    }
+  }, [visibleYears, sortBy]);
 
   type Row = { id: string; name: string; byYear: Map<number, number>; total: number; lastActive: number };
   const rows = React.useMemo(() => {
@@ -707,6 +728,24 @@ function ClientActivityMatrix({
       <CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between">
         <CardTitle>Client activity over time ({rows.length})</CardTitle>
         <div className="flex flex-wrap items-center gap-3">
+          {yearOptions.length > 0 && (
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              Years
+              <select
+                value={String(yearsToShow)}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setYearsToShow(v === "all" ? "all" : Number(v));
+                }}
+                className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+              >
+                {yearOptions.map((n) => (
+                  <option key={n} value={n}>Last {n}</option>
+                ))}
+                <option value="all">All ({years.length})</option>
+              </select>
+            </label>
+          )}
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
             Sort by
             <select
@@ -719,7 +758,7 @@ function ClientActivityMatrix({
             >
               <option value="total">Total historic</option>
               <option value="inactive">Inactivity (longest first)</option>
-              {[...years].reverse().map((y) => (
+              {[...visibleYears].reverse().map((y) => (
                 <option key={y} value={y}>{y}</option>
               ))}
             </select>
@@ -752,7 +791,7 @@ function ClientActivityMatrix({
               <th className="sticky left-0 z-10 bg-card px-2 py-2 text-left">Company</th>
               <th className="px-2 py-2 font-medium">Active until</th>
               <th className="px-2 py-2 font-medium">Inactive</th>
-              {years.map((y) => (
+              {visibleYears.map((y) => (
                 <th key={y} className={`px-2 py-2 font-medium ${sortBy === y ? "text-foreground underline" : ""}`}>{y}</th>
               ))}
               <th className="px-2 py-2 font-semibold">Total</th>
@@ -775,7 +814,7 @@ function ClientActivityMatrix({
                       );
                     })()}
                   </td>
-                  {years.map((y) => {
+                  {visibleYears.map((y) => {
                     const v = r.byYear.get(y) ?? 0;
                     return (
                       <td key={y} className={`rounded px-2 py-1.5 ${sortBy === y ? "ring-1 ring-inset ring-[var(--ring)]" : ""}`} style={heatStyle(v, maxCell)}>
@@ -788,7 +827,7 @@ function ClientActivityMatrix({
               );
             })}
             {filtered.length === 0 && (
-              <tr><td colSpan={years.length + 4} className="py-8 text-center text-muted-foreground">No clients match.</td></tr>
+              <tr><td colSpan={visibleYears.length + 4} className="py-8 text-center text-muted-foreground">No clients match.</td></tr>
             )}
           </tbody>
         </table>
