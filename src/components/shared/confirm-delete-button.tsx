@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 /**
  * Inline delete control with a two-step confirmation. The first click "arms"
  * the button, showing an "Are you sure?" confirm state that stays disabled for
- * `confirmDelayMs` (default 5s) — a deliberate cooling-off window so the delete
+ * `confirmDelayMs` (default 2s) — a deliberate cooling-off window so the delete
  * can't be fired by accident. A live countdown ticks down; once it reaches zero
  * the confirm becomes clickable and the second click runs the delete. All
  * pointer/click events are stopped so it can live safely inside draggable /
@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
 export function ConfirmDeleteButton({
   onDelete,
   onDeleted,
-  confirmDelayMs = 5000,
+  confirmDelayMs = 2000,
   idleTitle = "Delete",
   confirmLabel = "Are you sure?",
   className,
