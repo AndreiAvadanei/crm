@@ -64,19 +64,10 @@ export function TasksBoard({
   const [activeId, setActiveId] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
-  const pageIds = useMemo(
-    () => [...overdue, ...upcoming].map((t) => t.id),
-    [overdue, upcoming]
-  );
-
   const active = useMemo(
     () => [...overdue, ...upcoming].find((t) => t.id === activeId) ?? null,
     [overdue, upcoming, activeId]
   );
-
-  const selectedPageCount = pageIds.filter((id) => selected.has(id)).length;
-  const allPageSelected = pageIds.length > 0 && selectedPageCount === pageIds.length;
-  const somePageSelected = selectedPageCount > 0;
 
   function toggleOne(id: string, checked: boolean) {
     setSelected((prev) => {
@@ -87,10 +78,12 @@ export function TasksBoard({
     });
   }
 
-  function toggleAllPage(checked: boolean) {
+  // Select/deselect every task in a single section (Overdue or Upcoming) on the
+  // current page — each section owns its own select-all so they act independently.
+  function toggleSection(ids: string[], checked: boolean) {
     setSelected((prev) => {
       const next = new Set(prev);
-      for (const id of pageIds) {
+      for (const id of ids) {
         if (checked) next.add(id);
         else next.delete(id);
       }
@@ -156,7 +149,7 @@ export function TasksBoard({
         <QuickAddTask deals={deals} owners={owners} admin={admin} />
       </div>
 
-      {/* Toolbar: backend search + filters + select-all on one line */}
+      {/* Toolbar: backend search + filters on one line (select-all lives per section) */}
       <div className="flex flex-wrap items-center gap-2 px-4 pt-4 md:px-6">
         <SearchInput
           placeholder="Search tasks, deals, assignees…"
@@ -164,15 +157,6 @@ export function TasksBoard({
           clearParams={TASK_PAGE_PARAMS}
         />
         <TasksFilters owners={owners} showAssigneeFilter={admin} />
-        <label className="ml-auto flex cursor-pointer select-none items-center gap-2 text-sm text-muted-foreground">
-          <Checkbox
-            checked={allPageSelected ? true : somePageSelected ? "indeterminate" : false}
-            onCheckedChange={(c) => toggleAllPage(c !== false)}
-            disabled={pageIds.length === 0}
-            aria-label="Select all tasks on this page"
-          />
-          Select page ({pageIds.length})
-        </label>
       </div>
 
       {/* Sticky bulk action bar */}
@@ -192,9 +176,14 @@ export function TasksBoard({
       )}
 
       <div className="grid gap-6 p-4 md:grid-cols-2 md:p-6">
-        {sections.map((section) => (
+        {sections.map((section) => {
+          const sectionIds = section.rows.map((t) => t.id);
+          const selectedCount = sectionIds.filter((id) => selected.has(id)).length;
+          const allSelected = sectionIds.length > 0 && selectedCount === sectionIds.length;
+          const someSelected = selectedCount > 0;
+          return (
           <Card key={section.title}>
-            <CardHeader>
+            <CardHeader className="flex-row items-center justify-between space-y-0">
               <CardTitle
                 className={`flex items-center gap-2 ${
                   section.title === "Overdue" ? "text-destructive" : ""
@@ -205,6 +194,15 @@ export function TasksBoard({
                   {section.total}
                 </Badge>
               </CardTitle>
+              <label className="flex cursor-pointer select-none items-center gap-2 text-xs font-normal text-muted-foreground">
+                <Checkbox
+                  checked={allSelected ? true : someSelected ? "indeterminate" : false}
+                  onCheckedChange={(c) => toggleSection(sectionIds, c !== false)}
+                  disabled={sectionIds.length === 0}
+                  aria-label={`Select all ${section.title} tasks on this page`}
+                />
+                Select page
+              </label>
             </CardHeader>
             <CardContent className="space-y-2">
               {section.rows.map((t) => (
@@ -237,7 +235,8 @@ export function TasksBoard({
               )}
             </CardContent>
           </Card>
-        ))}
+          );
+        })}
       </div>
 
       <TaskSheet

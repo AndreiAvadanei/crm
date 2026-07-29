@@ -5,6 +5,7 @@ import { Prisma, type TaskType } from "@/generated/prisma";
 import { getOwners } from "@/lib/view-helpers";
 import {
   dueWindowRange,
+  startOfDay,
   type DueWindow,
   type TaskStatusFilter,
 } from "@/lib/filter-helpers";
@@ -69,6 +70,10 @@ export default async function TasksPage({
   const admin = isAdmin(user);
   const dealWhere = await dealVisibilityWhere(user);
   const now = new Date();
+  // Due dates are stored date-only (midnight), so "overdue" must be measured
+  // against the start of today — not the current time. Otherwise every task due
+  // today (00:00) counts as < now and is wrongly bucketed as overdue.
+  const today = startOfDay(now);
 
   // Base RBAC scope: tasks on deals the user can see. Sales users are further
   // locked to their own assigned tasks (admins can target any assignee).
@@ -103,12 +108,12 @@ export default async function TasksPage({
   // Split into overdue (open + past due) and everything else. Kept null-safe so
   // open tasks without a due date always land in "upcoming" (never dropped).
   const overdueWhere: Prisma.TaskWhereInput = {
-    AND: [base, { status: "OPEN", dueDate: { lt: now } }],
+    AND: [base, { status: "OPEN", dueDate: { lt: today } }],
   };
   const upcomingWhere: Prisma.TaskWhereInput = {
     AND: [
       base,
-      { OR: [{ status: { not: "OPEN" } }, { dueDate: null }, { dueDate: { gte: now } }] },
+      { OR: [{ status: { not: "OPEN" } }, { dueDate: null }, { dueDate: { gte: today } }] },
     ],
   };
 
