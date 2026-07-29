@@ -106,6 +106,7 @@ export function InvoiceImportDialog({ issuers = [] }: { issuers?: { id: string; 
   const fileRef = React.useRef<HTMLInputElement>(null);
   const [open, setOpen] = React.useState(false);
   const [preview, setPreview] = React.useState<InvoiceImportPreview | null>(null);
+  const [importFile, setImportFile] = React.useState<File | null>(null);
   const [busy, setBusy] = React.useState<"preview" | "apply" | null>(null);
   const [statusFilter, setStatusFilter] = React.useState<RowStatusFilter>("all");
   const [issuerId, setIssuerId] = React.useState("");
@@ -127,14 +128,19 @@ export function InvoiceImportDialog({ issuers = [] }: { issuers?: { id: string; 
     setBusy(null);
     if (res.error) return toast({ title: res.error, variant: "error" });
     setPreview(res.preview ?? null);
+    setImportFile(file);
     setStatusFilter("all");
   }
 
   async function onApply() {
     if (!preview || hasBlockingErrors(preview)) return;
+    if (!importFile) return toast({ title: "Re-run preview before applying.", variant: "error" });
     if (issuers.length > 0 && !issuerId) return toast({ title: "Select the issuer these invoices belong to", variant: "error" });
     setBusy("apply");
-    const res = await applyInvoiceWorkbookImportAction(JSON.stringify(preview), issuerId || undefined);
+    const fd = new FormData();
+    fd.set("file", importFile);
+    if (issuerId) fd.set("issuerId", issuerId);
+    const res = await applyInvoiceWorkbookImportAction(fd);
     setBusy(null);
     if (res.error) return toast({ title: res.error, variant: "error" });
     toast({
@@ -144,6 +150,7 @@ export function InvoiceImportDialog({ issuers = [] }: { issuers?: { id: string; 
     });
     setOpen(false);
     setPreview(null);
+    setImportFile(null);
     router.refresh();
   }
 
@@ -169,6 +176,7 @@ export function InvoiceImportDialog({ issuers = [] }: { issuers?: { id: string; 
             accept=".xls,.xlsx"
             onChange={(e) => {
               setPreview(null);
+              setImportFile(null);
               const file = e.currentTarget.files?.[0];
               const fileError = file ? importFileNameError(file.name) : null;
               if (fileError) toast({ title: fileError, variant: "error" });

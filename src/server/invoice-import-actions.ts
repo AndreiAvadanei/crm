@@ -370,17 +370,29 @@ async function upsertPreviewInvoice(
 }
 
 export async function applyInvoiceWorkbookImportAction(
-  payload: string,
-  issuerId?: string
+  formData: FormData
 ): Promise<Result<{ imported?: number; createdOrganizations?: number }>> {
   const user = await requireUser();
   if (!isAdmin(user)) return { error: "Only admins can import accounting invoice exports." };
-  let preview: InvoiceImportPreview;
-  try {
-    preview = JSON.parse(payload) as InvoiceImportPreview;
-  } catch {
-    return { error: "The preview data is invalid. Re-run preview and try again." };
-  }
+
+  const file = formData.get("file");
+  if (!(file instanceof File) || file.size === 0) return { error: "Choose an XLS/XLSX invoice file first." };
+  if (!/\.(xls|xlsx)$/i.test(file.name)) return { error: "Only .xls and .xlsx files are supported." };
+  const kind = inferWorkbookKind(file.name);
+  if (kind.error || !kind.kind) return { error: kind.error ?? "Could not detect invoice export type." };
+
+  const issuerIdRaw = formData.get("issuerId");
+  const issuerId = typeof issuerIdRaw === "string" && issuerIdRaw.length > 0 ? issuerIdRaw : undefined;
+
+  // Re-parse the uploaded workbook here instead of accepting the parsed preview
+  // as an argument. Server Action arguments are serialized into an array, and a
+  // large payload (e.g. a stringified preview) trips React's array-size guard
+  // ("Maximum array nesting exceeded"). Files travel through the multipart path,
+  // which is not subject to that limit, and re-parsing keeps the result identical.
+  const existingOrganizations = await prisma.organization.findMany({ select: { sourceName: true } });
+  const existingOrgNames = new Set(existingOrganizations.map((org) => org.sourceName.toLowerCase()));
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const preview = parseWorkbook(buffer, file.name, kind.kind, existingOrgNames);
 
   const blockingErrors = [...preview.errors, ...preview.invoices.flatMap((row) => row.errors)];
   if (blockingErrors.length > 0) return { error: `Fix ${blockingErrors.length} import error(s) before applying.` };
