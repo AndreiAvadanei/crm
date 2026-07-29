@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { Loader2, KeyRound, Smartphone } from "lucide-react";
 import {
   startTotpEnrollAction,
@@ -22,7 +21,6 @@ const STALE_ACTION_MESSAGE =
   "Something went wrong. If you left this page open after an update, do a hard refresh (Cmd/Ctrl+Shift+R) and try again.";
 
 export function TwoFactorEnroll() {
-  const router = useRouter();
   const [qr, setQr] = useState<string | null>(null);
   const [secret, setSecret] = useState<string | null>(null);
   const [code, setCode] = useState("");
@@ -52,8 +50,7 @@ export function TwoFactorEnroll() {
     try {
       const res = await confirmTotpEnrollAction(code);
       if (res.error) return setError(res.error);
-      router.replace("/dashboard");
-      router.refresh();
+      window.location.assign("/dashboard");
     } catch {
       setError(STALE_ACTION_MESSAGE);
     } finally {
@@ -70,8 +67,7 @@ export function TwoFactorEnroll() {
       const cred = await runPasskeyRegistration(options as never);
       const res = await passkeyRegisterConfirmAction(cred, navigator.platform || "Passkey");
       if (res.error) return setError(res.error);
-      router.replace("/dashboard");
-      router.refresh();
+      window.location.assign("/dashboard");
     } catch {
       setError("Passkey registration was cancelled or failed.");
     } finally {

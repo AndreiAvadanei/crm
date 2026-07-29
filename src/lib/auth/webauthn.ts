@@ -1,4 +1,5 @@
 import "server-only";
+import { headers } from "next/headers";
 import {
   generateRegistrationOptions,
   verifyRegistrationResponse,
@@ -15,11 +16,30 @@ import { prisma } from "@/lib/db";
 import type { User } from "@/generated/prisma";
 import { APP_NAME } from "@/lib/app-constants";
 
-const rpID = process.env.WEBAUTHN_RP_ID || "localhost";
 const rpName = process.env.WEBAUTHN_RP_NAME || APP_NAME;
-const origin = process.env.WEBAUTHN_ORIGIN || "http://localhost:3000";
+
+/**
+ * WebAuthn verification requires the RP ID and origin to match the URL the
+ * browser actually used. Deriving them from the incoming request host keeps
+ * passkeys working regardless of the port/domain the app is served on (e.g.
+ * behind a Docker port mapping), and falls back to env vars when no request
+ * context is available.
+ */
+async function resolveRp(): Promise<{ rpID: string; origin: string }> {
+  const h = await headers();
+  const host = h.get("host");
+  if (host) {
+    const proto = h.get("x-forwarded-proto")?.split(",")[0]?.trim() || "http";
+    return { rpID: host.split(":")[0], origin: `${proto}://${host}` };
+  }
+  return {
+    rpID: process.env.WEBAUTHN_RP_ID || "localhost",
+    origin: process.env.WEBAUTHN_ORIGIN || "http://localhost:3000",
+  };
+}
 
 export async function buildRegistrationOptions(user: User) {
+  const { rpID } = await resolveRp();
   const creds = await prisma.webAuthnCredential.findMany({ where: { userId: user.id } });
   const options = await generateRegistrationOptions({
     rpName,
@@ -44,6 +64,7 @@ export async function confirmRegistration(
   deviceName: string
 ): Promise<boolean> {
   if (!user.currentChallenge) return false;
+  const { rpID, origin } = await resolveRp();
   let verification: VerifiedRegistrationResponse;
   try {
     verification = await verifyRegistrationResponse({
@@ -76,6 +97,7 @@ export async function confirmRegistration(
 }
 
 export async function buildAuthenticationOptions(user: User) {
+  const { rpID } = await resolveRp();
   const creds = await prisma.webAuthnCredential.findMany({ where: { userId: user.id } });
   const options = await generateAuthenticationOptions({
     rpID,
@@ -97,6 +119,7 @@ export async function confirmAuthentication(
   const cred = await prisma.webAuthnCredential.findUnique({ where: { credentialId: response.id } });
   if (!cred || cred.userId !== user.id) return false;
 
+  const { rpID, origin } = await resolveRp();
   let verification: VerifiedAuthenticationResponse;
   try {
     verification = await verifyAuthenticationResponse({

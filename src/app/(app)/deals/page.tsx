@@ -330,6 +330,7 @@ export default async function DealsPage({
             newDeal={{ isAdmin: admin, clients, tags, fieldDefs, owners }}
             shareUsers={shareUsers.map((u) => ({ id: u.id, name: u.name, color: u.avatarColor }))}
             sharedMap={sharedMap}
+            currentUserId={user.id}
           />
         </div>
       ) : (
@@ -342,6 +343,7 @@ export default async function DealsPage({
             admin={admin}
             shareUsers={shareUsers.map((u) => ({ id: u.id, name: u.name, color: u.avatarColor }))}
             sharedMap={sharedMap}
+            currentUserId={user.id}
           />
         </div>
       )}

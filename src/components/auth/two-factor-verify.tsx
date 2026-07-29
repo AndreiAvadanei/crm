@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { Loader2, KeyRound } from "lucide-react";
 import {
   verifyLoginTotpAction,
@@ -15,14 +14,14 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 
 export function TwoFactorVerify({ hasTotp, hasPasskey }: { hasTotp: boolean; hasPasskey: boolean }) {
-  const router = useRouter();
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   function done() {
-    router.replace("/dashboard");
-    router.refresh();
+    // A full navigation guarantees the server re-evaluates the (now verified)
+    // session. router.replace + router.refresh races and can drop the redirect.
+    window.location.assign("/dashboard");
   }
 
   async function verifyTotp() {

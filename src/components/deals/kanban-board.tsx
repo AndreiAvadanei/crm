@@ -19,17 +19,17 @@ import {
   CheckSquare,
   ChevronLeft,
   ChevronRight,
-  Plus,
   Share2,
   SquarePen,
 } from "lucide-react";
-import { moveDealStageAction } from "@/server/deal-actions";
+import { moveDealStageAction, deleteDealAction } from "@/server/deal-actions";
 import { quickCreateDealAction } from "@/server/board-actions";
 import { quickUpdateDealAction } from "@/server/quick-actions";
 import { useToast } from "@/components/ui/toast";
 import { Avatar } from "@/components/ui/avatar";
 import { TagBadge, type TagView } from "@/components/shared/tag-badge";
 import { InlineInput, InlineTagEditor } from "@/components/shared/inline-edit";
+import { ConfirmDeleteButton } from "@/components/shared/confirm-delete-button";
 import { DealFormDialog } from "@/components/deals/deal-form-dialog";
 import { ShareControl } from "@/components/deals/share-control";
 import type { FieldDefView } from "@/components/shared/custom-field-inputs";
@@ -114,6 +114,9 @@ function DealCard({
   shareUsers,
   canShare,
   sharedUserIds,
+  canDelete,
+  onDelete,
+  onDeleted,
   onStageChange,
   onTagsChange,
   onAmountChange,
@@ -138,6 +141,12 @@ function DealCard({
   canShare?: boolean;
   // Ids of users this specific deal is currently shared with.
   sharedUserIds?: string[];
+  // Whether the current user may delete this deal (admin or owner).
+  canDelete?: boolean;
+  // Runs the delete server action for this deal.
+  onDelete?: () => Promise<{ ok?: boolean; error?: string }>;
+  // Removes the deal from the board once the delete succeeds.
+  onDeleted?: () => void;
   // Optimistic local-state callbacks owned by the board.
   onStageChange?: (dealId: string, stageId: string) => void;
   onTagsChange?: (dealId: string, tags: TagView[]) => void;
@@ -176,6 +185,14 @@ function DealCard({
           )}
         </div>
         <div className="flex items-center gap-1">
+          {interactive && canDelete && onDelete && (
+            <ConfirmDeleteButton
+              onDelete={onDelete}
+              onDeleted={onDeleted}
+              idleTitle="Delete deal"
+              confirmLabel="Sure?"
+            />
+          )}
           {interactive && canShare && shareUsers && (
             <span onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
               <ShareControl
@@ -639,8 +656,11 @@ function StageColumn({
   shareUsers,
   canShare,
   sharedMap,
+  currentUserId,
   onCollapse,
   onCreated,
+  onDeleteDeal,
+  onDealDeleted,
   onStageChange,
   onTagsChange,
   onAmountChange,
@@ -657,8 +677,11 @@ function StageColumn({
   shareUsers: ShareUserView[];
   canShare: boolean;
   sharedMap: Record<string, string[]>;
+  currentUserId?: string;
   onCollapse: () => void;
   onCreated: (deal: KanbanDeal) => void;
+  onDeleteDeal: (dealId: string) => Promise<{ ok?: boolean; error?: string }>;
+  onDealDeleted: (dealId: string) => void;
   onStageChange: (dealId: string, stageId: string) => void;
   onTagsChange: (dealId: string, tags: TagView[]) => void;
   onAmountChange: (dealId: string, amount: number | null) => void;
@@ -715,13 +738,6 @@ function StageColumn({
               />
             )}
             <button
-              onClick={() => setAdding((v) => !v)}
-              className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-              title="Quick add deal"
-            >
-              <Plus className="h-4 w-4" />
-            </button>
-            <button
               onClick={onCollapse}
               className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
               title="Collapse column"
@@ -760,6 +776,9 @@ function StageColumn({
             shareUsers={shareUsers}
             canShare={canShare}
             sharedUserIds={sharedMap[d.id]}
+            canDelete={!!newDeal?.isAdmin || (!!currentUserId && d.ownerId === currentUserId)}
+            onDelete={() => onDeleteDeal(d.id)}
+            onDeleted={() => onDealDeleted(d.id)}
             onStageChange={onStageChange}
             onTagsChange={onTagsChange}
             onAmountChange={onAmountChange}
@@ -850,10 +869,13 @@ function PhaseGroup({
   shareUsers,
   canShare,
   sharedMap,
+  currentUserId,
   collapsed,
   onTogglePhase,
   onToggleStage,
   onCreated,
+  onDeleteDeal,
+  onDealDeleted,
   onStageChange,
   onTagsChange,
   onAmountChange,
@@ -871,10 +893,13 @@ function PhaseGroup({
   shareUsers: ShareUserView[];
   canShare: boolean;
   sharedMap: Record<string, string[]>;
+  currentUserId?: string;
   collapsed: boolean;
   onTogglePhase: () => void;
   onToggleStage: (stageId: string) => void;
   onCreated: (deal: KanbanDeal) => void;
+  onDeleteDeal: (dealId: string) => Promise<{ ok?: boolean; error?: string }>;
+  onDealDeleted: (dealId: string) => void;
   onStageChange: (dealId: string, stageId: string) => void;
   onTagsChange: (dealId: string, tags: TagView[]) => void;
   onAmountChange: (dealId: string, amount: number | null) => void;
@@ -952,8 +977,11 @@ function PhaseGroup({
               shareUsers={shareUsers}
               canShare={canShare}
               sharedMap={sharedMap}
+              currentUserId={currentUserId}
               onCollapse={() => onToggleStage(stage.id)}
               onCreated={onCreated}
+              onDeleteDeal={onDeleteDeal}
+              onDealDeleted={onDealDeleted}
               onStageChange={onStageChange}
               onTagsChange={onTagsChange}
               onAmountChange={onAmountChange}
@@ -976,12 +1004,14 @@ export function KanbanBoard({
   newDeal,
   shareUsers = [],
   sharedMap = {},
+  currentUserId,
 }: {
   stages: KanbanStage[];
   deals: KanbanDeal[];
   newDeal?: NewDealProps;
   shareUsers?: ShareUserView[];
   sharedMap?: Record<string, string[]>;
+  currentUserId?: string;
 }) {
   const { toast } = useToast();
   const router = useRouter();
@@ -1055,6 +1085,15 @@ export function KanbanBoard({
   }
   function addDeal(deal: KanbanDeal) {
     setDeals((ds) => [deal, ...ds]);
+  }
+
+  // Delete a deal via the server action; the card is removed from local state
+  // by the ConfirmDeleteButton's onDeleted callback only after success.
+  async function deleteDeal(dealId: string) {
+    return deleteDealAction(dealId);
+  }
+  function removeDeal(dealId: string) {
+    setDeals((ds) => ds.filter((d) => d.id !== dealId));
   }
 
   // Inline status change from a card: optimistically move the card to the new
@@ -1161,10 +1200,13 @@ export function KanbanBoard({
             shareUsers={shareUsers}
             canShare={canShare}
             sharedMap={sharedMap}
+            currentUserId={currentUserId}
             collapsed={collapsedPhases.has(group.key)}
             onTogglePhase={() => togglePhase(group.key)}
             onToggleStage={toggleStage}
             onCreated={addDeal}
+            onDeleteDeal={deleteDeal}
+            onDealDeleted={removeDeal}
             onStageChange={changeStage}
             onTagsChange={changeTags}
             onAmountChange={changeAmount}

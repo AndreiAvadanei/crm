@@ -10,6 +10,15 @@ export const metadata: Metadata = {
     template: `%s | ${APP_NAME}`,
   },
   description: "Modern sales workspace for clients, deals, pipelines and insights",
+  robots: {
+    index: false,
+    follow: false,
+    nocache: true,
+    googleBot: {
+      index: false,
+      follow: false,
+    },
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

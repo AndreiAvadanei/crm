@@ -2,13 +2,16 @@
 
 import { Fragment, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { ChevronDown, ChevronRight, Share2 } from "lucide-react";
 import { quickUpdateDealAction } from "@/server/quick-actions";
+import { deleteDealAction } from "@/server/deal-actions";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { TagView } from "@/components/shared/tag-badge";
 import { InlineInput, InlineSelect, InlineTagEditor } from "@/components/shared/inline-edit";
+import { ConfirmDeleteButton } from "@/components/shared/confirm-delete-button";
 import { ShareControl } from "@/components/deals/share-control";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
 
@@ -94,6 +97,7 @@ export function DealsTable({
   admin,
   shareUsers,
   sharedMap,
+  currentUserId,
 }: {
   deals: DealRow[];
   stages: TableStage[];
@@ -102,8 +106,11 @@ export function DealsTable({
   admin: boolean;
   shareUsers: ShareUserRow[];
   sharedMap: Record<string, string[]>;
+  currentUserId?: string;
 }) {
-  const colCount = admin ? 9 : 8;
+  // Actions column is always present now (delete lives here for admins and deal
+  // owners); the extra share control inside it stays admin-only.
+  const colCount = 9;
 
   // Collapse state for the grouped sections, shared with the kanban board via
   // localStorage so a section collapsed in one view stays collapsed in the
@@ -168,7 +175,7 @@ export function DealsTable({
             <TableHead>Tags</TableHead>
             <TableHead>Owner</TableHead>
             <TableHead>Due</TableHead>
-            {admin && <TableHead className="text-right">Actions</TableHead>}
+            <TableHead className="text-right">Actions</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -220,6 +227,7 @@ export function DealsTable({
                       admin={admin}
                       shareUsers={shareUsers}
                       sharedMap={sharedMap}
+                      currentUserId={currentUserId}
                     />
                   ))}
               </Fragment>
@@ -237,6 +245,7 @@ export function DealsTable({
               admin={admin}
               shareUsers={shareUsers}
               sharedMap={sharedMap}
+              currentUserId={currentUserId}
             />
           ))}
 
@@ -261,6 +270,7 @@ function DealTableRow({
   admin,
   shareUsers,
   sharedMap,
+  currentUserId,
 }: {
   deal: DealRow;
   stages: TableStage[];
@@ -269,7 +279,10 @@ function DealTableRow({
   admin: boolean;
   shareUsers: ShareUserRow[];
   sharedMap: Record<string, string[]>;
+  currentUserId?: string;
 }) {
+  const router = useRouter();
+  const canDelete = admin || (!!currentUserId && d.ownerId === currentUserId);
   return (
     <TableRow className={cn(d.overdue && "bg-destructive/5 hover:bg-destructive/10")}>
       <TableCell className="font-mono text-xs text-muted-foreground">
@@ -354,25 +367,34 @@ function DealTableRow({
         />
       </TableCell>
 
-      {/* Inline share (admin) */}
-      {admin && (
-        <TableCell className="text-right">
-          <ShareControl
-            dealId={d.id}
-            users={shareUsers.map((u) => ({
-              id: u.id,
-              name: u.name,
-              color: u.color,
-              shared: (sharedMap[d.id] ?? []).includes(u.id),
-            }))}
-            trigger={
-              <Button variant="ghost" size="icon" title="Share deal">
-                <Share2 className="h-4 w-4" />
-              </Button>
-            }
-          />
-        </TableCell>
-      )}
+      {/* Actions: inline share (admin) + confirm-to-delete (admin or owner) */}
+      <TableCell className="text-right">
+        <div className="flex items-center justify-end gap-1">
+          {admin && (
+            <ShareControl
+              dealId={d.id}
+              users={shareUsers.map((u) => ({
+                id: u.id,
+                name: u.name,
+                color: u.color,
+                shared: (sharedMap[d.id] ?? []).includes(u.id),
+              }))}
+              trigger={
+                <Button variant="ghost" size="icon" title="Share deal">
+                  <Share2 className="h-4 w-4" />
+                </Button>
+              }
+            />
+          )}
+          {canDelete && (
+            <ConfirmDeleteButton
+              onDelete={() => deleteDealAction(d.id)}
+              onDeleted={() => router.refresh()}
+              idleTitle="Delete deal"
+            />
+          )}
+        </div>
+      </TableCell>
     </TableRow>
   );
 }

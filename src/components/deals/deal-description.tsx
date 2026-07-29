@@ -8,12 +8,14 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { quickUpdateDealAction } from "@/server/quick-actions";
 import { renderCommentHtml, commentHasContent } from "@/lib/sanitize";
-import { cn } from "@/lib/utils";
 
 // Legacy descriptions were stored as plain text (with real newlines); newer ones
-// are rich HTML from the editor. Detect HTML so plain text keeps its line breaks.
+// are rich HTML from the editor. Only treat the value as HTML when it contains a
+// recognized formatting/block tag, so plain text with stray angle brackets (e.g.
+// an email like "<a@b.com>") is NOT misread as HTML — it keeps its literal
+// characters and line breaks instead of being stripped by the sanitizer.
 function looksLikeHtml(s: string) {
-  return /<[a-z][\s\S]*?>/i.test(s);
+  return /<\/?(?:p|br|div|span|strong|b|em|i|u|s|strike|ul|ol|li|a|blockquote|code|pre|hr|h1|h2|h3|img|figure|figcaption|table|thead|tbody|tr|th|td|colgroup|col)\b[^>]*>/i.test(s);
 }
 
 // Convert legacy plain text to paragraph/line-break HTML so the editor and the
@@ -107,8 +109,8 @@ export function DealDescription({
   return (
     <div className="group relative">
       <div
-        className={cn("comment-html text-sm", !isHtml && "whitespace-pre-wrap")}
-        dangerouslySetInnerHTML={{ __html: renderCommentHtml(description!) }}
+        className="comment-html text-sm"
+        dangerouslySetInnerHTML={{ __html: renderCommentHtml(editorValue) }}
       />
       <Button
         variant="outline"

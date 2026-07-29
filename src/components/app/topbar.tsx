@@ -1,5 +1,6 @@
 "use client";
 
+import { useRef } from "react";
 import Link from "next/link";
 import { LogOut, User as UserIcon, ShieldCheck } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -27,6 +28,7 @@ export function Topbar({
   role: string;
   avatarColor: string;
 }) {
+  const logoutFormRef = useRef<HTMLFormElement>(null);
   return (
     <header className="flex h-14 shrink-0 items-center justify-between border-b bg-background px-4 md:px-6">
       <div className="md:hidden flex items-center gap-2 font-semibold">
@@ -55,16 +57,17 @@ export function Topbar({
               </Link>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem asChild>
-              <form action={logoutAction} className="w-full">
-                <button type="submit" className="flex w-full items-center gap-2">
-                  <LogOut /> Sign out
-                </button>
-              </form>
+            <DropdownMenuItem
+              className="gap-2"
+              onSelect={() => logoutFormRef.current?.requestSubmit()}
+            >
+              <LogOut /> Sign out
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+      {/* Kept outside the dropdown so it isn't unmounted when the menu closes. */}
+      <form ref={logoutFormRef} action={logoutAction} className="hidden" />
     </header>
   );
 }
