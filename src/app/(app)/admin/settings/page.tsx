@@ -1,17 +1,18 @@
 import { requireAdmin } from "@/lib/auth/guards";
 import { prisma } from "@/lib/db";
-import { getDefaultOrganizationTvaPercent, getSetting, SETTING_KEYS } from "@/lib/settings";
+import { getDefaultOrganizationTvaPercent, getSetting, getTaskWebhookDefaults, SETTING_KEYS } from "@/lib/settings";
 import { brandingLogoVersion } from "@/lib/branding";
 import { PageHeader } from "@/components/app/page-header";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { DefaultOwnerForm } from "@/components/admin/default-owner-form";
 import { DefaultOrganizationTvaForm } from "@/components/admin/default-organization-tva-form";
 import { InboundWebhookForm } from "@/components/admin/inbound-webhook-form";
+import { TaskWebhookDefaultsForm } from "@/components/admin/task-webhook-defaults-form";
 import { BrandingForm } from "@/components/admin/branding-form";
 import { IssuersManager } from "@/components/admin/issuers-card";
 import { SeriesManager } from "@/components/admin/series-card";
 import { PartNumbersManager } from "@/components/admin/part-numbers-card";
-import { setInvoiceWebhookSecretAction } from "@/server/admin-actions";
+import { setInvoiceWebhookSecretAction, setTaskWebhookSecretAction } from "@/server/admin-actions";
 
 export const metadata = {
   title: "Settings",
@@ -20,7 +21,7 @@ export const metadata = {
 export default async function SettingsPage() {
   await requireAdmin();
 
-  const [owners, defaultOwnerId, defaultOrganizationTvaPercent, webhookSecret, invoiceWebhookSecret, lightLogo, darkLogo, issuers, series, partNumbers] = await Promise.all([
+  const [owners, defaultOwnerId, defaultOrganizationTvaPercent, webhookSecret, invoiceWebhookSecret, taskWebhookSecret, taskWebhookDefaults, lightLogo, darkLogo, issuers, series, partNumbers] = await Promise.all([
     prisma.user.findMany({
       where: { status: "ACTIVE" },
       orderBy: { name: "asc" },
@@ -30,6 +31,8 @@ export default async function SettingsPage() {
     getDefaultOrganizationTvaPercent(),
     getSetting(SETTING_KEYS.inboundWebhookSecret),
     getSetting(SETTING_KEYS.invoiceWebhookSecret),
+    getSetting(SETTING_KEYS.taskWebhookSecret),
+    getTaskWebhookDefaults(),
     brandingLogoVersion("light"),
     brandingLogoVersion("dark"),
     prisma.issuer.findMany({
@@ -59,6 +62,7 @@ export default async function SettingsPage() {
   const baseUrl = (process.env.APP_BASE_URL || "http://localhost:3007").replace(/\/$/, "");
   const webhookUrl = `${baseUrl}/api/webhooks/inbound-email`;
   const invoiceWebhookUrl = `${baseUrl}/api/webhooks/invoice-files`;
+  const taskWebhookUrl = `${baseUrl}/api/webhooks/create-task`;
 
   return (
     <div>
@@ -123,6 +127,42 @@ export default async function SettingsPage() {
                 </p>
               }
             />
+          </CardContent>
+        </Card>
+
+        <Card className="md:col-span-2">
+          <CardHeader>
+            <CardTitle>Create-task webhook</CardTitle>
+            <CardDescription>
+              POST <code>{`{ "sales_id": "SAL-1234" }`}</code> to add a follow-up task to that deal. The task
+              is assigned to the deal owner (or the default assignee above when the deal has no owner),
+              using the text, due date, and priority configured below. A request may override any of these
+              by sending <code>title</code>, <code>due_days</code>, or <code>priority</code>.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-6 md:grid-cols-2">
+              <InboundWebhookForm
+                webhookUrl={taskWebhookUrl}
+                currentSecret={taskWebhookSecret}
+                action={setTaskWebhookSecretAction}
+                urlHint={
+                  <p className="text-xs text-muted-foreground">
+                    POST JSON with a <code>sales_id</code> here. Authenticate with header{" "}
+                    <code>x-webhook-secret</code>, an <code>Authorization: Bearer &lt;secret&gt;</code>{" "}
+                    header, or a <code>?secret=</code> query param.
+                  </p>
+                }
+              />
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Task defaults</p>
+                <TaskWebhookDefaultsForm
+                  title={taskWebhookDefaults.title}
+                  dueDays={taskWebhookDefaults.dueDays}
+                  urgency={taskWebhookDefaults.urgency}
+                />
+              </div>
+            </div>
           </CardContent>
         </Card>
 

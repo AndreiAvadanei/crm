@@ -1,6 +1,13 @@
 export const APP_NAME = "Bit Sentinel";
 
 /**
+ * Neutral, unbranded name shown on pre-authentication surfaces (browser tab
+ * title, sign-in screen). Anonymous visitors must not be able to identify the
+ * company behind this workspace, so nothing here may reveal APP_NAME.
+ */
+export const PUBLIC_APP_NAME = "Workspace";
+
+/**
  * Safety cap for list/board queries that load the full result set (no
  * pagination) and then sort / group / split it in memory.
  *

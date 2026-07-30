@@ -144,12 +144,7 @@ export function TasksBoard({
 
   return (
     <div>
-      {/* Quick composer: title + deal, Enter to add */}
-      <div className="px-4 pt-4 md:px-6">
-        <QuickAddTask deals={deals} owners={owners} admin={admin} />
-      </div>
-
-      {/* Toolbar: backend search + filters on one line (select-all lives per section) */}
+      {/* Toolbar: backend search + filters + add task on one line (select-all lives per section) */}
       <div className="flex flex-wrap items-center gap-2 px-4 pt-4 md:px-6">
         <SearchInput
           placeholder="Search tasks, deals, assignees…"
@@ -157,6 +152,9 @@ export function TasksBoard({
           clearParams={TASK_PAGE_PARAMS}
         />
         <TasksFilters owners={owners} showAssigneeFilter={admin} />
+        <div className="ml-auto">
+          <QuickAddTask deals={deals} owners={owners} admin={admin} />
+        </div>
       </div>
 
       {/* Sticky bulk action bar */}

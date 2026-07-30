@@ -85,13 +85,15 @@ async function main() {
     }
   }
 
-  // --- Tags ---
-  for (const t of TAGS) {
-    await prisma.tag.upsert({
-      where: { name: t.name },
-      update: { color: t.color },
-      create: { name: t.name, color: t.color },
-    });
+  // --- Tags (only seed baseline when none exist, so deletions stick) ---
+  const existingTagCount = await prisma.tag.count();
+  if (existingTagCount === 0) {
+    for (const t of TAGS) {
+      await prisma.tag.create({ data: { name: t.name, color: t.color } });
+    }
+    console.log(`Seeded ${TAGS.length} baseline tags.`);
+  } else {
+    console.log(`Tags already present (${existingTagCount}); skipping tag seed.`);
   }
 
   // --- SAL counter ---
@@ -140,19 +142,22 @@ async function main() {
     { key: "country", label: "Country", type: "TEXT", order: 2 },
     { key: "customer_title", label: "Customer Title", type: "TEXT", order: 3 },
   ];
-  for (const f of dealFields) {
-    await prisma.customFieldDefinition.upsert({
-      where: { entity_key: { entity: "DEAL", key: f.key } },
-      update: { label: f.label, order: f.order },
-      create: { entity: "DEAL", key: f.key, label: f.label, type: f.type, order: f.order },
-    });
-  }
-  for (const f of clientFields) {
-    await prisma.customFieldDefinition.upsert({
-      where: { entity_key: { entity: "CLIENT", key: f.key } },
-      update: { label: f.label, order: f.order },
-      create: { entity: "CLIENT", key: f.key, label: f.label, type: f.type, order: f.order },
-    });
+  // Only seed baseline custom fields when none exist, so deletions stick.
+  const existingFieldCount = await prisma.customFieldDefinition.count();
+  if (existingFieldCount === 0) {
+    for (const f of dealFields) {
+      await prisma.customFieldDefinition.create({
+        data: { entity: "DEAL", key: f.key, label: f.label, type: f.type, order: f.order },
+      });
+    }
+    for (const f of clientFields) {
+      await prisma.customFieldDefinition.create({
+        data: { entity: "CLIENT", key: f.key, label: f.label, type: f.type, order: f.order },
+      });
+    }
+    console.log(`Seeded ${dealFields.length + clientFields.length} baseline custom fields.`);
+  } else {
+    console.log(`Custom fields already present (${existingFieldCount}); skipping custom field seed.`);
   }
 
   console.log("Seed complete.");

@@ -5,11 +5,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AlarmClock, CheckCircle2, Circle, Loader2, Trash2, ExternalLink } from "lucide-react";
 import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar } from "@/components/ui/avatar";
@@ -23,7 +23,7 @@ import { TASK_TYPE_META, TASK_TYPE_OPTIONS, TaskTypeIcon, type TaskItemData } fr
 import { cn } from "@/lib/utils";
 
 /**
- * Full-room task editor in a right-hand drawer. Editing a task from a cramped
+ * Full-room task editor in a centered modal. Editing a task from a cramped
  * sidebar (or a small screen) opens here where every field has space. Each field
  * commits immediately so there's no separate save step.
  */
@@ -79,15 +79,15 @@ export function TaskSheet({
   }
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="gap-0 p-0">
-        <SheetHeader className="border-b p-5 pr-12">
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[85vh] max-w-lg flex-col gap-0 overflow-hidden p-0">
+        <DialogHeader className="border-b p-5 pr-12">
           <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
             <TaskTypeIcon type={task.type} className="h-3.5 w-3.5" />
             {TASK_TYPE_META[task.type]?.label ?? task.type}
             {pending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
           </div>
-          <SheetTitle className="sr-only">Edit task</SheetTitle>
+          <DialogTitle className="sr-only">Edit task</DialogTitle>
           <textarea
             ref={titleRef}
             value={title}
@@ -109,14 +109,14 @@ export function TaskSheet({
           {task.dealSalesId && (
             <Link
               href={`/deals/${task.dealSalesId}`}
-              className="inline-flex w-fit items-center gap-1 text-xs text-muted-foreground hover:text-primary"
+              className="inline-flex w-fit items-start gap-1 text-xs text-muted-foreground hover:text-primary"
             >
               <span className="font-mono">{task.dealSalesId}</span>
-              {task.dealTitle ? <span className="truncate">· {task.dealTitle}</span> : null}
-              <ExternalLink className="h-3 w-3" />
+              {task.dealTitle ? <span className="break-words">· {task.dealTitle}</span> : null}
+              <ExternalLink className="mt-0.5 h-3 w-3 shrink-0" />
             </Link>
           )}
-        </SheetHeader>
+        </DialogHeader>
 
         <div className="flex-1 space-y-5 overflow-y-auto p-5">
           <Button
@@ -225,8 +225,8 @@ export function TaskSheet({
             </Button>
           </ConfirmDialog>
         </div>
-      </SheetContent>
-    </Sheet>
+      </DialogContent>
+    </Dialog>
   );
 }
 

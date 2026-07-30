@@ -1,5 +1,5 @@
 import { ShieldCheck } from "lucide-react";
-import { APP_NAME } from "@/lib/app-constants";
+import { PUBLIC_APP_NAME } from "@/lib/app-constants";
 
 export function AuthShell({
   title,
@@ -15,7 +15,7 @@ export function AuthShell({
       <div className="relative hidden flex-col justify-between overflow-hidden border-r bg-muted p-12 lg:flex">
         <div className="flex items-center gap-2 text-lg font-semibold text-foreground">
           <ShieldCheck className="h-6 w-6 text-primary" />
-          {APP_NAME}
+          {PUBLIC_APP_NAME}
         </div>
         <div className="space-y-4">
           <h1 className="text-3xl font-semibold leading-tight text-foreground">

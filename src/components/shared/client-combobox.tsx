@@ -24,6 +24,7 @@ export function ClientCombobox({
   triggerClassName,
   contentClassName,
   matchTriggerWidth = true,
+  wrapLabels = false,
 }: {
   value: string;
   options: ComboOption[];
@@ -37,6 +38,8 @@ export function ClientCombobox({
   triggerClassName?: string;
   contentClassName?: string;
   matchTriggerWidth?: boolean;
+  // When true, option labels wrap to show the full text instead of truncating.
+  wrapLabels?: boolean;
 }) {
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState("");
@@ -107,13 +110,14 @@ export function ClientCombobox({
             />
           </div>
           <div className="max-h-64 overflow-y-auto p-1">
-            <Item label={placeholder} muted selected={!value} onSelect={() => select("")} />
+            <Item label={placeholder} muted selected={!value} onSelect={() => select("")} wrap={wrapLabels} />
             {filtered.map((o) => (
               <Item
                 key={o.value}
                 label={o.label}
                 selected={o.value === value}
                 onSelect={() => select(o.value)}
+                wrap={wrapLabels}
               />
             ))}
             {filtered.length === 0 && (
@@ -131,11 +135,13 @@ function Item({
   selected,
   muted,
   onSelect,
+  wrap,
 }: {
   label: string;
   selected: boolean;
   muted?: boolean;
   onSelect: () => void;
+  wrap?: boolean;
 }) {
   return (
     <button
@@ -146,7 +152,7 @@ function Item({
         muted && !selected && "text-muted-foreground"
       )}
     >
-      <span className="truncate">{label}</span>
+      <span className={cn(wrap ? "break-words" : "truncate")}>{label}</span>
       {selected && <Check className="h-4 w-4 shrink-0 text-primary" />}
     </button>
   );

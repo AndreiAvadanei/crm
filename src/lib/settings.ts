@@ -1,5 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/db";
+import { TASK_URGENCY_VALUES, type TaskUrgency } from "@/lib/task-urgency";
 
 // Stable keys for the AppSetting key/value store.
 export const SETTING_KEYS = {
@@ -7,9 +8,21 @@ export const SETTING_KEYS = {
   defaultOrganizationTvaPercent: "default_organization_tva_percent",
   inboundWebhookSecret: "inbound_webhook_secret",
   invoiceWebhookSecret: "invoice_webhook_secret",
+  taskWebhookSecret: "task_webhook_secret",
+  taskWebhookTitle: "task_webhook_title",
+  taskWebhookDueDays: "task_webhook_due_days",
+  taskWebhookUrgency: "task_webhook_urgency",
 } as const;
 
 export const DEFAULT_ORGANIZATION_TVA_PERCENT = "21";
+
+// Defaults applied to tasks created by the create-task webhook when the admin
+// has not customized them (or a stored value is invalid).
+export const TASK_WEBHOOK_DEFAULTS = {
+  title: "Follow up",
+  dueDays: 3,
+  urgency: "MEDIUM" as TaskUrgency,
+} as const;
 
 /** Read a raw setting value, or null when unset. */
 export async function getSetting(key: string): Promise<string | null> {
@@ -61,4 +74,44 @@ export async function getInboundWebhookSecret(): Promise<string | null> {
 /** Read the configured inbound-invoice (PDF reply) webhook secret, or null when unset. */
 export async function getInvoiceWebhookSecret(): Promise<string | null> {
   return getSetting(SETTING_KEYS.invoiceWebhookSecret);
+}
+
+/** Read the configured create-task webhook secret, or null when unset. */
+export async function getTaskWebhookSecret(): Promise<string | null> {
+  return getSetting(SETTING_KEYS.taskWebhookSecret);
+}
+
+export type TaskWebhookDefaults = {
+  title: string;
+  dueDays: number;
+  urgency: TaskUrgency;
+};
+
+/**
+ * Resolve the configured defaults for tasks created via the create-task webhook,
+ * falling back to sane values when a setting is unset or invalid.
+ */
+export async function getTaskWebhookDefaults(): Promise<TaskWebhookDefaults> {
+  const [title, dueDaysRaw, urgencyRaw] = await Promise.all([
+    getSetting(SETTING_KEYS.taskWebhookTitle),
+    getSetting(SETTING_KEYS.taskWebhookDueDays),
+    getSetting(SETTING_KEYS.taskWebhookUrgency),
+  ]);
+
+  const dueDaysNum = Number(dueDaysRaw);
+  const dueDays =
+    dueDaysRaw && Number.isInteger(dueDaysNum) && dueDaysNum >= 0 && dueDaysNum <= 365
+      ? dueDaysNum
+      : TASK_WEBHOOK_DEFAULTS.dueDays;
+
+  const urgency =
+    urgencyRaw && (TASK_URGENCY_VALUES as string[]).includes(urgencyRaw)
+      ? (urgencyRaw as TaskUrgency)
+      : TASK_WEBHOOK_DEFAULTS.urgency;
+
+  return {
+    title: title?.trim() || TASK_WEBHOOK_DEFAULTS.title,
+    dueDays,
+    urgency,
+  };
 }

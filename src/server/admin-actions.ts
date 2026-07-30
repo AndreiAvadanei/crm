@@ -8,7 +8,8 @@ import { isAdmin } from "@/lib/rbac";
 import { hashPassword, isStrongPassword } from "@/lib/auth/password";
 import { logActivity } from "@/lib/activity";
 import { changeList, diffText, diffPlain, diffBool, diffDate } from "@/lib/activity-diff";
-import { SETTING_KEYS, getSetting, setSetting } from "@/lib/settings";
+import { SETTING_KEYS, getSetting, setSetting, TASK_WEBHOOK_DEFAULTS } from "@/lib/settings";
+import { TASK_URGENCY_VALUES, type TaskUrgency } from "@/lib/task-urgency";
 
 type Result = { ok?: boolean; error?: string; id?: string; tempPassword?: string; secret?: string };
 
@@ -529,4 +530,78 @@ export async function setInvoiceWebhookSecretAction(formData: FormData): Promise
   });
   revalidatePath("/admin/settings");
   return { ok: true, secret: value ?? undefined };
+}
+
+/**
+ * Set or regenerate the create-task webhook secret. Same logic as the other
+ * inbound webhooks: `regenerate` (or no `secret`) mints a new random token; an
+ * empty `secret` clears it (disabling the webhook). The secret value itself is
+ * never written to the audit log.
+ */
+export async function setTaskWebhookSecretAction(formData: FormData): Promise<Result> {
+  const admin = await ensureAdmin();
+  const provided = str(formData, "secret");
+  const regenerate = str(formData, "regenerate") === "1";
+
+  let value: string | null;
+  if (regenerate) {
+    value = randomBytes(32).toString("base64url");
+  } else if (provided) {
+    if (provided.length < 16) return { error: "Secret must be at least 16 characters." };
+    value = provided;
+  } else {
+    value = null; // clear / disable
+  }
+
+  await setSetting(SETTING_KEYS.taskWebhookSecret, value);
+  await logActivity({
+    actorId: admin.id,
+    action: "settings_updated",
+    entity: "Setting",
+    entityId: SETTING_KEYS.taskWebhookSecret,
+    meta: { setting: "Task webhook secret", value: value ? "(updated)" : "(cleared)" },
+  });
+  revalidatePath("/admin/settings");
+  return { ok: true, secret: value ?? undefined };
+}
+
+/**
+ * Configure the defaults applied to tasks created by the create-task webhook:
+ * the task text (title), how many days from receipt the due date lands, and the
+ * priority (urgency). Individual webhook calls may still override these.
+ */
+export async function setTaskWebhookDefaultsAction(formData: FormData): Promise<Result> {
+  const admin = await ensureAdmin();
+
+  const title = str(formData, "title");
+  if (!title) return { error: "Task text is required." };
+  if (title.length > 500) return { error: "Task text is too long (max 500 characters)." };
+
+  const dueDaysRaw = str(formData, "dueDays");
+  const dueDaysNum = Number(dueDaysRaw);
+  if (!dueDaysRaw || !Number.isInteger(dueDaysNum) || dueDaysNum < 0 || dueDaysNum > 365) {
+    return { error: "Due date days must be a whole number between 0 and 365." };
+  }
+
+  const urgencyRaw = str(formData, "urgency") ?? TASK_WEBHOOK_DEFAULTS.urgency;
+  if (!(TASK_URGENCY_VALUES as string[]).includes(urgencyRaw)) {
+    return { error: "Invalid priority." };
+  }
+  const urgency = urgencyRaw as TaskUrgency;
+
+  await Promise.all([
+    setSetting(SETTING_KEYS.taskWebhookTitle, title),
+    setSetting(SETTING_KEYS.taskWebhookDueDays, String(dueDaysNum)),
+    setSetting(SETTING_KEYS.taskWebhookUrgency, urgency),
+  ]);
+
+  await logActivity({
+    actorId: admin.id,
+    action: "settings_updated",
+    entity: "Setting",
+    entityId: SETTING_KEYS.taskWebhookTitle,
+    meta: { setting: "Task webhook defaults", dueDays: dueDaysNum, urgency },
+  });
+  revalidatePath("/admin/settings");
+  return { ok: true };
 }

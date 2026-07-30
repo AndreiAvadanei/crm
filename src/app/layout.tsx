@@ -2,14 +2,14 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
 import { ToastProvider } from "@/components/ui/toast";
-import { APP_NAME } from "@/lib/app-constants";
+import { PUBLIC_APP_NAME } from "@/lib/app-constants";
 
 export const metadata: Metadata = {
   title: {
-    default: APP_NAME,
-    template: `%s | ${APP_NAME}`,
+    default: PUBLIC_APP_NAME,
+    template: `%s | ${PUBLIC_APP_NAME}`,
   },
-  description: "Modern sales workspace for clients, deals, pipelines and insights",
+  description: "Secure workspace",
   robots: {
     index: false,
     follow: false,
