@@ -7,6 +7,7 @@ import {
   getTaskWebhookSecret,
 } from "@/lib/settings";
 import { logActivity } from "@/lib/activity";
+import { notifyTaskAssigned } from "@/lib/notifications";
 import { TASK_URGENCY_VALUES, type TaskUrgency } from "@/lib/task-urgency";
 
 // Called by an external system to attach a follow-up task to an existing deal,
@@ -148,6 +149,10 @@ export async function POST(req: NextRequest) {
       source: "webhook",
     },
   });
+
+  // 8. Email the assignee (no-op when unassigned / inactive / not configured).
+  // No human actor, so nobody is excluded from the notification.
+  await notifyTaskAssigned(task.id, null);
 
   return NextResponse.json(
     {

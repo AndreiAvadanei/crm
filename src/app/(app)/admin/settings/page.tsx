@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { getDefaultOrganizationTvaPercent, getSetting, getTaskWebhookDefaults, SETTING_KEYS } from "@/lib/settings";
 import { brandingLogoVersion } from "@/lib/branding";
 import { PageHeader } from "@/components/app/page-header";
+import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { DefaultOwnerForm } from "@/components/admin/default-owner-form";
 import { DefaultOrganizationTvaForm } from "@/components/admin/default-organization-tva-form";
@@ -12,7 +13,7 @@ import { BrandingForm } from "@/components/admin/branding-form";
 import { IssuersManager } from "@/components/admin/issuers-card";
 import { SeriesManager } from "@/components/admin/series-card";
 import { PartNumbersManager } from "@/components/admin/part-numbers-card";
-import { setInvoiceWebhookSecretAction, setTaskWebhookSecretAction } from "@/server/admin-actions";
+import { setDailyDigestSecretAction, setInvoiceWebhookSecretAction, setTaskWebhookSecretAction } from "@/server/admin-actions";
 
 export const metadata = {
   title: "Settings",
@@ -21,7 +22,7 @@ export const metadata = {
 export default async function SettingsPage() {
   await requireAdmin();
 
-  const [owners, defaultOwnerId, defaultOrganizationTvaPercent, webhookSecret, invoiceWebhookSecret, taskWebhookSecret, taskWebhookDefaults, lightLogo, darkLogo, issuers, series, partNumbers] = await Promise.all([
+  const [owners, defaultOwnerId, defaultOrganizationTvaPercent, webhookSecret, invoiceWebhookSecret, taskWebhookSecret, dailyDigestSecret, taskWebhookDefaults, lightLogo, darkLogo, issuers, series, partNumbers] = await Promise.all([
     prisma.user.findMany({
       where: { status: "ACTIVE" },
       orderBy: { name: "asc" },
@@ -32,6 +33,7 @@ export default async function SettingsPage() {
     getSetting(SETTING_KEYS.inboundWebhookSecret),
     getSetting(SETTING_KEYS.invoiceWebhookSecret),
     getSetting(SETTING_KEYS.taskWebhookSecret),
+    getSetting(SETTING_KEYS.dailyDigestSecret),
     getTaskWebhookDefaults(),
     brandingLogoVersion("light"),
     brandingLogoVersion("dark"),
@@ -63,6 +65,7 @@ export default async function SettingsPage() {
   const webhookUrl = `${baseUrl}/api/webhooks/inbound-email`;
   const invoiceWebhookUrl = `${baseUrl}/api/webhooks/invoice-files`;
   const taskWebhookUrl = `${baseUrl}/api/webhooks/create-task`;
+  const dailyDigestUrl = `${baseUrl}/api/cron/daily-digest`;
 
   return (
     <div>
@@ -161,6 +164,56 @@ export default async function SettingsPage() {
                   dueDays={taskWebhookDefaults.dueDays}
                   urgency={taskWebhookDefaults.urgency}
                 />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="md:col-span-2">
+          <CardHeader>
+            <CardTitle>Daily priorities digest</CardTitle>
+            <CardDescription>
+              Every enabled user gets a personal 03:00 UTC email with their overdue tasks, tasks due today,
+              overdue deals, deals closing within 7 days, and a table of neglected deals (active deals with no
+              tasks or activity in 30+ days and a deadline in the past or none). Point a scheduler at the URL
+              below once a day; the endpoint is idempotent (it runs at most once per UTC day).
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-6 md:grid-cols-2">
+              <InboundWebhookForm
+                webhookUrl={dailyDigestUrl}
+                currentSecret={dailyDigestSecret}
+                action={setDailyDigestSecretAction}
+                urlHint={
+                  <p className="text-xs text-muted-foreground">
+                    Schedule a daily <code>GET</code>/<code>POST</code> to this URL at 03:00 UTC (cron{" "}
+                    <code>0 3 * * *</code>). Authenticate with header <code>x-webhook-secret</code>, an{" "}
+                    <code>Authorization: Bearer &lt;secret&gt;</code> header, or a <code>?secret=</code> query
+                    param. This value also falls back to the <code>CRON_SECRET</code> env var. Add{" "}
+                    <code>?dry=1</code> to test without sending, or <code>?all=1</code> to also email users
+                    with nothing due.
+                  </p>
+                }
+              />
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Preview</p>
+                <p className="text-xs text-muted-foreground">
+                  See exactly how the email renders. The sample uses example data; your data shows your own
+                  real digest.
+                </p>
+                <div className="flex flex-wrap gap-2 pt-1">
+                  <Button asChild variant="outline" size="sm">
+                    <a href="/api/cron/daily-digest/preview?sample=1" target="_blank" rel="noreferrer">
+                      Preview sample
+                    </a>
+                  </Button>
+                  <Button asChild variant="ghost" size="sm">
+                    <a href="/api/cron/daily-digest/preview" target="_blank" rel="noreferrer">
+                      Preview my digest
+                    </a>
+                  </Button>
+                </div>
               </div>
             </div>
           </CardContent>

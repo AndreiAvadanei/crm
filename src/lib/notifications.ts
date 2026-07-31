@@ -2,6 +2,7 @@ import "server-only";
 import { prisma } from "@/lib/db";
 import { sendEmail, renderEmailLayout } from "@/lib/email";
 import { htmlToPlainText } from "@/lib/sanitize";
+import { urgencyLabel, type TaskUrgency } from "@/lib/task-urgency";
 
 const APP_BASE_URL = process.env.APP_BASE_URL || "http://localhost:3007";
 
@@ -175,5 +176,50 @@ View deal: ${url}`;
     await sendEmail({ to: recipients.map((r) => r.email), subject, html, text });
   } catch (err) {
     console.error("[notifications] notifyDealShared failed", err);
+  }
+}
+
+/**
+ * Notify the assignee that a task has just been assigned to them. Sent only to
+ * the task's assignee; the actor (if any) is excluded so nobody is emailed about
+ * a task they created for themselves. No-op if the task is unassigned or the
+ * assignee is inactive / has no email.
+ */
+export async function notifyTaskAssigned(taskId: string, actorId: string | null): Promise<void> {
+  try {
+    const task = await prisma.task.findUnique({
+      where: { id: taskId },
+      include: { deal: { select: { salesId: true, title: true } } },
+    });
+    if (!task || !task.assigneeId) return;
+
+    const recipients = await activeRecipients([task.assigneeId], actorId ?? undefined);
+    if (recipients.length === 0) return;
+
+    const url = `${APP_BASE_URL}/deals/${task.deal.salesId}`;
+    const due = task.dueDate ? task.dueDate.toISOString().slice(0, 10) : "—";
+    const priority = urgencyLabel(task.urgency as TaskUrgency);
+    const subject = `New task: ${task.title} (${task.deal.salesId})`;
+    const bodyHtml = `
+      <p style="margin:0 0 12px;">A task was assigned to you.</p>
+      <table role="presentation" cellpadding="0" cellspacing="0" style="font-size:14px;line-height:1.6;">
+        <tr><td style="color:#6b7280;padding-right:12px;">Task</td><td><strong>${esc(task.title)}</strong></td></tr>
+        <tr><td style="color:#6b7280;padding-right:12px;">Deal</td><td>${esc(task.deal.title)} (${esc(task.deal.salesId)})</td></tr>
+        <tr><td style="color:#6b7280;padding-right:12px;">Due date</td><td>${esc(due)}</td></tr>
+        <tr><td style="color:#6b7280;padding-right:12px;">Priority</td><td>${esc(priority)}</td></tr>
+      </table>`;
+    const html = renderEmailLayout(subject, bodyHtml, url, "View task");
+    const text = `A task was assigned to you.
+
+Task: ${task.title}
+Deal: ${task.deal.title} (${task.deal.salesId})
+Due date: ${due}
+Priority: ${priority}
+
+View task: ${url}`;
+
+    await sendEmail({ to: recipients.map((r) => r.email), subject, html, text });
+  } catch (err) {
+    console.error("[notifications] notifyTaskAssigned failed", err);
   }
 }

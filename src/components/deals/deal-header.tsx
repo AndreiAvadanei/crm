@@ -12,6 +12,7 @@ import {
   InlineTagEditor,
 } from "@/components/shared/inline-edit";
 import { quickUpdateDealAction } from "@/server/quick-actions";
+import { quickCreateClientAction } from "@/server/client-actions";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
 
 type Props = {
@@ -116,6 +117,12 @@ export function DealHeader({
               align="start"
               options={clients.map((c) => ({ value: c.id, label: c.name }))}
               onSave={(next) => quickUpdateDealAction(dealId, { clientId: next })}
+              createLabel="Create client"
+              onCreate={async (name) => {
+                const res = await quickCreateClientAction(name);
+                if (res.error || !res.id) return { error: res.error ?? "Could not create client." };
+                return quickUpdateDealAction(dealId, { clientId: res.id });
+              }}
             />
             {clientId && (
               <Link

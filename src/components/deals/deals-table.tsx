@@ -1,11 +1,13 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { ChevronDown, ChevronRight, Share2 } from "lucide-react";
+import { ChevronDown, ChevronRight, ListPlus, Loader2, Share2 } from "lucide-react";
 import { quickUpdateDealAction } from "@/server/quick-actions";
 import { deleteDealAction } from "@/server/deal-actions";
+import { loadStageDealsAction } from "@/server/deal-load-actions";
+import type { DealFilterParams, StageTotal } from "@/lib/deal-filter-params";
+import { useToast } from "@/components/ui/toast";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -33,6 +35,8 @@ export type DealRow = {
 export type ShareUserRow = { id: string; name: string; color: string };
 
 export type TableStage = { id: string; name: string; color: string; phase: string | null };
+
+const EMPTY_TOTAL: StageTotal = { count: 0, value: 0 };
 
 // Kept in sync with the kanban board so the table's grouped sections share the
 // board's per-stage / per-phase collapse state (localStorage-backed).
@@ -90,17 +94,25 @@ function orderStagesLikeBoard(stages: TableStage[]): TableStage[] {
 }
 
 export function DealsTable({
-  deals,
+  deals: initial,
   stages,
+  stageTotals: initialTotals = {},
+  paginated = false,
+  filterParams = {},
+  pageSize = 10,
   owners,
   tags,
   admin,
   shareUsers,
-  sharedMap,
+  sharedMap: initialSharedMap,
   currentUserId,
 }: {
   deals: DealRow[];
   stages: TableStage[];
+  stageTotals?: Record<string, StageTotal>;
+  paginated?: boolean;
+  filterParams?: DealFilterParams;
+  pageSize?: number;
   owners: { id: string; name: string }[];
   tags: TagView[];
   admin: boolean;
@@ -108,9 +120,20 @@ export function DealsTable({
   sharedMap: Record<string, string[]>;
   currentUserId?: string;
 }) {
+  const { toast } = useToast();
   // Actions column is always present now (delete lives here for admins and deal
   // owners); the extra share control inside it stays admin-only.
   const colCount = 9;
+
+  const [rows, setRows] = useState(initial);
+  const [totals, setTotals] = useState<Record<string, StageTotal>>(initialTotals);
+  const [sharedMap, setSharedMap] = useState<Record<string, string[]>>(initialSharedMap);
+  const [loadingStages, setLoadingStages] = useState<Set<string>>(new Set());
+
+  // Re-seed on navigation (filter/search/sort change hands down a fresh page).
+  useEffect(() => setRows(initial), [initial]);
+  useEffect(() => setTotals(initialTotals), [initialTotals]);
+  useEffect(() => setSharedMap(initialSharedMap), [initialSharedMap]);
 
   // Collapse state for the grouped sections, shared with the kanban board via
   // localStorage so a section collapsed in one view stays collapsed in the
@@ -122,11 +145,11 @@ export function DealsTable({
   const readCollapsed = useCallback(() => {
     const collapsedStages = loadSet(STAGE_KEY);
     const collapsedPhases = loadSet(PHASE_KEY);
-    const initial = new Set<string>();
+    const next = new Set<string>();
     for (const s of stages) {
-      if (collapsedStages.has(s.id) || collapsedPhases.has(phaseKeyOf(s))) initial.add(s.id);
+      if (collapsedStages.has(s.id) || collapsedPhases.has(phaseKeyOf(s))) next.add(s.id);
     }
-    return initial;
+    return next;
   }, [stages]);
 
   useEffect(() => {
@@ -143,24 +166,90 @@ export function DealsTable({
     setCollapsed((prev) => {
       const next = new Set(prev);
       next.has(stageId) ? next.delete(stageId) : next.add(stageId);
-      // Persist to the board's per-stage key so the two views stay in sync.
-      // Any phase-derived collapses get materialized as explicit per-stage
-      // entries here — harmless, and keeps both views agreeing at stage level.
       saveSet(STAGE_KEY, next);
       return next;
     });
 
-  // Group deals by stage (order preserved = current sort within each section).
-  const byStage = new Map<string, DealRow[]>();
-  for (const s of stages) byStage.set(s.id, []);
-  const orphanDeals: DealRow[] = [];
-  for (const d of deals) {
-    const bucket = byStage.get(d.stageId);
-    if (bucket) bucket.push(d);
-    else orphanDeals.push(d);
+  // Group loaded rows by stage (order preserved = current sort within section).
+  const byStage = useMemo(() => {
+    const map = new Map<string, DealRow[]>();
+    for (const s of stages) map.set(s.id, []);
+    const orphans: DealRow[] = [];
+    for (const d of rows) {
+      const bucket = map.get(d.stageId);
+      if (bucket) bucket.push(d);
+      else orphans.push(d);
+    }
+    return { map, orphans };
+  }, [rows, stages]);
+
+  const orderedStages = useMemo(() => orderStagesLikeBoard(stages), [stages]);
+
+  function adjustTotal(stageId: string, dCount: number, dValue: number) {
+    setTotals((prev) => {
+      const cur = prev[stageId] ?? EMPTY_TOTAL;
+      return {
+        ...prev,
+        [stageId]: { count: Math.max(0, cur.count + dCount), value: cur.value + dValue },
+      };
+    });
   }
 
-  const orderedStages = orderStagesLikeBoard(stages);
+  const hasMore = (stageId: string) =>
+    paginated && (byStage.map.get(stageId)?.length ?? 0) < (totals[stageId]?.count ?? 0);
+
+  async function loadMore(stageId: string, all = false) {
+    if (!paginated || loadingStages.has(stageId)) return;
+    const offset = byStage.map.get(stageId)?.length ?? 0;
+    const total = totals[stageId]?.count ?? 0;
+    if (offset >= total) return;
+    const limit = all ? total - offset : pageSize;
+
+    setLoadingStages((prev) => new Set(prev).add(stageId));
+    const res = await loadStageDealsAction({ filters: filterParams, stageId, offset, limit });
+    setLoadingStages((prev) => {
+      const next = new Set(prev);
+      next.delete(stageId);
+      return next;
+    });
+
+    if ("error" in res) {
+      toast({ title: res.error, variant: "error" });
+      return;
+    }
+    setRows((prev) => {
+      const seen = new Set(prev.map((d) => d.id));
+      return [...prev, ...res.rows.filter((d) => !seen.has(d.id))];
+    });
+    if (Object.keys(res.sharedMap).length) {
+      setSharedMap((prev) => ({ ...prev, ...res.sharedMap }));
+    }
+  }
+
+  // --- Optimistic local mutations (keep totals + section membership in sync) ---
+  function removeRow(id: string) {
+    const gone = rows.find((d) => d.id === id);
+    if (gone) adjustTotal(gone.stageId, -1, -(gone.amountEur ?? 0));
+    setRows((prev) => prev.filter((d) => d.id !== id));
+  }
+  function moveRowStage(id: string, stageId: string) {
+    const row = rows.find((d) => d.id === id);
+    if (!row || row.stageId === stageId) return;
+    const amount = row.amountEur ?? 0;
+    adjustTotal(row.stageId, -1, -amount);
+    adjustTotal(stageId, 1, amount);
+    setRows((prev) => prev.map((d) => (d.id === id ? { ...d, stageId } : d)));
+  }
+  function changeRowAmount(id: string, amount: number | null) {
+    const row = rows.find((d) => d.id === id);
+    if (row) adjustTotal(row.stageId, 0, (amount ?? 0) - (row.amountEur ?? 0));
+    setRows((prev) => prev.map((d) => (d.id === id ? { ...d, amountEur: amount } : d)));
+  }
+  function patchRow(id: string, patch: Partial<DealRow>) {
+    setRows((prev) => prev.map((d) => (d.id === id ? { ...d, ...patch } : d)));
+  }
+
+  const anyRows = rows.length > 0 || Object.values(totals).some((t) => t.count > 0);
 
   return (
     <div className="rounded-lg border bg-card">
@@ -180,44 +269,62 @@ export function DealsTable({
         </TableHeader>
         <TableBody>
           {orderedStages.map((stage) => {
-            const rows = byStage.get(stage.id) ?? [];
-            // Skip empty stages entirely — no header clutter for statuses with
-            // no deals in the current filter/search.
-            if (rows.length === 0) return null;
+            const total = totals[stage.id] ?? EMPTY_TOTAL;
+            // Skip stages with no matching deals — no header clutter for empty
+            // statuses in the current filter/search.
+            if (total.count === 0) return null;
+            const loaded = byStage.map.get(stage.id) ?? [];
             const isCollapsed = collapsed.has(stage.id);
-            const total = rows.reduce((s, d) => s + (d.amountEur ?? 0), 0);
+            const more = hasMore(stage.id);
+            const loading = loadingStages.has(stage.id);
             return (
               <Fragment key={stage.id}>
                 <TableRow className="border-t hover:bg-transparent">
                   <TableCell colSpan={colCount} className="p-0">
-                    <button
-                      type="button"
-                      onClick={() => toggle(stage.id)}
-                      aria-expanded={!isCollapsed}
-                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-semibold transition-colors hover:brightness-105"
+                    <div
+                      className="flex w-full items-center gap-2 px-3 py-2 text-sm font-semibold"
                       style={{ backgroundColor: hexAlpha(stage.color, 0.12) }}
                     >
-                      {isCollapsed ? (
-                        <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                      ) : (
-                        <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                      )}
-                      <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: stage.color }} />
-                      <span className="truncate">{stage.name}</span>
-                      <span
-                        className="rounded-full px-1.5 text-xs font-semibold text-white"
-                        style={{ backgroundColor: stage.color }}
+                      <button
+                        type="button"
+                        onClick={() => toggle(stage.id)}
+                        aria-expanded={!isCollapsed}
+                        className="flex min-w-0 flex-1 items-center gap-2 text-left transition-colors hover:brightness-105"
                       >
-                        {rows.length}
-                      </span>
-                      <span className="ml-auto text-xs font-medium text-muted-foreground tabular-nums">
-                        {formatCurrency(total)}
-                      </span>
-                    </button>
+                        {isCollapsed ? (
+                          <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                        ) : (
+                          <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                        )}
+                        <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: stage.color }} />
+                        <span className="truncate">{stage.name}</span>
+                        <span
+                          className="rounded-full px-1.5 text-xs font-semibold text-white"
+                          style={{ backgroundColor: stage.color }}
+                        >
+                          {total.count}
+                        </span>
+                        <span className="ml-auto text-xs font-medium text-muted-foreground tabular-nums">
+                          {formatCurrency(total.value)}
+                        </span>
+                      </button>
+                      {!isCollapsed && more && (
+                        <button
+                          type="button"
+                          onClick={() => loadMore(stage.id, true)}
+                          disabled={loading}
+                          className="inline-flex shrink-0 items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-background hover:text-foreground disabled:opacity-50"
+                          title={`Load all ${total.count} deals`}
+                        >
+                          {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ListPlus className="h-3.5 w-3.5" />}
+                          Load all
+                        </button>
+                      )}
+                    </div>
                   </TableCell>
                 </TableRow>
                 {!isCollapsed &&
-                  rows.map((d) => (
+                  loaded.map((d) => (
                     <DealTableRow
                       key={d.id}
                       deal={d}
@@ -225,17 +332,30 @@ export function DealsTable({
                       owners={owners}
                       tags={tags}
                       admin={admin}
+                      paginated={paginated}
                       shareUsers={shareUsers}
                       sharedMap={sharedMap}
                       currentUserId={currentUserId}
+                      onStageChange={moveRowStage}
+                      onAmountChange={changeRowAmount}
+                      onPatch={patchRow}
+                      onDeleted={removeRow}
                     />
                   ))}
+                {!isCollapsed && more && (
+                  <LoadMoreRow
+                    colSpan={colCount}
+                    remaining={total.count - loaded.length}
+                    loading={loading}
+                    onLoadMore={() => loadMore(stage.id)}
+                  />
+                )}
               </Fragment>
             );
           })}
 
           {/* Deals whose stage isn't in the current pipeline (defensive). */}
-          {orphanDeals.map((d) => (
+          {byStage.orphans.map((d) => (
             <DealTableRow
               key={d.id}
               deal={d}
@@ -243,13 +363,18 @@ export function DealsTable({
               owners={owners}
               tags={tags}
               admin={admin}
+              paginated={paginated}
               shareUsers={shareUsers}
               sharedMap={sharedMap}
               currentUserId={currentUserId}
+              onStageChange={moveRowStage}
+              onAmountChange={changeRowAmount}
+              onPatch={patchRow}
+              onDeleted={removeRow}
             />
           ))}
 
-          {deals.length === 0 && (
+          {!anyRows && (
             <TableRow>
               <TableCell colSpan={colCount} className="py-10 text-center text-sm text-muted-foreground">
                 No deals found.
@@ -262,27 +387,77 @@ export function DealsTable({
   );
 }
 
+/**
+ * A section footer row with an explicit "load more" button. Unlike the board's
+ * columns, the table never auto-loads on scroll — the next page is fetched only
+ * when the user clicks this button under the status section.
+ */
+function LoadMoreRow({
+  colSpan,
+  remaining,
+  loading,
+  onLoadMore,
+}: {
+  colSpan: number;
+  remaining: number;
+  loading: boolean;
+  onLoadMore: () => void;
+}) {
+  return (
+    <TableRow className="hover:bg-transparent">
+      <TableCell colSpan={colSpan} className="p-0">
+        <button
+          type="button"
+          onClick={onLoadMore}
+          disabled={loading}
+          className="flex w-full items-center justify-center gap-1.5 py-2.5 text-xs text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground disabled:opacity-50"
+        >
+          {loading ? (
+            <>
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading…
+            </>
+          ) : (
+            `Load more (${remaining} left)`
+          )}
+        </button>
+      </TableCell>
+    </TableRow>
+  );
+}
+
 function DealTableRow({
   deal: d,
   stages,
   owners,
   tags,
   admin,
+  paginated,
   shareUsers,
   sharedMap,
   currentUserId,
+  onStageChange,
+  onAmountChange,
+  onPatch,
+  onDeleted,
 }: {
   deal: DealRow;
   stages: TableStage[];
   owners: { id: string; name: string }[];
   tags: TagView[];
   admin: boolean;
+  paginated: boolean;
   shareUsers: ShareUserRow[];
   sharedMap: Record<string, string[]>;
   currentUserId?: string;
+  onStageChange: (id: string, stageId: string) => void;
+  onAmountChange: (id: string, amount: number | null) => void;
+  onPatch: (id: string, patch: Partial<DealRow>) => void;
+  onDeleted: (id: string) => void;
 }) {
-  const router = useRouter();
   const canDelete = admin || (!!currentUserId && d.ownerId === currentUserId);
+  // In paginated mode we keep loaded pages by suppressing the inline editors'
+  // built-in refresh and syncing via the optimistic callbacks instead.
+  const refreshOnSave = !paginated;
   return (
     <TableRow className={cn(d.overdue && "bg-destructive/5 hover:bg-destructive/10")}>
       <TableCell className="font-mono text-xs text-muted-foreground">
@@ -300,12 +475,17 @@ function DealTableRow({
       </TableCell>
       <TableCell className="text-sm">{d.clientName ?? "—"}</TableCell>
 
-      {/* Stage — inline select */}
+      {/* Stage — inline select (moves the row to the new section on save) */}
       <TableCell>
         <InlineSelect
           value={d.stageId}
+          refreshOnSave={refreshOnSave}
           options={stages.map((s) => ({ value: s.id, label: s.name }))}
-          onSave={(stageId) => quickUpdateDealAction(d.id, { stageId })}
+          onSave={async (stageId) => {
+            const res = await quickUpdateDealAction(d.id, { stageId });
+            if (!res.error) onStageChange(d.id, stageId);
+            return res;
+          }}
         />
       </TableCell>
 
@@ -314,14 +494,17 @@ function DealTableRow({
         <InlineInput
           type="number"
           align="right"
+          refreshOnSave={refreshOnSave}
           value={d.amountEur != null ? String(d.amountEur) : ""}
           display={<span className="tabular-nums">{formatCurrency(d.amountEur)}</span>}
-          onSave={(raw) => {
+          onSave={async (raw) => {
             const trimmed = raw.trim();
             const amountEur = trimmed === "" ? null : Number(trimmed);
             if (amountEur != null && !Number.isFinite(amountEur))
-              return Promise.resolve({ error: "Invalid amount." });
-            return quickUpdateDealAction(d.id, { amountEur });
+              return { error: "Invalid amount." };
+            const res = await quickUpdateDealAction(d.id, { amountEur });
+            if (!res.error) onAmountChange(d.id, amountEur);
+            return res;
           }}
         />
       </TableCell>
@@ -331,7 +514,12 @@ function DealTableRow({
         <InlineTagEditor
           allTags={tags}
           value={d.tagIds}
-          onSave={(tagIds) => quickUpdateDealAction(d.id, { tagIds })}
+          refreshOnSave={refreshOnSave}
+          onSave={async (tagIds) => {
+            const res = await quickUpdateDealAction(d.id, { tagIds });
+            if (!res.error) onPatch(d.id, { tagIds });
+            return res;
+          }}
         />
       </TableCell>
 
@@ -341,8 +529,18 @@ function DealTableRow({
           <InlineSelect
             value={d.ownerId ?? ""}
             placeholder="Unassigned"
+            refreshOnSave={refreshOnSave}
             options={owners.map((o) => ({ value: o.id, label: o.name }))}
-            onSave={(ownerId) => quickUpdateDealAction(d.id, { ownerId: ownerId || null })}
+            onSave={async (ownerId) => {
+              const res = await quickUpdateDealAction(d.id, { ownerId: ownerId || null });
+              if (!res.error)
+                onPatch(d.id, {
+                  ownerId: ownerId || null,
+                  ownerName: owners.find((o) => o.id === ownerId)?.name ?? null,
+                  ownerColor: null,
+                });
+              return res;
+            }}
           />
         ) : d.ownerName ? (
           <Avatar name={d.ownerName} color={d.ownerColor} />
@@ -355,6 +553,7 @@ function DealTableRow({
       <TableCell className={cn("text-xs text-muted-foreground", d.overdue && "font-medium text-destructive")}>
         <InlineInput
           type="date"
+          refreshOnSave={refreshOnSave}
           value={d.dueDate ?? ""}
           display={
             d.dueDate ? (
@@ -363,7 +562,11 @@ function DealTableRow({
               <span className="text-muted-foreground">—</span>
             )
           }
-          onSave={(dueDate) => quickUpdateDealAction(d.id, { dueDate: dueDate || null })}
+          onSave={async (dueDate) => {
+            const res = await quickUpdateDealAction(d.id, { dueDate: dueDate || null });
+            if (!res.error) onPatch(d.id, { dueDate: dueDate || null });
+            return res;
+          }}
         />
       </TableCell>
 
@@ -389,7 +592,7 @@ function DealTableRow({
           {canDelete && (
             <ConfirmDeleteButton
               onDelete={() => deleteDealAction(d.id)}
-              onDeleted={() => router.refresh()}
+              onDeleted={() => onDeleted(d.id)}
               idleTitle="Delete deal"
               title="Delete deal?"
               description="Tasks, comments and files will be hidden with the deal."

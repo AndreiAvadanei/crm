@@ -19,6 +19,7 @@ import { getAnalytics, getIntervalComparison, type Granularity, type KpiDelta } 
 import { PageHeader } from "@/components/app/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { DashboardFilters } from "@/components/dashboard/dashboard-filters";
+import { DashboardAnalytics } from "@/components/dashboard/dashboard-analytics";
 import { MyWork } from "@/components/dashboard/my-overdue";
 import type { TaskItemData } from "@/components/tasks/task-common";
 import { ScorecardTable } from "@/components/dashboard/scorecard-table";
@@ -244,8 +245,6 @@ export default async function DashboardPage({
     <div className="pb-10">
       <PageHeader title="Dashboard" description={`Welcome back, ${user.name.split(" ")[0]}.`} />
       <div className="space-y-6 p-4 md:p-6">
-        <DashboardFilters />
-
         <MyWork
           overdueTasks={myOverdueTasks}
           upcomingTasks={myUpcomingTasks}
@@ -255,78 +254,82 @@ export default async function DashboardPage({
           admin={admin}
         />
 
-        {/* KPI row */}
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-          <StatCard
-            label="Pipeline total"
-            value={formatCurrency(k.pipelineTotal)}
-            sub={`${k.pipelineCount} open deals`}
-            icon={Wallet}
-            delta={d?.pipelineTotal}
-            tone="var(--chart-1)"
-          />
-          <StatCard
-            label="Win rate"
-            value={`${Math.round(k.winRate)}%`}
-            sub={`${k.wonCount}W / ${k.lostCount}L closed`}
-            icon={Target}
-            delta={d?.winRate}
-            tone="var(--chart-2)"
-          />
-          <StatCard
-            label="Loss rate"
-            value={`${Math.round(k.lossRate)}%`}
-            sub={`${k.lostCount} of ${k.closedCount} closed`}
-            icon={Percent}
-            delta={d?.lossRate}
-            invert
-            tone="var(--chart-4)"
-          />
-          <StatCard
-            label="Avg won deal"
-            value={formatCurrency(k.avgWonDeal)}
-            sub={`${k.wonCount} won deals`}
-            icon={Coins}
-            delta={d?.avgWonDeal}
-            tone="var(--chart-3)"
-          />
-          <StatCard
-            label="Total won"
-            value={formatCurrency(k.totalWon)}
-            sub={`${k.wonCount} deals`}
-            icon={Trophy}
-            delta={d?.totalWon}
-            tone="var(--chart-5)"
-          />
-        </div>
+        <DashboardAnalytics>
+          <DashboardFilters />
 
-        {/* Status row */}
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatusCard label="Active" count={s.active.count} value={s.active.value} icon={CircleDot} tone="var(--chart-1)" />
-          <StatusCard label="Won · in progress" count={s.wonInProgress.count} value={s.wonInProgress.value} icon={Clock} tone="var(--chart-3)" />
-          <StatusCard label="Won · closed" count={s.wonClosed.count} value={s.wonClosed.value} icon={CheckCircle2} tone="var(--chart-2)" />
-          <StatusCard label="Lost" count={s.lost.count} value={s.lost.value} icon={XCircle} tone="var(--chart-4)" />
-        </div>
-
-        {/* Charts */}
-        <div className="grid gap-6 lg:grid-cols-3">
-          <div className="lg:col-span-2">
-            <FunnelChart data={analytics.funnel} />
+          {/* KPI row */}
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+            <StatCard
+              label="Pipeline total"
+              value={formatCurrency(k.pipelineTotal)}
+              sub={`${k.pipelineCount} open deals`}
+              icon={Wallet}
+              delta={d?.pipelineTotal}
+              tone="var(--chart-1)"
+            />
+            <StatCard
+              label="Win rate"
+              value={`${Math.round(k.winRate)}%`}
+              sub={`${k.wonCount}W / ${k.lostCount}L closed`}
+              icon={Target}
+              delta={d?.winRate}
+              tone="var(--chart-2)"
+            />
+            <StatCard
+              label="Loss rate"
+              value={`${Math.round(k.lossRate)}%`}
+              sub={`${k.lostCount} of ${k.closedCount} closed`}
+              icon={Percent}
+              delta={d?.lossRate}
+              invert
+              tone="var(--chart-4)"
+            />
+            <StatCard
+              label="Avg won deal"
+              value={formatCurrency(k.avgWonDeal)}
+              sub={`${k.wonCount} won deals`}
+              icon={Coins}
+              delta={d?.avgWonDeal}
+              tone="var(--chart-3)"
+            />
+            <StatCard
+              label="Total won"
+              value={formatCurrency(k.totalWon)}
+              sub={`${k.wonCount} deals`}
+              icon={Trophy}
+              delta={d?.totalWon}
+              tone="var(--chart-5)"
+            />
           </div>
-          <StatusPie status={s} />
-        </div>
 
-        {comparison ? (
-          <div className="grid gap-6 lg:grid-cols-2">
+          {/* Status row */}
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <StatusCard label="Active" count={s.active.count} value={s.active.value} icon={CircleDot} tone="var(--chart-1)" />
+            <StatusCard label="Won · in progress" count={s.wonInProgress.count} value={s.wonInProgress.value} icon={Clock} tone="var(--chart-3)" />
+            <StatusCard label="Won · closed" count={s.wonClosed.count} value={s.wonClosed.value} icon={CheckCircle2} tone="var(--chart-2)" />
+            <StatusCard label="Lost" count={s.lost.count} value={s.lost.value} icon={XCircle} tone="var(--chart-4)" />
+          </div>
+
+          {/* Charts */}
+          <div className="grid gap-6 lg:grid-cols-3">
+            <div className="lg:col-span-2">
+              <FunnelChart data={analytics.funnel} />
+            </div>
+            <StatusPie status={s} />
+          </div>
+
+          {comparison ? (
+            <div className="grid gap-6 lg:grid-cols-2">
+              <CreatedVsWonChart data={analytics.series} />
+              <ComparisonChart periods={comparison.periods} />
+            </div>
+          ) : (
             <CreatedVsWonChart data={analytics.series} />
-            <ComparisonChart periods={comparison.periods} />
-          </div>
-        ) : (
-          <CreatedVsWonChart data={analytics.series} />
-        )}
+          )}
 
-        {/* Scorecard */}
-        <ScorecardTable scorecard={analytics.scorecard} granularity={granularity} />
+          {/* Scorecard */}
+          <ScorecardTable scorecard={analytics.scorecard} granularity={granularity} />
+        </DashboardAnalytics>
       </div>
     </div>
   );

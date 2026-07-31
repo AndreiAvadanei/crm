@@ -19,12 +19,16 @@ import {
   CheckSquare,
   ChevronLeft,
   ChevronRight,
+  Loader2,
+  ListPlus,
   Share2,
   SquarePen,
 } from "lucide-react";
 import { moveDealStageAction, deleteDealAction } from "@/server/deal-actions";
 import { quickCreateDealAction } from "@/server/board-actions";
 import { quickUpdateDealAction } from "@/server/quick-actions";
+import { loadStageDealsAction } from "@/server/deal-load-actions";
+import type { DealFilterParams, StageTotal } from "@/lib/deal-filter-params";
 import { useToast } from "@/components/ui/toast";
 import { Avatar } from "@/components/ui/avatar";
 import { TagBadge, type TagView } from "@/components/shared/tag-badge";
@@ -75,6 +79,10 @@ type NewDealProps = {
 const STAGE_KEY = "kanban:collapsedStages";
 const PHASE_KEY = "kanban:collapsedPhases";
 
+// Pointer travel (px) before a press on a card becomes a drag rather than a
+// click. Shared by the drag sensor and the card's click-suppression guard.
+const DRAG_ACTIVATION = 6;
+
 function loadSet(key: string): Set<string> {
   if (typeof window === "undefined") return new Set();
   try {
@@ -106,6 +114,7 @@ function hexAlpha(hex: string, alpha: number): string | undefined {
 function DealCard({
   deal,
   overlay = false,
+  paginated = false,
   stageColor,
   stageOptions,
   allTags,
@@ -125,6 +134,9 @@ function DealCard({
 }: {
   deal: KanbanDeal;
   overlay?: boolean;
+  // When true the board owns optimistic state; inline editors skip their own
+  // router.refresh() so loaded pages aren't discarded.
+  paginated?: boolean;
   // Color of the deal's current stage (used for the status dot).
   stageColor?: string;
   // Full stage list for the inline status selector.
@@ -160,11 +172,29 @@ function DealCard({
   // drag overlay) and when the board supplied the necessary data.
   const interactive = !overlay && !!stageOptions && !!onStageChange;
 
+  // The whole card is a drag handle. Because dnd-kit only activates after the
+  // pointer travels DRAG_ACTIVATION px, a plain click still reaches the child
+  // controls (title link, inline editors). We record where the press started
+  // and, if the pointer moved far enough to be a drag, swallow the trailing
+  // click so it doesn't navigate the title link or open an inline editor.
+  const pressStart = useRef<{ x: number; y: number } | null>(null);
+
   return (
     <div
       ref={setNodeRef}
       {...listeners}
       {...attributes}
+      onPointerDownCapture={(e) => {
+        pressStart.current = { x: e.clientX, y: e.clientY };
+      }}
+      onClickCapture={(e) => {
+        const start = pressStart.current;
+        pressStart.current = null;
+        if (start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > DRAG_ACTIVATION) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }}
       className={cn(
         "group rounded-lg border bg-card p-3 shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md cursor-grab active:cursor-grabbing",
         // Overdue deals get a red left accent + tinted surface.
@@ -236,7 +266,6 @@ function DealCard({
       <Link
         href={`/deals/${deal.salesId}`}
         className="mt-1.5 block text-sm font-semibold leading-snug hover:text-primary"
-        onPointerDown={(e) => e.stopPropagation()}
       >
         {deal.title}
       </Link>
@@ -275,6 +304,7 @@ function DealCard({
           <InlineTagEditor
             allTags={allTags}
             value={deal.tags.map((t) => t.id)}
+            refreshOnSave={!paginated}
             onSave={async (tagIds) => {
               const res = await quickUpdateDealAction(deal.id, { tagIds });
               if (!res.error) {
@@ -299,6 +329,7 @@ function DealCard({
             <InlineInput
               type="number"
               align="right"
+              refreshOnSave={!paginated}
               value={deal.amountEur != null ? String(deal.amountEur) : ""}
               display={
                 <span className="text-sm font-semibold text-foreground tabular-nums">
@@ -392,7 +423,6 @@ function CardStageSelect({
     return (
       <button
         type="button"
-        onPointerDown={stop}
         onClick={(e) => {
           stop(e);
           setEditing(true);
@@ -495,7 +525,6 @@ function CardOwnerSelect({
   return (
     <button
       type="button"
-      onPointerDown={stop}
       onClick={(e) => {
         stop(e);
         setEditing(true);
@@ -569,7 +598,6 @@ function CardDueDate({
   return (
     <button
       type="button"
-      onPointerDown={stop}
       onClick={(e) => {
         stop(e);
         setEditing(true);
@@ -589,7 +617,16 @@ function CardDueDate({
 // ---------------------------------------------------------------------------
 // Inline quick-add (title only → server action)
 // ---------------------------------------------------------------------------
-function QuickAdd({ stageId, onCreated }: { stageId: string; onCreated: (deal: KanbanDeal) => void }) {
+function QuickAdd({
+  stageId,
+  onCreated,
+  refreshOnCreate = true,
+}: {
+  stageId: string;
+  onCreated: (deal: KanbanDeal) => void;
+  // The paginated board skips the post-create refresh so loaded pages survive.
+  refreshOnCreate?: boolean;
+}) {
   const { toast } = useToast();
   const router = useRouter();
   const [title, setTitle] = useState("");
@@ -621,7 +658,7 @@ function QuickAdd({ stageId, onCreated }: { stageId: string; onCreated: (deal: K
     });
     setTitle("");
     // Keep server data (owner/avatar) in sync without a full reload jank.
-    router.refresh();
+    if (refreshOnCreate) router.refresh();
   }
 
   return (
@@ -649,6 +686,12 @@ function QuickAdd({ stageId, onCreated }: { stageId: string; onCreated: (deal: K
 function StageColumn({
   stage,
   deals,
+  total,
+  paginated,
+  hasMore,
+  loading,
+  onLoadMore,
+  onLoadAll,
   newDeal,
   stageOptions,
   allTags,
@@ -670,6 +713,13 @@ function StageColumn({
 }: {
   stage: KanbanStage;
   deals: KanbanDeal[];
+  // Full matching rollup for this stage (independent of loaded card count).
+  total: StageTotal;
+  paginated: boolean;
+  hasMore: boolean;
+  loading: boolean;
+  onLoadMore: () => void;
+  onLoadAll: () => void;
   newDeal?: NewDealProps;
   stageOptions: { id: string; name: string }[];
   allTags: TagView[];
@@ -691,11 +741,32 @@ function StageColumn({
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage.id });
   const [adding, setAdding] = useState(false);
-  const total = deals.reduce((s, d) => s + (d.amountEur ?? 0), 0);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
   // Stage-color tints used to make each column clearly distinguishable.
   const headerTint = hexAlpha(stage.color, 0.16);
   const listTint = hexAlpha(stage.color, 0.07);
   const colBorder = hexAlpha(stage.color, 0.45);
+  const remaining = Math.max(0, total.count - deals.length);
+
+  // Infinite scroll: load the next page as the sentinel nears the bottom of
+  // this column's own scroll area. Re-armed whenever more remains / a load ends.
+  const onLoadMoreRef = useRef(onLoadMore);
+  onLoadMoreRef.current = onLoadMore;
+  useEffect(() => {
+    if (!hasMore || loading) return;
+    const root = scrollRef.current;
+    const target = sentinelRef.current;
+    if (!root || !target) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) onLoadMoreRef.current();
+      },
+      { root, rootMargin: "200px" }
+    );
+    io.observe(target);
+    return () => io.disconnect();
+  }, [hasMore, loading, deals.length]);
 
   return (
     <div className="flex h-full w-72 shrink-0 flex-col">
@@ -715,10 +786,20 @@ function StageColumn({
               className="rounded-full px-1.5 text-xs font-semibold text-white"
               style={{ backgroundColor: stage.color }}
             >
-              {deals.length}
+              {total.count}
             </span>
           </div>
           <div className="flex shrink-0 items-center">
+            {paginated && hasMore && (
+              <button
+                onClick={onLoadAll}
+                disabled={loading}
+                className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+                title={`Load all ${total.count} deals`}
+              >
+                {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ListPlus className="h-3.5 w-3.5" />}
+              </button>
+            )}
             {newDeal && (
               <DealFormDialog
                 isAdmin={newDeal.isAdmin}
@@ -748,12 +829,15 @@ function StageColumn({
           </div>
         </div>
         <div className="mt-1 px-0.5 text-xs text-muted-foreground tabular-nums">
-          {formatCurrency(total)} · weighted {formatCurrency((total * stage.probability) / 100)}
+          {formatCurrency(total.value)} · weighted {formatCurrency((total.value * stage.probability) / 100)}
         </div>
       </div>
 
       <div
-        ref={setNodeRef}
+        ref={(node) => {
+          setNodeRef(node);
+          scrollRef.current = node;
+        }}
         className={cn(
           "flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto rounded-xl border p-2 transition-colors",
           isOver && "border-primary bg-primary/5"
@@ -764,11 +848,12 @@ function StageColumn({
             : { backgroundColor: listTint, borderColor: colBorder }
         }
       >
-        {adding && <QuickAdd stageId={stage.id} onCreated={onCreated} />}
+        {adding && <QuickAdd stageId={stage.id} onCreated={onCreated} refreshOnCreate={!paginated} />}
         {deals.map((d) => (
           <DealCard
             key={d.id}
             deal={d}
+            paginated={paginated}
             stageColor={stage.color}
             stageOptions={stageOptions}
             allTags={allTags}
@@ -787,7 +872,26 @@ function StageColumn({
             onDueDateChange={onDueDateChange}
           />
         ))}
-        {deals.length === 0 && !adding && (
+
+        {paginated && hasMore && (
+          <div ref={sentinelRef} className="flex flex-col gap-1.5 py-1">
+            <button
+              onClick={onLoadMore}
+              disabled={loading}
+              className="flex items-center justify-center gap-1.5 rounded-lg border border-dashed py-2 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground disabled:opacity-50"
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="h-3 w-3 animate-spin" /> Loading…
+                </>
+              ) : (
+                `Load more (${remaining} left)`
+              )}
+            </button>
+          </div>
+        )}
+
+        {total.count === 0 && !adding && (
           <button
             onClick={() => setAdding(true)}
             className="rounded-lg border border-dashed py-6 text-center text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
@@ -805,15 +909,14 @@ function StageColumn({
 // ---------------------------------------------------------------------------
 function CollapsedStage({
   stage,
-  deals,
+  total,
   onExpand,
 }: {
   stage: KanbanStage;
-  deals: KanbanDeal[];
+  total: StageTotal;
   onExpand: () => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage.id });
-  const total = deals.reduce((s, d) => s + (d.amountEur ?? 0), 0);
   return (
     <button
       ref={setNodeRef}
@@ -838,7 +941,7 @@ function CollapsedStage({
         className="rounded-full px-1.5 text-[10px] font-semibold text-white"
         style={{ backgroundColor: stage.color }}
       >
-        {deals.length}
+        {total.count}
       </span>
       <span
         className="flex-1 text-xs font-semibold [writing-mode:vertical-rl]"
@@ -847,7 +950,7 @@ function CollapsedStage({
         {stage.name}
       </span>
       <span className="text-[9px] text-muted-foreground [writing-mode:vertical-rl] tabular-nums">
-        {formatCurrency(total)}
+        {formatCurrency(total.value)}
       </span>
     </button>
   );
@@ -858,9 +961,17 @@ function CollapsedStage({
 // ---------------------------------------------------------------------------
 type PhaseGroupData = { key: string; label: string; stages: KanbanStage[] };
 
+const EMPTY_TOTAL: StageTotal = { count: 0, value: 0 };
+
 function PhaseGroup({
   group,
   byStage,
+  totals,
+  paginated,
+  loadingStages,
+  hasMore,
+  onLoadMore,
+  onLoadAll,
   collapsedStages,
   newDeal,
   stageOptions,
@@ -885,6 +996,12 @@ function PhaseGroup({
 }: {
   group: PhaseGroupData;
   byStage: Record<string, KanbanDeal[]>;
+  totals: Record<string, StageTotal>;
+  paginated: boolean;
+  loadingStages: Set<string>;
+  hasMore: (stageId: string) => boolean;
+  onLoadMore: (stageId: string) => void;
+  onLoadAll: (stageId: string) => void;
   collapsedStages: Set<string>;
   newDeal?: NewDealProps;
   stageOptions: { id: string; name: string }[];
@@ -907,8 +1024,10 @@ function PhaseGroup({
   onOwnerChange: (dealId: string, ownerId: string | null) => void;
   onDueDateChange: (dealId: string, dueDate: string | null) => void;
 }) {
-  const groupDeals = group.stages.flatMap((s) => byStage[s.id] ?? []);
-  const total = groupDeals.reduce((s, d) => s + (d.amountEur ?? 0), 0);
+  // Phase-band totals roll up the *full* per-stage counts/values, not just the
+  // loaded cards.
+  const groupCount = group.stages.reduce((s, st) => s + (totals[st.id]?.count ?? 0), 0);
+  const groupValue = group.stages.reduce((s, st) => s + (totals[st.id]?.value ?? 0), 0);
   // Accent the band from the first stage's color.
   const accent = group.stages[0]?.color ?? "#64748b";
   const tint = hexAlpha(accent, 0.06);
@@ -924,13 +1043,13 @@ function PhaseGroup({
       >
         <ChevronRight className="h-4 w-4 text-muted-foreground" />
         <span className="rounded-full bg-background/70 px-1.5 text-[10px] text-muted-foreground">
-          {groupDeals.length}
+          {groupCount}
         </span>
         <span className="flex-1 text-sm font-bold uppercase tracking-wide [writing-mode:vertical-rl]">
           {group.label}
         </span>
         <span className="text-[9px] text-muted-foreground [writing-mode:vertical-rl] tabular-nums">
-          {formatCurrency(total)}
+          {formatCurrency(groupValue)}
         </span>
       </button>
     );
@@ -952,8 +1071,8 @@ function PhaseGroup({
           {group.label}
         </button>
         <div className="flex items-center gap-2 text-xs text-muted-foreground tabular-nums">
-          <span className="rounded-full bg-background/70 px-1.5">{groupDeals.length}</span>
-          <span className="font-medium text-foreground">{formatCurrency(total)}</span>
+          <span className="rounded-full bg-background/70 px-1.5">{groupCount}</span>
+          <span className="font-medium text-foreground">{formatCurrency(groupValue)}</span>
         </div>
       </div>
       <div className="flex min-h-0 flex-1 gap-3">
@@ -962,7 +1081,7 @@ function PhaseGroup({
             <CollapsedStage
               key={stage.id}
               stage={stage}
-              deals={byStage[stage.id] ?? []}
+              total={totals[stage.id] ?? EMPTY_TOTAL}
               onExpand={() => onToggleStage(stage.id)}
             />
           ) : (
@@ -970,6 +1089,12 @@ function PhaseGroup({
               key={stage.id}
               stage={stage}
               deals={byStage[stage.id] ?? []}
+              total={totals[stage.id] ?? EMPTY_TOTAL}
+              paginated={paginated}
+              hasMore={hasMore(stage.id)}
+              loading={loadingStages.has(stage.id)}
+              onLoadMore={() => onLoadMore(stage.id)}
+              onLoadAll={() => onLoadAll(stage.id)}
               newDeal={newDeal}
               stageOptions={stageOptions}
               allTags={allTags}
@@ -1002,13 +1127,26 @@ function PhaseGroup({
 export function KanbanBoard({
   stages,
   deals: initial,
+  stageTotals: initialTotals = {},
+  paginated = false,
+  filterParams = {},
+  pageSize = 10,
   newDeal,
   shareUsers = [],
-  sharedMap = {},
+  sharedMap: initialSharedMap = {},
   currentUserId,
 }: {
   stages: KanbanStage[];
   deals: KanbanDeal[];
+  // Per-stage {count, value} for the *full* matching set (drives the column
+  // header count + totals independently of how many cards are loaded).
+  stageTotals?: Record<string, StageTotal>;
+  // When true, only the first page of each column is loaded; the rest stream in
+  // via infinite scroll / "Load all". When false (stale filter / activity sort)
+  // every matching deal is already present.
+  paginated?: boolean;
+  filterParams?: DealFilterParams;
+  pageSize?: number;
   newDeal?: NewDealProps;
   shareUsers?: ShareUserView[];
   sharedMap?: Record<string, string[]>;
@@ -1017,12 +1155,22 @@ export function KanbanBoard({
   const { toast } = useToast();
   const router = useRouter();
   const [deals, setDeals] = useState(initial);
+  const [totals, setTotals] = useState<Record<string, StageTotal>>(initialTotals);
+  const [sharedMap, setSharedMap] = useState<Record<string, string[]>>(initialSharedMap);
+  const [loadingStages, setLoadingStages] = useState<Set<string>>(new Set());
   const [activeId, setActiveId] = useState<string | null>(null);
   const [collapsedStages, setCollapsedStages] = useState<Set<string>>(new Set());
   const [collapsedPhases, setCollapsedPhases] = useState<Set<string>>(new Set());
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: DRAG_ACTIVATION } })
+  );
 
+  // Re-seed from the server whenever a navigation (filter/search/sort change)
+  // hands down a fresh first page. Deliberately keyed on the incoming props so
+  // client-side "load more" appends aren't clobbered between navigations.
   useEffect(() => setDeals(initial), [initial]);
+  useEffect(() => setTotals(initialTotals), [initialTotals]);
+  useEffect(() => setSharedMap(initialSharedMap), [initialSharedMap]);
 
   // Hydrate persisted collapse state after mount (avoids SSR mismatch).
   useEffect(() => {
@@ -1084,8 +1232,62 @@ export function KanbanBoard({
       return next;
     });
   }
+  // Nudge a stage's server-authoritative rollup after an optimistic mutation so
+  // the header/column totals stay right without a round-trip. `dCount`/`dValue`
+  // are signed deltas.
+  function adjustTotal(stageId: string, dCount: number, dValue: number) {
+    setTotals((prev) => {
+      const cur = prev[stageId] ?? { count: 0, value: 0 };
+      return {
+        ...prev,
+        [stageId]: { count: Math.max(0, cur.count + dCount), value: cur.value + dValue },
+      };
+    });
+  }
+
+  const loadedByStage = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const d of deals) m[d.stageId] = (m[d.stageId] ?? 0) + 1;
+    return m;
+  }, [deals]);
+
+  const hasMore = (stageId: string) =>
+    paginated && (loadedByStage[stageId] ?? 0) < (totals[stageId]?.count ?? 0);
+
+  // Fetch the next slice (or all remaining) of a column, re-applying the exact
+  // filters/sort server-side. Dedupes against cards already present (optimistic
+  // moves/creates can shift offsets) and folds in any admin share badges.
+  async function loadMore(stageId: string, all = false) {
+    if (!paginated || loadingStages.has(stageId)) return;
+    const offset = loadedByStage[stageId] ?? 0;
+    const total = totals[stageId]?.count ?? 0;
+    if (offset >= total) return;
+    const limit = all ? total - offset : pageSize;
+
+    setLoadingStages((prev) => new Set(prev).add(stageId));
+    const res = await loadStageDealsAction({ filters: filterParams, stageId, offset, limit });
+    setLoadingStages((prev) => {
+      const next = new Set(prev);
+      next.delete(stageId);
+      return next;
+    });
+
+    if ("error" in res) {
+      toast({ title: res.error, variant: "error" });
+      return;
+    }
+    setDeals((ds) => {
+      const seen = new Set(ds.map((d) => d.id));
+      return [...ds, ...res.kanban.filter((d) => !seen.has(d.id))];
+    });
+    if (Object.keys(res.sharedMap).length) {
+      setSharedMap((prev) => ({ ...prev, ...res.sharedMap }));
+    }
+  }
+
   function addDeal(deal: KanbanDeal) {
     setDeals((ds) => [deal, ...ds]);
+    adjustTotal(deal.stageId, 1, deal.amountEur ?? 0);
   }
 
   // Delete a deal via the server action; the card is removed from local state
@@ -1094,6 +1296,8 @@ export function KanbanBoard({
     return deleteDealAction(dealId);
   }
   function removeDeal(dealId: string) {
+    const gone = deals.find((d) => d.id === dealId);
+    if (gone) adjustTotal(gone.stageId, -1, -(gone.amountEur ?? 0));
     setDeals((ds) => ds.filter((d) => d.id !== dealId));
   }
 
@@ -1101,10 +1305,21 @@ export function KanbanBoard({
   // stage's column, persist via quick-update, and revert on failure.
   async function changeStage(dealId: string, stageId: string) {
     const prev = deals;
+    const deal = deals.find((d) => d.id === dealId);
+    const fromStage = deal?.stageId;
+    const amount = deal?.amountEur ?? 0;
     setDeals((ds) => ds.map((d) => (d.id === dealId ? { ...d, stageId } : d)));
+    if (fromStage && fromStage !== stageId) {
+      adjustTotal(fromStage, -1, -amount);
+      adjustTotal(stageId, 1, amount);
+    }
     const res = await quickUpdateDealAction(dealId, { stageId });
     if (res.error) {
       setDeals(prev);
+      if (fromStage && fromStage !== stageId) {
+        adjustTotal(stageId, -1, -amount);
+        adjustTotal(fromStage, 1, amount);
+      }
       toast({ title: res.error, variant: "error" });
     }
   }
@@ -1118,6 +1333,8 @@ export function KanbanBoard({
   // Inline amount change from a card: keep local state in sync (server
   // persistence is handled by InlineInput's onSave before this fires).
   function changeAmount(dealId: string, amount: number | null) {
+    const deal = deals.find((d) => d.id === dealId);
+    if (deal) adjustTotal(deal.stageId, 0, (amount ?? 0) - (deal.amountEur ?? 0));
     setDeals((ds) => ds.map((d) => (d.id === dealId ? { ...d, amountEur: amount } : d)));
   }
 
@@ -1134,7 +1351,9 @@ export function KanbanBoard({
     if (res.error) {
       setDeals(prev);
       toast({ title: res.error, variant: "error" });
-    } else {
+    } else if (!paginated) {
+      // A full refresh would discard the columns' loaded pages, so in the
+      // paginated view we keep the optimistic avatar (color syncs on next nav).
       router.refresh();
     }
   }
@@ -1158,7 +1377,8 @@ export function KanbanBoard({
     if (res.error) {
       setDeals(prev);
       toast({ title: res.error, variant: "error" });
-    } else {
+    } else if (!paginated) {
+      // See changeOwner: avoid clobbering loaded pages in the paginated view.
       router.refresh();
     }
   }
@@ -1176,10 +1396,16 @@ export function KanbanBoard({
     if (!deal || deal.stageId === overId) return;
 
     const prev = deals;
+    const fromStage = deal.stageId;
+    const amount = deal.amountEur ?? 0;
     setDeals((ds) => ds.map((d) => (d.id === dealId ? { ...d, stageId: overId } : d)));
+    adjustTotal(fromStage, -1, -amount);
+    adjustTotal(overId, 1, amount);
     const res = await moveDealStageAction(dealId, overId);
     if (res.error) {
       setDeals(prev);
+      adjustTotal(overId, -1, -amount);
+      adjustTotal(fromStage, 1, amount);
       toast({ title: res.error, variant: "error" });
     }
   }
@@ -1192,6 +1418,12 @@ export function KanbanBoard({
             key={group.key}
             group={group}
             byStage={byStage}
+            totals={totals}
+            paginated={paginated}
+            loadingStages={loadingStages}
+            hasMore={hasMore}
+            onLoadMore={(stageId) => loadMore(stageId, false)}
+            onLoadAll={(stageId) => loadMore(stageId, true)}
             collapsedStages={collapsedStages}
             newDeal={newDeal}
             stageOptions={stageOptions}

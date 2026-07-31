@@ -123,6 +123,11 @@ export default async function ClientDetailPage({ params }: ClientDetailPageProps
   }));
   const defaultClientOrgId = client.organizations.find((o) => o.isDefault)?.id ?? client.organizations[0]?.id;
   const clientDealOptions = client.deals.map((d) => ({ salesId: d.salesId, title: d.title }));
+  const invoiceFinalClients = await prisma.finalClient.findMany({
+    orderBy: { name: "asc" },
+    select: { id: true, name: true },
+    take: LIST_FETCH_CAP,
+  });
 
   return (
     <div className="pb-10">
@@ -311,7 +316,7 @@ export default async function ClientDetailPage({ params }: ClientDetailPageProps
               invoices={invoiceItems}
               add={
                 canDelete && clientOrgOptions.length > 0
-                  ? { organizations: clientOrgOptions, deals: clientDealOptions, defaultOrganizationId: defaultClientOrgId }
+                  ? { organizations: clientOrgOptions, deals: clientDealOptions, finalClients: invoiceFinalClients, defaultOrganizationId: defaultClientOrgId }
                   : undefined
               }
             />

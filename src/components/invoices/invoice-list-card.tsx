@@ -41,6 +41,7 @@ export function InvoiceListCard({
   add?: {
     organizations: { id: string; name: string; defaultVatPercent?: number; configuredTvaPercent?: number }[];
     deals: { salesId: string; title: string }[];
+    finalClients?: { id: string; name: string }[];
     defaultSalesId?: string;
     defaultOrganizationId?: string;
   };
@@ -74,6 +75,7 @@ export function InvoiceListCard({
     <InvoiceFormDialog
       organizations={add.organizations}
       deals={add.deals}
+      finalClients={add.finalClients}
       defaultSalesId={add.defaultSalesId}
       defaultOrganizationId={add.defaultOrganizationId}
       trigger={

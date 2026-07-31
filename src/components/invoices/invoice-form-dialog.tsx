@@ -23,6 +23,7 @@ import { PartNumberPicker } from "@/components/invoices/part-number-picker";
 import { RelatedInvoicePicker } from "@/components/invoices/related-invoice-picker";
 import type { RelatedInvoiceOption } from "@/server/part-number-actions";
 import { createInvoiceAction, updateInvoiceAction } from "@/server/invoice-actions";
+import { quickCreateFinalClientAction } from "@/server/final-client-actions";
 import { resolvePartNumberCode, type PartNumberOption } from "@/lib/part-numbers";
 import {
   computeInvoiceTotals,
@@ -67,6 +68,8 @@ export type InvoiceData = {
   id: string;
   organizationId: string;
   salesId: string | null;
+  finalClientId: string | null;
+  finalClientName: string | null;
   number: string | null;
   status: string;
   currency: string | null;
@@ -133,6 +136,7 @@ export function InvoiceFormDialog({
   issuers,
   series = [],
   partNumbers = [],
+  finalClients = [],
   defaultSalesId,
   defaultOrganizationId,
 }: {
@@ -147,6 +151,8 @@ export function InvoiceFormDialog({
   series?: { id: string; prefix: string; nextNumber: number }[];
   /** Billable part-number catalog offered in the wizard. */
   partNumbers?: PartNumberOption[];
+  /** End-customer directory for the Final Client picker (new ones can be created inline). */
+  finalClients?: { id: string; name: string }[];
   /** Pre-fill the SAL id (e.g. when creating from a deal). */
   defaultSalesId?: string;
   /** Pre-select the organization (e.g. when creating from a client/org). */
@@ -159,6 +165,11 @@ export function InvoiceFormDialog({
   const [busy, setBusy] = React.useState(false);
   const [organizationId, setOrganizationId] = React.useState(invoice?.organizationId ?? defaultOrganizationId ?? "");
   const [salesId, setSalesId] = React.useState(invoice?.salesId ?? defaultSalesId ?? "");
+  const [finalClientId, setFinalClientId] = React.useState(invoice?.finalClientId ?? "");
+  // Final clients created inline via the picker, kept selectable until the page revalidates.
+  const [extraFinalClients, setExtraFinalClients] = React.useState<{ id: string; name: string }[]>(
+    invoice?.finalClientId && invoice.finalClientName ? [{ id: invoice.finalClientId, name: invoice.finalClientName }] : []
+  );
   const [paid, setPaid] = React.useState(invoice?.paid ?? false);
   const [recurrent, setRecurrent] = React.useState(false);
   const [currency, setCurrency] = React.useState(invoice?.currency ?? DEFAULT_INVOICE_CURRENCY);
@@ -243,6 +254,7 @@ export function InvoiceFormDialog({
     const fd = new FormData(formRef.current);
     fd.set("organizationId", organizationId);
     fd.set("salesId", salesId);
+    fd.set("finalClientId", finalClientId);
     fd.set("paid", paid ? "1" : "");
     fd.set("recurrent", !editing && recurrent ? "1" : "");
     fd.set("linesJson", JSON.stringify(lines));
@@ -318,6 +330,28 @@ export function InvoiceFormDialog({
                 placeholder="No deal"
                 searchPlaceholder="Search SAL id or deal title..."
                 emptyText="No deals found."
+              />
+            </div>
+            <div className="space-y-2 sm:col-span-2">
+              <Label>Final client</Label>
+              <ClientCombobox
+                value={finalClientId}
+                options={[...extraFinalClients, ...finalClients]
+                  .filter((c, i, arr) => arr.findIndex((x) => x.id === c.id) === i)
+                  .map((c) => ({ value: c.id, label: c.name }))}
+                onChange={setFinalClientId}
+                placeholder="No final client"
+                searchPlaceholder="Search final clients…"
+                emptyText="No final clients found."
+                createLabel="Create final client"
+                onCreate={async (name) => {
+                  const res = await quickCreateFinalClientAction(name);
+                  if (res.error || !res.id) {
+                    return toast({ title: res.error ?? "Could not create final client.", variant: "error" });
+                  }
+                  setExtraFinalClients((prev) => [{ id: res.id!, name: res.name ?? name }, ...prev]);
+                  setFinalClientId(res.id);
+                }}
               />
             </div>
             <div className="space-y-2">

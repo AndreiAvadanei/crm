@@ -22,5 +22,13 @@ export const LIST_FETCH_CAP = 5000;
 /** Default row count for paginated list pages. */
 export const CLIENTS_PAGE_SIZE = 25;
 
+/**
+ * Deals loaded per stage column/section on first paint, and per "load more"
+ * batch as the user scrolls a column. Kept small so the board/table open fast
+ * regardless of pipeline size; per-column totals still reflect the full set
+ * (computed server-side via aggregate, not from the loaded rows).
+ */
+export const DEALS_PAGE_SIZE = 10;
+
 /** Row count per section (overdue / upcoming) on the Tasks board. */
 export const TASKS_PAGE_SIZE = 15;

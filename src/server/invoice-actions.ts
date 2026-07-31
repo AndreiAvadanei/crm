@@ -321,6 +321,7 @@ async function invoiceData(formData: FormData, selfId?: string) {
       status: parseStatus(str(formData, "status")),
       dealId: sale.dealId,
       salesIdSnapshot: sale.salesId,
+      finalClientId: str(formData, "finalClientId") ?? null,
       servicesDescription,
       contractRef: str(formData, "contractRef") ?? null,
       currency: parseCurrency(str(formData, "currency")),
@@ -559,6 +560,37 @@ export async function setInvoiceDealAction(invoiceId: string, salesId: string | 
   if (inv.clientId) revalidatePath(`/clients/${inv.clientId}`);
   if (inv.salesIdSnapshot) revalidatePath(`/deals/${inv.salesIdSnapshot}`);
   if (sale.salesId) revalidatePath(`/deals/${sale.salesId}`);
+  return { ok: true };
+}
+
+/** Inline edit of the linked Final Client (end customer) from the table. Empty clears it. */
+export async function setInvoiceFinalClientAction(invoiceId: string, finalClientId: string | null): Promise<Result> {
+  const user = await requireUser();
+  const inv = await prisma.invoice.findUnique({
+    where: { id: invoiceId },
+    select: { id: true, number: true, clientId: true, salesIdSnapshot: true, organization: { select: { clientId: true } } },
+  });
+  if (!inv) return { error: "Not found." };
+  if (!(await canEditOrgInvoices(user, inv.clientId ?? inv.organization.clientId))) return { error: "Not allowed." };
+
+  const id = finalClientId?.trim() || null;
+  if (id) {
+    const exists = await prisma.finalClient.findUnique({ where: { id }, select: { id: true } });
+    if (!exists) return { error: "Final client not found." };
+  }
+
+  await prisma.invoice.update({ where: { id: invoiceId }, data: { finalClientId: id } });
+  await logActivity({
+    actorId: user.id,
+    action: "invoice_updated",
+    entity: "Invoice",
+    entityId: invoiceId,
+    meta: { number: inv.number, finalClientId: id },
+  });
+  revalidatePath("/invoices");
+  revalidatePath(`/invoices/${invoiceId}`);
+  if (inv.clientId) revalidatePath(`/clients/${inv.clientId}`);
+  if (inv.salesIdSnapshot) revalidatePath(`/deals/${inv.salesIdSnapshot}`);
   return { ok: true };
 }
 

@@ -12,6 +12,8 @@ export const SETTING_KEYS = {
   taskWebhookTitle: "task_webhook_title",
   taskWebhookDueDays: "task_webhook_due_days",
   taskWebhookUrgency: "task_webhook_urgency",
+  dailyDigestSecret: "daily_digest_secret",
+  dailyDigestLastRun: "daily_digest_last_run",
 } as const;
 
 export const DEFAULT_ORGANIZATION_TVA_PERCENT = "21";
@@ -79,6 +81,15 @@ export async function getInvoiceWebhookSecret(): Promise<string | null> {
 /** Read the configured create-task webhook secret, or null when unset. */
 export async function getTaskWebhookSecret(): Promise<string | null> {
   return getSetting(SETTING_KEYS.taskWebhookSecret);
+}
+
+/**
+ * Read the secret that guards the daily-digest cron endpoint. Falls back to the
+ * `CRON_SECRET` env var so platform schedulers (e.g. Vercel Cron, which sends
+ * `Authorization: Bearer $CRON_SECRET`) work without a DB round-trip.
+ */
+export async function getDailyDigestSecret(): Promise<string | null> {
+  return (await getSetting(SETTING_KEYS.dailyDigestSecret)) ?? process.env.CRON_SECRET ?? null;
 }
 
 export type TaskWebhookDefaults = {

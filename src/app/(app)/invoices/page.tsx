@@ -61,7 +61,7 @@ export default async function InvoicesPage({
   };
 
   const [clientVis, dealVis] = await Promise.all([clientVisibilityWhere(user), dealVisibilityWhere(user)]);
-  const [invoicePage, tabCounts, issuerTotals, orgs, deals, issuerList, issuerNames, currencyRows, partNumbers, seriesList] = await Promise.all([
+  const [invoicePage, tabCounts, issuerTotals, orgs, deals, issuerList, issuerNames, currencyRows, partNumbers, seriesList, finalClients] = await Promise.all([
     getPaginatedInvoices(user, {
       ...filterOpts,
       tab: tabOpt,
@@ -93,6 +93,7 @@ export default async function InvoicesPage({
     }),
     getActivePartNumbers(),
     getActiveSeries(),
+    prisma.finalClient.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true }, take: LIST_FETCH_CAP }),
   ]);
   const total = invoicePage.total;
   const currencies = currencyRows.map((r) => r.currency!).filter(Boolean).sort();
@@ -129,6 +130,7 @@ export default async function InvoicesPage({
           issuers={issuerList}
           series={seriesList}
           partNumbers={partNumbers}
+          finalClients={finalClients}
           defaultOrganizationId={organization}
           trigger={
             <Button>
@@ -145,7 +147,7 @@ export default async function InvoicesPage({
           <InvoiceFilters currencies={currencies} issuers={issuerNames} appliedOrgName={appliedOrgName} tab={tabOpt} />
         </div>
         <IssuerTotals totals={issuerTotals} />
-        <InvoicesTable invoices={invoicePage.invoices} canManage deals={deals} groupByOrganization={groupByOrganization} />
+        <InvoicesTable invoices={invoicePage.invoices} canManage deals={deals} finalClients={finalClients} groupByOrganization={groupByOrganization} />
         {total > CLIENTS_PAGE_SIZE && (
           <Pagination
             pathname="/invoices"

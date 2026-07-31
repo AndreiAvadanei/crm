@@ -18,9 +18,11 @@ import {
   deleteInvoiceAction,
   setInvoiceDealAction,
   setInvoiceExpectedDateAction,
+  setInvoiceFinalClientAction,
   setInvoicePaidAction,
   setInvoiceTextFieldAction,
 } from "@/server/invoice-actions";
+import { quickCreateFinalClientAction } from "@/server/final-client-actions";
 import { bulkDownloadInvoicesSagaXmlAction, bulkSendInvoicesEmailAction } from "@/server/saga-actions";
 import type { InvoiceRow } from "@/lib/invoice-stats";
 import { INVOICE_STATUS_LABELS, invoiceStatusVariant } from "@/lib/invoice-constants";
@@ -167,6 +169,89 @@ function DealCell({ invoice, canManage, deals }: { invoice: InvoiceRow; canManag
           onClick={() => setEditing(true)}
           title="Change deal"
           aria-label="Change deal"
+          className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition hover:bg-muted hover:text-foreground focus:opacity-100 group-hover:opacity-100"
+        >
+          <Pencil className="h-3.5 w-3.5" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+type FinalClientOption = { id: string; name: string };
+
+/** Read-only final-client label that turns into a searchable picker (with inline create) on click. */
+function FinalClientCell({
+  invoice,
+  canManage,
+  finalClients,
+}: {
+  invoice: InvoiceRow;
+  canManage: boolean;
+  finalClients: FinalClientOption[];
+}) {
+  const router = useRouter();
+  const { toast } = useToast();
+  const [editing, setEditing] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  // Locally-created final clients so a freshly-created one is selectable/visible before refresh.
+  const [extra, setExtra] = React.useState<FinalClientOption[]>(
+    invoice.finalClientId && invoice.finalClientName ? [{ id: invoice.finalClientId, name: invoice.finalClientName }] : []
+  );
+
+  const options = [...extra, ...finalClients]
+    .filter((c, i, arr) => arr.findIndex((x) => x.id === c.id) === i)
+    .map((c) => ({ value: c.id, label: c.name }));
+
+  async function save(finalClientId: string) {
+    if ((finalClientId || "") === (invoice.finalClientId || "")) {
+      setEditing(false);
+      return;
+    }
+    setBusy(true);
+    const res = await setInvoiceFinalClientAction(invoice.id, finalClientId || null);
+    setBusy(false);
+    setEditing(false);
+    if (res.error) return toast({ title: res.error, variant: "error" });
+    router.refresh();
+  }
+
+  if (canManage && editing) {
+    return (
+      <div className="w-[15rem]">
+        <ClientCombobox
+          value={invoice.finalClientId ?? ""}
+          options={options}
+          onChange={save}
+          busy={busy}
+          placeholder="No final client"
+          searchPlaceholder="Search final clients…"
+          emptyText="No final clients found."
+          createLabel="Create final client"
+          onCreate={async (name) => {
+            const res = await quickCreateFinalClientAction(name);
+            if (res.error || !res.id) {
+              return toast({ title: res.error ?? "Could not create final client.", variant: "error" });
+            }
+            setExtra((prev) => [{ id: res.id!, name: res.name ?? name }, ...prev]);
+            await save(res.id);
+          }}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1">
+      <span className="block max-w-[12rem] truncate text-xs" title={invoice.finalClientName ?? undefined}>
+        {invoice.finalClientName || <span className="text-muted-foreground">—</span>}
+      </span>
+      {canManage && (
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          title="Change final client"
+          aria-label="Change final client"
           className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition hover:bg-muted hover:text-foreground focus:opacity-100 group-hover:opacity-100"
         >
           <Pencil className="h-3.5 w-3.5" />
@@ -484,6 +569,7 @@ function InvoiceTableRow({
   invoice: i,
   canManage,
   deals,
+  finalClients,
   selected,
   toggleOne,
   hideOrganization,
@@ -491,6 +577,7 @@ function InvoiceTableRow({
   invoice: InvoiceRow;
   canManage: boolean;
   deals: DealOption[];
+  finalClients: FinalClientOption[];
   selected: Set<string>;
   toggleOne: (id: string) => void;
   hideOrganization?: boolean;
@@ -551,6 +638,9 @@ function InvoiceTableRow({
           )}
           <CopyButton value={i.clientName} label="client name" />
         </div>
+      </TableCell>
+      <TableCell>
+        <FinalClientCell invoice={i} canManage={canManage} finalClients={finalClients} />
       </TableCell>
       <TableCell>
         <DealCell invoice={i} canManage={canManage} deals={deals} />
@@ -709,16 +799,18 @@ export function InvoicesTable({
   invoices,
   canManage,
   deals = [],
+  finalClients = [],
   groupByOrganization = false,
 }: {
   invoices: InvoiceRow[];
   canManage: boolean;
   deals?: DealOption[];
+  finalClients?: FinalClientOption[];
   groupByOrganization?: boolean;
 }) {
   const router = useRouter();
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
-  const colSpan = (canManage ? 18 : 16) - (groupByOrganization ? 1 : 0);
+  const colSpan = (canManage ? 19 : 17) - (groupByOrganization ? 1 : 0);
   const orgGroups = groupByOrganization ? groupInvoicesByOrganization(invoices) : null;
 
   // Drop selections that are no longer on the page (e.g. after filtering/paging).
@@ -760,6 +852,7 @@ export function InvoicesTable({
             <SortHeader label="Number" sortKey="number" />
             {!groupByOrganization && <SortHeader label="Organization" sortKey="organization" />}
             <SortHeader label="Client" sortKey="client" />
+            <TableHead>Final Client</TableHead>
             <SortHeader label="Deal" sortKey="deal" />
             <SortHeader label="Status" sortKey="status" />
             <SortHeader label="Issuer" sortKey="issuer" />
@@ -787,6 +880,7 @@ export function InvoicesTable({
                       invoice={i}
                       canManage={canManage}
                       deals={deals}
+                      finalClients={finalClients}
                       selected={selected}
                       toggleOne={toggleOne}
                       hideOrganization
@@ -800,6 +894,7 @@ export function InvoicesTable({
                   invoice={i}
                   canManage={canManage}
                   deals={deals}
+                  finalClients={finalClients}
                   selected={selected}
                   toggleOne={toggleOne}
                 />

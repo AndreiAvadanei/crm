@@ -15,6 +15,32 @@ function str(fd: FormData, k: string) {
   return v == null ? undefined : String(v).trim() || undefined;
 }
 
+/**
+ * Lightweight client creation for the "create from search" flow in comboboxes.
+ * Only takes a company name; everything else defaults. Returns the new id/name
+ * so the caller can immediately select the client in a picker.
+ */
+export async function quickCreateClientAction(
+  name: string
+): Promise<{ ok?: boolean; error?: string; id?: string; name?: string }> {
+  const user = await requireUser();
+  const trimmed = name.trim();
+  if (!trimmed) return { error: "Company name is required." };
+
+  const client = await prisma.client.create({
+    data: { name: trimmed, ownerId: user.id },
+  });
+  await logActivity({
+    actorId: user.id,
+    action: "client_created",
+    entity: "Client",
+    entityId: client.id,
+    meta: { name: client.name, changes: [] },
+  });
+  revalidatePath("/clients");
+  return { ok: true, id: client.id, name: client.name };
+}
+
 export async function createClientAction(formData: FormData): Promise<Result> {
   const user = await requireUser();
   const name = str(formData, "name");

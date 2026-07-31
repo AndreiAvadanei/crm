@@ -94,6 +94,8 @@ export interface InvoiceRow {
   organizationName: string;
   clientId: string | null;
   clientName: string | null;
+  finalClientId: string | null;
+  finalClientName: string | null;
   salesId: string | null;
   hasDeal: boolean;
   currency: string | null;
@@ -292,6 +294,7 @@ export async function getPaginatedInvoices(user: User, opts: InvoiceListOpts): P
           },
         },
         client: { select: { id: true, name: true } },
+        finalClient: { select: { id: true, name: true } },
         deal: { select: { salesId: true } },
         lines: { select: { serviceDescription: true, quantity: true, unitPrice: true, value: true } },
       },
@@ -321,6 +324,8 @@ export async function getPaginatedInvoices(user: User, opts: InvoiceListOpts): P
       organizationName: i.organization.sourceName,
       clientId: i.clientId,
       clientName: i.client?.name ?? null,
+      finalClientId: i.finalClientId,
+      finalClientName: i.finalClient?.name ?? null,
       salesId: i.deal?.salesId ?? i.salesIdSnapshot ?? null,
       hasDeal: !!i.dealId,
       currency: i.currency,

@@ -452,6 +452,10 @@ model Invoice {
   // Denormalized owning client for convenient listing/filtering.
   clientId       String?
   client         Client?       @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  // End customer this invoice is ultimately for (distinct from the billed client).
+  // Free-form directory the user can extend on the fly from the invoice forms.
+  finalClientId  String?
+  finalClient    FinalClient?  @relation(fields: [finalClientId], references: [id], onDelete: SetNull)
   // Opportunity this invoice was issued under (via Deal.salesId). Nullable because
   // some invoices reference a SAL that is missing from the CRM, or none at all.
   dealId         String?
@@ -522,11 +526,25 @@ model Invoice {
   @@index([organizationId])
   @@index([dealId])
   @@index([clientId])
+  @@index([finalClientId])
   @@index([issueDate])
   @@index([issuerId])
   @@index([partNumberId])
   @@index([relatedInvoiceId])
   @@index([seriesId])
+}
+
+// End-customer directory for invoices ("Final Client"). Kept intentionally light:
+// invoices link one, and users create new entries on the fly from the invoice
+// forms. Names are deduped case-insensitively at creation time.
+model FinalClient {
+  id        String    @id @default(cuid())
+  name      String
+  invoices  Invoice[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([name])
 }
 
 // Invoice articles/lines. Imported accounting exports repeat the same invoice

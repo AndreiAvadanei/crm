@@ -21,6 +21,7 @@ import { ClientCombobox } from "@/components/shared/client-combobox";
 import { CustomFieldInputs, type FieldDefView } from "@/components/shared/custom-field-inputs";
 import type { TagView } from "@/components/shared/tag-badge";
 import { createDealAction, updateDealAction } from "@/server/deal-actions";
+import { quickCreateClientAction } from "@/server/client-actions";
 
 type DealData = {
   id: string;
@@ -75,6 +76,9 @@ export function DealFormDialog({
   const [busy, setBusy] = useState(false);
   const [newClient, setNewClient] = useState(false);
   const [clientId, setClientId] = useState(deal?.clientId ?? defaultClientId ?? "");
+  // Clients created on the fly via the combobox "create" row, so they show as
+  // selectable options immediately (before the page revalidates).
+  const [extraClients, setExtraClients] = useState<{ id: string; name: string }[]>([]);
   const editing = !!deal;
   const locked = !editing && !!lockClient && !!defaultClientId;
   const triggerEl = isValidElement<TriggerProps>(trigger)
@@ -164,9 +168,18 @@ export function DealFormDialog({
                   <ClientCombobox
                     value={clientId}
                     onChange={setClientId}
-                    options={clients.map((c) => ({ value: c.id, label: c.name }))}
+                    options={[...extraClients, ...clients].map((c) => ({ value: c.id, label: c.name }))}
                     placeholder="No client"
                     disabled={locked}
+                    createLabel="Create client"
+                    onCreate={async (name) => {
+                      const res = await quickCreateClientAction(name);
+                      if (res.error || !res.id) {
+                        return toast({ title: res.error ?? "Could not create client.", variant: "error" });
+                      }
+                      setExtraClients((prev) => [{ id: res.id!, name: res.name ?? name }, ...prev]);
+                      setClientId(res.id);
+                    }}
                   />
                   {/* The combobox is not a form control, so submit via hidden input. */}
                   <input type="hidden" name="clientId" value={clientId} />

@@ -6,7 +6,7 @@
 
 import * as React from "react";
 import * as Popover from "@radix-ui/react-popover";
-import { Check, ChevronsUpDown, Loader2, Search } from "lucide-react";
+import { Check, ChevronsUpDown, Loader2, Plus, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export type ComboOption = { value: string; label: string; searchText?: string };
@@ -25,6 +25,8 @@ export function ClientCombobox({
   contentClassName,
   matchTriggerWidth = true,
   wrapLabels = false,
+  onCreate,
+  createLabel = "Create",
 }: {
   value: string;
   options: ComboOption[];
@@ -40,21 +42,44 @@ export function ClientCombobox({
   matchTriggerWidth?: boolean;
   // When true, option labels wrap to show the full text instead of truncating.
   wrapLabels?: boolean;
+  // When provided, an extra row lets the user create a new entry from the typed
+  // text if it doesn't match an existing option (e.g. add a new client on the fly).
+  onCreate?: (name: string) => void | Promise<void>;
+  // Verb shown on the create row, e.g. `Create "Acme"`.
+  createLabel?: string;
 }) {
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState("");
+  const [creating, setCreating] = React.useState(false);
 
   const selected = options.find((o) => o.value === value);
+  const trimmedQuery = query.trim();
   const filtered = React.useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = trimmedQuery.toLowerCase();
     if (!q) return options;
     return options.filter((o) => [o.label, o.value, o.searchText].filter(Boolean).join(" ").toLowerCase().includes(q));
-  }, [options, query]);
+  }, [options, trimmedQuery]);
+
+  // Offer to create only when there's a query with no exact (case-insensitive) match.
+  const showCreate =
+    !!onCreate && trimmedQuery.length > 0 && !options.some((o) => o.label.toLowerCase() === trimmedQuery.toLowerCase());
 
   function select(next: string) {
     setOpen(false);
     setQuery("");
     if (next !== value) onChange(next);
+  }
+
+  async function create() {
+    if (!onCreate || creating) return;
+    setCreating(true);
+    try {
+      await onCreate(trimmedQuery);
+      setOpen(false);
+      setQuery("");
+    } finally {
+      setCreating(false);
+    }
   }
 
   return (
@@ -120,8 +145,25 @@ export function ClientCombobox({
                 wrap={wrapLabels}
               />
             ))}
-            {filtered.length === 0 && (
+            {filtered.length === 0 && !showCreate && (
               <div className="px-2 py-3 text-center text-sm text-muted-foreground">{emptyText}</div>
+            )}
+            {showCreate && (
+              <button
+                type="button"
+                onClick={create}
+                disabled={creating}
+                className="mt-1 flex w-full cursor-pointer items-center gap-2 rounded-sm border-t px-2 py-1.5 text-left text-sm outline-none transition-colors hover:bg-accent focus:bg-accent disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {creating ? (
+                  <Loader2 className="h-4 w-4 shrink-0 animate-spin opacity-70" />
+                ) : (
+                  <Plus className="h-4 w-4 shrink-0 opacity-70" />
+                )}
+                <span className={cn(wrapLabels ? "break-words" : "truncate")}>
+                  {createLabel} “{trimmedQuery}”
+                </span>
+              </button>
             )}
           </div>
         </Popover.Content>

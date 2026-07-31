@@ -163,6 +163,9 @@ export async function DealDetail({
       })
     : [];
   const canManageInvoices = admin || deal.client?.ownerId === user.id;
+  const invoiceFinalClients = canManageInvoices
+    ? await prisma.finalClient.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true }, take: LIST_FETCH_CAP })
+    : [];
   const defaultOrgId = dealOrgs.find((o) => o.id)?.id;
   const dealOptions = [{ salesId: deal.salesId, title: deal.title }];
   const invoiceItems = deal.invoices.map((i) => ({
@@ -326,6 +329,7 @@ export async function DealDetail({
                             configuredTvaPercent: Number(o.tvaPercent) || 21,
                           })),
                           deals: dealOptions,
+                          finalClients: invoiceFinalClients,
                           defaultSalesId: deal.salesId,
                           defaultOrganizationId: defaultOrgId,
                         }

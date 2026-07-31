@@ -1,8 +1,7 @@
 import { Plus } from "lucide-react";
 import { requireFullAuth } from "@/lib/auth/guards";
 import { prisma } from "@/lib/db";
-import { dealVisibilityWhere, clientVisibilityWhere, isAdmin } from "@/lib/rbac";
-import { Prisma } from "@/generated/prisma";
+import { clientVisibilityWhere, isAdmin } from "@/lib/rbac";
 import { getTagViews, getFieldDefViews, getOwners } from "@/lib/view-helpers";
 import { PageHeader } from "@/components/app/page-header";
 import { Button } from "@/components/ui/button";
@@ -11,16 +10,20 @@ import { KanbanBoard, type KanbanDeal } from "@/components/deals/kanban-board";
 import { DealFormDialog } from "@/components/deals/deal-form-dialog";
 import { DealsTable, type DealRow } from "@/components/deals/deals-table";
 import { formatCurrency } from "@/lib/utils";
+import { recencyCutoff, startOfDay } from "@/lib/filter-helpers";
+import { LIST_FETCH_CAP, DEALS_PAGE_SIZE } from "@/lib/app-constants";
 import {
-  parseCsvIds,
-  parseNumber,
-  parseDate,
-  dueWindowRange,
-  recencyCutoff,
-  type DealStatus,
-} from "@/lib/filter-helpers";
-import { parseDealSort, resolveDealSortDir } from "@/lib/deal-sort";
-import { LIST_FETCH_CAP } from "@/lib/app-constants";
+  buildDealListQuery,
+  pickDealFilterParams,
+  getStageTotals,
+  fetchStageDeals,
+  dealInclude,
+  makeOverdueChecker,
+  toKanbanDeal,
+  toDealRow,
+  type DealWithRelations,
+  type StageTotal,
+} from "@/lib/deal-query";
 
 export const metadata = {
   title: "Deals",
@@ -51,225 +54,145 @@ export default async function DealsPage({
   const sp = await searchParams;
   const view = sp.view ?? "board";
   const admin = isAdmin(user);
-  const visibility = await dealVisibilityWhere(user);
+  const filterParams = pickDealFilterParams(sp);
 
-  // All filters below only narrow within `visibility` (RBAC preserved).
-  const filters: Prisma.DealWhereInput[] = [visibility];
-  if (sp.q)
-    filters.push({
-      OR: [
-        { title: { contains: sp.q } },
-        { salesId: { contains: sp.q } },
-        { client: { name: { contains: sp.q } } },
-      ],
-    });
-  // "My deals" wins over an explicit owner select.
-  if (sp.mine === "1") filters.push({ ownerId: user.id });
-  else if (sp.owner) filters.push({ ownerId: sp.owner });
-
-  // Tags: comma-separated; deal must carry every selected tag.
-  for (const tagId of parseCsvIds(sp.tag)) filters.push({ tags: { some: { id: tagId } } });
-
-  if (sp.stage) filters.push({ stageId: sp.stage });
-
-  const status = sp.status as DealStatus | undefined;
-  if (status === "open") filters.push({ stage: { isWon: false, isLost: false } });
-  else if (status === "won") filters.push({ stage: { isWon: true } });
-  else if (status === "lost") filters.push({ stage: { isLost: true } });
-
-  const amtMin = parseNumber(sp.amtMin);
-  const amtMax = parseNumber(sp.amtMax);
-  if (amtMin != null || amtMax != null)
-    filters.push({
-      amountEur: { ...(amtMin != null ? { gte: amtMin } : {}), ...(amtMax != null ? { lte: amtMax } : {}) },
-    });
-
-  const dueFrom = parseDate(sp.dueFrom);
-  const dueTo = parseDate(sp.dueTo);
-  if (dueFrom || dueTo)
-    filters.push({
-      dueDate: { ...(dueFrom ? { gte: dueFrom } : {}), ...(dueTo ? { lte: dueTo } : {}) },
-    });
-
-  // Overdue quick filter: past-due and still open (not won/lost).
-  if (sp.overdue === "1") {
-    const { lt } = dueWindowRange("overdue");
-    filters.push({ dueDate: { lt }, stage: { isWon: false, isLost: false } });
-  }
-
-  const where: Prisma.DealWhereInput = { AND: filters };
-
-  // Sort applies within each status column on the board (deals are grouped by
-  // stage in array order) and across rows in the table view.
-  // NOTE: MySQL doesn't support `nulls: last`, and its implicit NULL ordering
-  // is easy to get wrong, so `date`/`size` are given an explicit JS nulls-last
-  // fixup below (undated / amount-less deals always fall to the bottom).
-  const sort = parseDealSort(sp.sort);
-  // Direction toggle: `dir` flips any sort the opposite way (defaults per sort).
-  const dir = resolveDealSortDir(sort, sp.dir);
-  const asc = dir === "asc";
-  const orderBy: Prisma.DealOrderByWithRelationInput[] =
-    sort === "name"
-      ? [{ title: dir }]
-      : sort === "date"
-        ? [{ dueDate: dir }, { createdAt: "desc" }]
-        : sort === "size"
-          ? [{ amountEur: dir }, { createdAt: "desc" }]
-          : sort === "activity"
-            ? // "activity" is a cross-table rollup (comments/tasks/attachments/
-              // audit logs) that can't be expressed as a Prisma orderBy, so we
-              // seed with the deal's own updatedAt and re-sort in JS below.
-              [{ updatedAt: dir }, { createdAt: "desc" }]
-            : [{ boardOrder: "asc" }, { createdAt: "desc" }];
+  const { where, orderBy, sort, dir, staleDays, fullScan } = await buildDealListQuery(filterParams, user);
 
   const pipeline = await prisma.pipeline.findFirst({
     where: { isDefault: true },
     include: { stages: { orderBy: { order: "asc" } } },
   });
   const stages = pipeline?.stages ?? [];
+  const stageFlags = new Map(stages.map((s) => [s.id, { isWon: s.isWon, isLost: s.isLost }]));
+  const isDealOverdue = makeOverdueChecker(stageFlags, startOfDay(new Date()));
 
   const clientVis = await clientVisibilityWhere(user);
-  const [deals, tags, fieldDefs, owners, clients] = await Promise.all([
-    prisma.deal.findMany({
-      where,
-      include: { client: true, owner: true, tags: true, _count: { select: { tasks: { where: { status: "OPEN" } } } } },
-      orderBy,
-      // Safety bound only — must exceed the real deal count so the sort never
-      // decides which deals are visible (see LIST_FETCH_CAP).
-      take: LIST_FETCH_CAP,
-    }),
+  const [tags, fieldDefs, owners, clients] = await Promise.all([
     getTagViews(),
     getFieldDefViews("DEAL"),
     admin ? getOwners() : Promise.resolve([]),
-    prisma.client.findMany({ where: clientVis, orderBy: { name: "asc" }, select: { id: true, name: true }, take: LIST_FETCH_CAP }),
+    prisma.client.findMany({
+      where: clientVis,
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
+      take: LIST_FETCH_CAP,
+    }),
   ]);
 
-  // Deterministic nulls-last ordering (MySQL's implicit NULL placement is
-  // unreliable here). Re-sort in JS so empty values never jump around:
-  //  - date: soonest due first, undated deals last
-  //  - size: largest amount first, amount-less deals last
-  // Nulls (undated / amount-less deals) always sink to the bottom regardless of
-  // direction; only the non-null comparison flips with `asc`.
-  if (sort === "date") {
-    deals.sort((a, b) => {
-      if (!a.dueDate && !b.dueDate) return 0;
-      if (!a.dueDate) return 1;
-      if (!b.dueDate) return -1;
-      const diff = a.dueDate.getTime() - b.dueDate.getTime();
-      return asc ? diff : -diff;
-    });
-  } else if (sort === "size") {
-    deals.sort((a, b) => {
-      const av = a.amountEur == null ? null : Number(a.amountEur);
-      const bv = b.amountEur == null ? null : Number(b.amountEur);
-      if (av == null && bv == null) return 0;
-      if (av == null) return 1;
-      if (bv == null) return -1;
-      return asc ? av - bv : bv - av;
-    });
-  }
+  // Rows actually rendered on first paint + the per-stage totals that drive the
+  // header and every column/section subtotal (always the *full* matching set,
+  // never just the loaded rows).
+  let kanbanDeals: KanbanDeal[];
+  let dealRows: DealRow[];
+  const stageTotals: Record<string, StageTotal> = {};
+  let totalCount = 0;
+  let totalValue = 0;
+  let loadedDealIds: string[];
 
-  // Overdue = past due date AND still open (won/lost deals are never overdue).
-  // Computed here because stage won/lost flags live on the pipeline stages.
-  const stageFlags = new Map(stages.map((s) => [s.id, { isWon: s.isWon, isLost: s.isLost }]));
-  const startOfToday = new Date();
-  startOfToday.setHours(0, 0, 0, 0);
-  const isDealOverdue = (dueDate: Date | null, stageId: string) => {
-    if (!dueDate) return false;
-    const f = stageFlags.get(stageId);
-    if (f?.isWon || f?.isLost) return false;
-    return dueDate < startOfToday;
-  };
+  if (fullScan) {
+    // The `stale` filter and `activity` sort need a cross-table "last activity"
+    // rollup that can't be paged in SQL, so this path loads the full result set
+    // and post-processes in JS (legacy behaviour). Pagination is disabled and
+    // every matching deal is handed to the view up front.
+    const deals = await prisma.deal.findMany({
+      where,
+      include: dealInclude,
+      orderBy,
+      take: LIST_FETCH_CAP,
+    });
 
-  // Cross-source "last activity" per deal: the latest of any comment / task /
-  // attachment / audit-log (field change) touch. Combined with the deal's own
-  // updatedAt via `dealActivityMs` below (same definition as the clients list's
-  // last-activity rollup). Computed only when the stale filter or the
-  // "Last activity" sort needs it, via a handful of grouped queries (no N+1).
-  const staleDays = parseNumber(sp.stale);
-  const needsActivity = staleDays != null || sort === "activity";
-  const lastActivity = new Map<string, number>();
-  if (needsActivity && deals.length) {
-    const ids = deals.map((d) => d.id);
-    const [comments, tasks, attachments, audits] = await Promise.all([
-      prisma.comment.groupBy({ by: ["dealId"], where: { dealId: { in: ids } }, _max: { createdAt: true } }),
-      prisma.task.groupBy({ by: ["dealId"], where: { dealId: { in: ids } }, _max: { createdAt: true, updatedAt: true } }),
-      prisma.attachment.groupBy({ by: ["dealId"], where: { dealId: { in: ids } }, _max: { createdAt: true } }),
-      prisma.auditLog.groupBy({ by: ["entityId"], where: { entity: "Deal", entityId: { in: ids } }, _max: { createdAt: true } }),
-    ]);
-    const bump = (id: string | null, d: Date | null | undefined) => {
-      if (!id || !d) return;
-      const t = d.getTime();
-      if (t > (lastActivity.get(id) ?? 0)) lastActivity.set(id, t);
-    };
-    for (const c of comments) bump(c.dealId, c._max.createdAt);
-    for (const t of tasks) {
-      bump(t.dealId, t._max.createdAt);
-      bump(t.dealId, t._max.updatedAt);
+    // Deterministic nulls-last ordering (MySQL's implicit NULL placement is
+    // unreliable): undated / amount-less deals always sink to the bottom.
+    const asc = dir === "asc";
+    if (sort === "date") {
+      deals.sort((a, b) => {
+        if (!a.dueDate && !b.dueDate) return 0;
+        if (!a.dueDate) return 1;
+        if (!b.dueDate) return -1;
+        const diff = a.dueDate.getTime() - b.dueDate.getTime();
+        return asc ? diff : -diff;
+      });
+    } else if (sort === "size") {
+      deals.sort((a, b) => {
+        const av = a.amountEur == null ? null : Number(a.amountEur);
+        const bv = b.amountEur == null ? null : Number(b.amountEur);
+        if (av == null && bv == null) return 0;
+        if (av == null) return 1;
+        if (bv == null) return -1;
+        return asc ? av - bv : bv - av;
+      });
     }
-    for (const a of attachments) bump(a.dealId, a._max.createdAt);
-    for (const a of audits) bump(a.entityId, a._max.createdAt);
+
+    // Cross-source "last activity" per deal for the stale filter / activity sort.
+    const lastActivity = new Map<string, number>();
+    if (deals.length) {
+      const ids = deals.map((d) => d.id);
+      const [comments, tasks, attachments, audits] = await Promise.all([
+        prisma.comment.groupBy({ by: ["dealId"], where: { dealId: { in: ids } }, _max: { createdAt: true } }),
+        prisma.task.groupBy({ by: ["dealId"], where: { dealId: { in: ids } }, _max: { createdAt: true, updatedAt: true } }),
+        prisma.attachment.groupBy({ by: ["dealId"], where: { dealId: { in: ids } }, _max: { createdAt: true } }),
+        prisma.auditLog.groupBy({ by: ["entityId"], where: { entity: "Deal", entityId: { in: ids } }, _max: { createdAt: true } }),
+      ]);
+      const bump = (id: string | null, d: Date | null | undefined) => {
+        if (!id || !d) return;
+        const t = d.getTime();
+        if (t > (lastActivity.get(id) ?? 0)) lastActivity.set(id, t);
+      };
+      for (const c of comments) bump(c.dealId, c._max.createdAt);
+      for (const t of tasks) {
+        bump(t.dealId, t._max.createdAt);
+        bump(t.dealId, t._max.updatedAt);
+      }
+      for (const a of attachments) bump(a.dealId, a._max.createdAt);
+      for (const a of audits) bump(a.entityId, a._max.createdAt);
+    }
+    const dealActivityMs = (d: DealWithRelations) =>
+      Math.max(d.updatedAt.getTime(), lastActivity.get(d.id) ?? 0);
+
+    let visibleDeals = deals;
+    if (staleDays != null) {
+      const cutoffMs = recencyCutoff(staleDays).getTime();
+      visibleDeals = deals.filter((d) => {
+        const f = stageFlags.get(d.stageId);
+        if (f?.isWon || f?.isLost) return false;
+        return dealActivityMs(d) < cutoffMs;
+      });
+    }
+    if (sort === "activity") {
+      visibleDeals = [...visibleDeals].sort((a, b) => {
+        const diff = dealActivityMs(a) - dealActivityMs(b);
+        return asc ? diff : -diff;
+      });
+    }
+
+    kanbanDeals = visibleDeals.map((d) => toKanbanDeal(d, isDealOverdue(d.dueDate, d.stageId)));
+    dealRows = visibleDeals.map((d) => toDealRow(d, isDealOverdue(d.dueDate, d.stageId)));
+    for (const d of visibleDeals) {
+      const t = (stageTotals[d.stageId] ??= { count: 0, value: 0 });
+      t.count += 1;
+      t.value += d.amountEur ? Number(d.amountEur) : 0;
+    }
+    totalCount = visibleDeals.length;
+    totalValue = visibleDeals.reduce((s, d) => s + (d.amountEur ? Number(d.amountEur) : 0), 0);
+    loadedDealIds = visibleDeals.map((d) => d.id);
+  } else {
+    // Paginated path: aggregate totals for every stage, then load only the
+    // first page of each column. "Load more" / "Load all" fetch the rest.
+    const totals = await getStageTotals(where);
+    const pages = await Promise.all(
+      stages.map((s) => fetchStageDeals(where, s.id, sort, dir, 0, DEALS_PAGE_SIZE))
+    );
+    const paged = pages.flat();
+
+    kanbanDeals = paged.map((d) => toKanbanDeal(d, isDealOverdue(d.dueDate, d.stageId)));
+    dealRows = paged.map((d) => toDealRow(d, isDealOverdue(d.dueDate, d.stageId)));
+    for (const [stageId, t] of totals) {
+      stageTotals[stageId] = t;
+      totalCount += t.count;
+      totalValue += t.value;
+    }
+    loadedDealIds = paged.map((d) => d.id);
   }
-  // Most recent activity for a deal, rolling in its own record update.
-  const dealActivityMs = (d: (typeof deals)[number]) =>
-    Math.max(d.updatedAt.getTime(), lastActivity.get(d.id) ?? 0);
-
-  // "Stalled / no resolution" filter: open deals (not won/lost) with no activity
-  // for at least N days.
-  let visibleDeals = deals;
-  if (staleDays != null) {
-    const cutoffMs = recencyCutoff(staleDays).getTime();
-    visibleDeals = deals.filter((d) => {
-      const f = stageFlags.get(d.stageId);
-      // Won/lost deals are "resolved" by definition — exclude them.
-      if (f?.isWon || f?.isLost) return false;
-      // Keep only deals whose most recent activity is older than the cutoff.
-      return dealActivityMs(d) < cutoffMs;
-    });
-  }
-
-  // "Last activity" sort: most recently touched first. Done in JS because the
-  // rollup spans multiple tables (the DB seed sorted by updatedAt only).
-  if (sort === "activity") {
-    visibleDeals = [...visibleDeals].sort((a, b) => {
-      const diff = dealActivityMs(a) - dealActivityMs(b);
-      return asc ? diff : -diff;
-    });
-  }
-
-  const kanbanDeals: KanbanDeal[] = visibleDeals.map((d) => ({
-    id: d.id,
-    salesId: d.salesId,
-    title: d.title,
-    amountEur: d.amountEur ? Number(d.amountEur) : null,
-    stageId: d.stageId,
-    clientName: d.client?.name ?? null,
-    ownerId: d.ownerId,
-    ownerName: d.owner?.name ?? null,
-    ownerColor: d.owner?.avatarColor ?? null,
-    dueDate: d.dueDate?.toISOString() ?? null,
-    overdue: isDealOverdue(d.dueDate, d.stageId),
-    tags: d.tags.map((t) => ({ id: t.id, name: t.name, color: t.color })),
-    openTasks: d._count.tasks,
-  }));
-
-  const totalValue = visibleDeals.reduce((s, d) => s + (d.amountEur ? Number(d.amountEur) : 0), 0);
-
-  // Inline-table data (table view): editable rows + admin sharing state.
-  const dealRows: DealRow[] = visibleDeals.map((d) => ({
-    id: d.id,
-    salesId: d.salesId,
-    title: d.title,
-    clientName: d.client?.name ?? null,
-    stageId: d.stageId,
-    amountEur: d.amountEur ? Number(d.amountEur) : null,
-    dueDate: d.dueDate ? d.dueDate.toISOString().slice(0, 10) : null,
-    overdue: isDealOverdue(d.dueDate, d.stageId),
-    ownerId: d.ownerId,
-    ownerName: d.owner?.name ?? null,
-    ownerColor: d.owner?.avatarColor ?? null,
-    tagIds: d.tags.map((t) => t.id),
-  }));
 
   const shareUsers = admin
     ? await prisma.user.findMany({
@@ -279,9 +202,9 @@ export default async function DealsPage({
       })
     : [];
   const shares =
-    admin && visibleDeals.length
+    admin && loadedDealIds.length
       ? await prisma.share.findMany({
-          where: { subject: "DEAL", subjectId: { in: visibleDeals.map((d) => d.id) } },
+          where: { subject: "DEAL", subjectId: { in: loadedDealIds } },
           select: { subjectId: true, userId: true },
         })
       : [];
@@ -290,7 +213,7 @@ export default async function DealsPage({
 
   return (
     <div className="flex h-full flex-col">
-      <PageHeader title="Deals" description={`${visibleDeals.length} deals · ${formatCurrency(totalValue)} pipeline value`}>
+      <PageHeader title="Deals" description={`${totalCount} deals · ${formatCurrency(totalValue)} pipeline value`}>
         <DealFormDialog
           isAdmin={admin}
           stages={stages.map((s) => ({ id: s.id, name: s.name }))}
@@ -327,6 +250,10 @@ export default async function DealsPage({
               phase: s.phase,
             }))}
             deals={kanbanDeals}
+            stageTotals={stageTotals}
+            paginated={!fullScan}
+            filterParams={filterParams}
+            pageSize={DEALS_PAGE_SIZE}
             newDeal={{ isAdmin: admin, clients, tags, fieldDefs, owners }}
             shareUsers={shareUsers.map((u) => ({ id: u.id, name: u.name, color: u.avatarColor }))}
             sharedMap={sharedMap}
@@ -338,6 +265,10 @@ export default async function DealsPage({
           <DealsTable
             deals={dealRows}
             stages={stages.map((s) => ({ id: s.id, name: s.name, color: s.color, phase: s.phase }))}
+            stageTotals={stageTotals}
+            paginated={!fullScan}
+            filterParams={filterParams}
+            pageSize={DEALS_PAGE_SIZE}
             owners={owners}
             tags={tags}
             admin={admin}

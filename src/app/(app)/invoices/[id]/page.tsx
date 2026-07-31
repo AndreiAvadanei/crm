@@ -92,6 +92,7 @@ export default async function InvoiceDetailPage({ params }: Props) {
     include: {
       organization: { include: { client: { select: { id: true, name: true, ownerId: true } } } },
       client: { select: { id: true, name: true } },
+      finalClient: { select: { id: true, name: true } },
       deal: { select: { salesId: true, title: true } },
       lines: { orderBy: { createdAt: "asc" } },
       partNumber: { select: { code: true, title: true } },
@@ -127,7 +128,7 @@ export default async function InvoiceDetailPage({ params }: Props) {
   const issueDateInput = invoice.issueDate ? invoice.issueDate.toISOString().slice(0, 10) : null;
   const original = asOriginalValues(invoice.originalValues);
 
-  const [orgs, deals, issuers, partNumbers, seriesList] = canManage
+  const [orgs, deals, issuers, partNumbers, seriesList, finalClients] = canManage
     ? await Promise.all([
         prisma.organization.findMany({
           where: { client: clientVis },
@@ -144,13 +145,16 @@ export default async function InvoiceDetailPage({ params }: Props) {
         getActiveIssuers(),
         getActivePartNumbers(),
         getActiveSeries(),
+        prisma.finalClient.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true }, take: LIST_FETCH_CAP }),
       ])
-    : [[], [], [], [], []];
+    : [[], [], [], [], [], []];
 
   const formData: InvoiceData = {
     id: invoice.id,
     organizationId: invoice.organizationId,
     salesId: invoice.deal?.salesId ?? invoice.salesIdSnapshot ?? null,
+    finalClientId: invoice.finalClientId,
+    finalClientName: invoice.finalClient?.name ?? null,
     number: invoice.number,
     status: invoice.status,
     currency: invoice.currency,
@@ -235,6 +239,7 @@ export default async function InvoiceDetailPage({ params }: Props) {
               issuers={issuers}
               series={seriesList}
               partNumbers={partNumbers}
+              finalClients={finalClients}
               trigger={
                 <Button variant="outline">
                   <Pencil /> Edit
@@ -295,6 +300,9 @@ export default async function InvoiceDetailPage({ params }: Props) {
                     {invoice.organization.client.name}
                   </Link>
                 )}
+              </Row>
+              <Row label="Final client">
+                {invoice.finalClient ? invoice.finalClient.name : <span className="text-muted-foreground">—</span>}
               </Row>
               <Row label="Organization">
                 <Link href={`/invoices?organization=${invoice.organizationId}`} className="hover:text-primary">

@@ -33,6 +33,7 @@ import {
   fetchAnafCompanyAction,
   getOrganizationForEditAction,
 } from "@/server/organization-actions";
+import { quickCreateClientAction } from "@/server/client-actions";
 
 // Minimal shape needed to identify the org being edited; the full field set is
 // loaded on open via getOrganizationForEditAction so we don't thread ~30 columns
@@ -127,6 +128,8 @@ export function OrgFormDialog({
   const [ready, setReady] = useState(false);
   const [fetching, setFetching] = useState(false);
   const [clientId, setClientId] = useState(organization?.clientId ?? fixedClient?.id ?? "");
+  // Clients created inline via the picker's "create" row, kept selectable until refresh.
+  const [extraClients, setExtraClients] = useState<{ id: string; name: string }[]>([]);
   const [form, setForm] = useState<FormState>(EMPTY);
   const editing = !!organization;
 
@@ -234,9 +237,18 @@ export function OrgFormDialog({
                 ) : (
                   <ClientCombobox
                     value={clientId}
-                    options={(clients ?? []).map((c) => ({ value: c.id, label: c.name }))}
+                    options={[...extraClients, ...(clients ?? [])].map((c) => ({ value: c.id, label: c.name }))}
                     onChange={setClientId}
                     placeholder="Select client"
+                    createLabel="Create client"
+                    onCreate={async (name) => {
+                      const res = await quickCreateClientAction(name);
+                      if (res.error || !res.id) {
+                        return toast({ title: res.error ?? "Could not create client.", variant: "error" });
+                      }
+                      setExtraClients((prev) => [{ id: res.id!, name: res.name ?? name }, ...prev]);
+                      setClientId(res.id);
+                    }}
                   />
                 )}
               </div>

@@ -566,6 +566,39 @@ export async function setTaskWebhookSecretAction(formData: FormData): Promise<Re
 }
 
 /**
+ * Set or regenerate the daily-digest cron secret. Same logic as the inbound
+ * webhooks: `regenerate` (or no `secret`) mints a new random token; an empty
+ * `secret` clears it (disabling the endpoint). The secret value itself is never
+ * written to the audit log.
+ */
+export async function setDailyDigestSecretAction(formData: FormData): Promise<Result> {
+  const admin = await ensureAdmin();
+  const provided = str(formData, "secret");
+  const regenerate = str(formData, "regenerate") === "1";
+
+  let value: string | null;
+  if (regenerate) {
+    value = randomBytes(32).toString("base64url");
+  } else if (provided) {
+    if (provided.length < 16) return { error: "Secret must be at least 16 characters." };
+    value = provided;
+  } else {
+    value = null; // clear / disable
+  }
+
+  await setSetting(SETTING_KEYS.dailyDigestSecret, value);
+  await logActivity({
+    actorId: admin.id,
+    action: "settings_updated",
+    entity: "Setting",
+    entityId: SETTING_KEYS.dailyDigestSecret,
+    meta: { setting: "Daily digest secret", value: value ? "(updated)" : "(cleared)" },
+  });
+  revalidatePath("/admin/settings");
+  return { ok: true, secret: value ?? undefined };
+}
+
+/**
  * Configure the defaults applied to tasks created by the create-task webhook:
  * the task text (title), how many days from receipt the due date lands, and the
  * priority (urgency). Individual webhook calls may still override these.

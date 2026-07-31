@@ -8,14 +8,9 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Loader2 } from "lucide-react";
+import * as Popover from "@radix-ui/react-popover";
+import { Check, Loader2, Search } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuTrigger,
-  DropdownMenuCheckboxItem,
-} from "@/components/ui/dropdown-menu";
 import { TagBadge, type TagView } from "@/components/shared/tag-badge";
 import { ClientCombobox, type ComboOption } from "@/components/shared/client-combobox";
 import { cn } from "@/lib/utils";
@@ -35,6 +30,7 @@ export function InlineInput({
   align = "left",
   inputClassName,
   triggerClassName,
+  refreshOnSave = true,
 }: {
   value: string;
   type?: "text" | "number" | "date";
@@ -44,6 +40,10 @@ export function InlineInput({
   align?: "left" | "right";
   inputClassName?: string;
   triggerClassName?: string;
+  // Refresh the server component after a successful save (default). Views that
+  // manage their own optimistic state (e.g. the paginated deals board/table)
+  // pass `false` so a refresh doesn't discard their loaded pages.
+  refreshOnSave?: boolean;
 }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -80,7 +80,7 @@ export function InlineInput({
       return;
     }
     setEditing(false);
-    router.refresh();
+    if (refreshOnSave) router.refresh();
   }
 
   if (!editing) {
@@ -230,12 +230,15 @@ export function InlineSelect({
   onSave,
   placeholder,
   className,
+  refreshOnSave = true,
 }: {
   value: string;
   options: { value: string; label: string }[];
   onSave: (next: string) => Promise<SaveResult>;
   placeholder?: string;
   className?: string;
+  // See InlineInput — pass `false` when the caller owns optimistic state.
+  refreshOnSave?: boolean;
 }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -248,7 +251,7 @@ export function InlineSelect({
     const res = await onSave(next);
     setBusy(false);
     if (res.error) return toast({ title: res.error, variant: "error" });
-    router.refresh();
+    if (refreshOnSave) router.refresh();
   }
 
   return (
@@ -279,12 +282,18 @@ export function InlineCombobox({
   value,
   options,
   onSave,
+  onCreate,
+  createLabel,
   placeholder,
   align = "end",
 }: {
   value: string;
   options: ComboOption[];
   onSave: (next: string) => Promise<SaveResult>;
+  // When provided, the combobox can create a new entry from the typed text and
+  // commit it in one step (create + select). Return the create result.
+  onCreate?: (name: string) => Promise<SaveResult>;
+  createLabel?: string;
   placeholder?: string;
   align?: "start" | "end" | "center";
 }) {
@@ -301,11 +310,21 @@ export function InlineCombobox({
     router.refresh();
   }
 
+  async function create(name: string) {
+    setBusy(true);
+    const res = await onCreate!(name);
+    setBusy(false);
+    if (res.error) return toast({ title: res.error, variant: "error" });
+    router.refresh();
+  }
+
   return (
     <ClientCombobox
       value={value}
       options={options}
       onChange={onChange}
+      onCreate={onCreate ? create : undefined}
+      createLabel={createLabel}
       busy={busy}
       placeholder={placeholder ?? "—"}
       align={align}
@@ -315,20 +334,29 @@ export function InlineCombobox({
   );
 }
 
-/** Compact multi-select tag editor in a popover; commits on every toggle. */
+/**
+ * Compact multi-select tag editor in a searchable popover; commits on every
+ * toggle. Type to filter tags fast — the popover stays open so several tags can
+ * be toggled in a row. No inline creation (tags are managed elsewhere).
+ */
 export function InlineTagEditor({
   allTags,
   value,
   onSave,
+  refreshOnSave = true,
 }: {
   allTags: TagView[];
   value: string[];
   onSave: (ids: string[]) => Promise<SaveResult>;
+  // See InlineInput — pass `false` when the caller owns optimistic state.
+  refreshOnSave?: boolean;
 }) {
   const router = useRouter();
   const { toast } = useToast();
   const [selected, setSelected] = React.useState<string[]>(value);
   const [busy, setBusy] = React.useState(false);
+  const [open, setOpen] = React.useState(false);
+  const [query, setQuery] = React.useState("");
 
   React.useEffect(() => setSelected(value), [value]);
 
@@ -344,14 +372,22 @@ export function InlineTagEditor({
       setSelected(prev);
       return;
     }
-    router.refresh();
+    if (refreshOnSave) router.refresh();
   }
 
   const chosen = allTags.filter((t) => selected.includes(t.id));
+  const q = query.trim().toLowerCase();
+  const filtered = q ? allTags.filter((t) => t.name.toLowerCase().includes(q)) : allTags;
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
+    <Popover.Root
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (!o) setQuery("");
+      }}
+    >
+      <Popover.Trigger asChild>
         <button
           type="button"
           title="Edit tags"
@@ -364,25 +400,50 @@ export function InlineTagEditor({
           )}
           {busy && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
         </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="max-h-72 overflow-y-auto">
-        {allTags.map((t) => (
-          <DropdownMenuCheckboxItem
-            key={t.id}
-            checked={selected.includes(t.id)}
-            onSelect={(e) => e.preventDefault()}
-            onCheckedChange={() => toggle(t.id)}
-          >
-            <span className="flex items-center gap-2">
-              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: t.color }} />
-              {t.name}
-            </span>
-          </DropdownMenuCheckboxItem>
-        ))}
-        {allTags.length === 0 && (
-          <div className="px-2 py-1.5 text-xs text-muted-foreground">No tags configured.</div>
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content
+          align="start"
+          sideOffset={4}
+          className="z-50 w-56 overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
+          onOpenAutoFocus={(e) => e.preventDefault()}
+        >
+          <div className="flex items-center gap-2 border-b px-2.5">
+            <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search tags…"
+              className="h-9 w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+            />
+          </div>
+          <div className="max-h-64 overflow-y-auto p-1">
+            {filtered.map((t) => {
+              const on = selected.includes(t.id);
+              return (
+                <button
+                  type="button"
+                  key={t.id}
+                  onClick={() => toggle(t.id)}
+                  className="flex w-full cursor-pointer items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-left text-sm outline-none transition-colors hover:bg-accent focus:bg-accent"
+                >
+                  <span className="flex items-center gap-2">
+                    <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: t.color }} />
+                    <span className="truncate">{t.name}</span>
+                  </span>
+                  {on && <Check className="h-4 w-4 shrink-0 text-primary" />}
+                </button>
+              );
+            })}
+            {filtered.length === 0 && (
+              <div className="px-2 py-3 text-center text-sm text-muted-foreground">
+                {allTags.length === 0 ? "No tags configured." : "No tags found."}
+              </div>
+            )}
+          </div>
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
   );
 }
