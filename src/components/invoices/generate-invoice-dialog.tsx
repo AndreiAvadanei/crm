@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
 import { prepareGenerateInvoiceAction } from "@/server/invoice-actions";
+import { PERSONALIZATION_BLOCK_MESSAGE } from "@/lib/invoice-issue-guard";
 
 export type OrganizationBillingInfo = {
   legalName: string | null;
@@ -43,6 +44,7 @@ export type GenerateInvoiceInfo = {
   articleCount: number;
   currency: string | null;
   paymentTermDays: number | null;
+  needsPersonalization?: boolean;
   org: OrganizationBillingInfo;
 };
 
@@ -70,7 +72,10 @@ export function GenerateInvoiceDialog({ invoice, trigger }: { invoice: GenerateI
   const [open, setOpen] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
 
+  const blocked = invoice.needsPersonalization === true;
+
   async function onConfirm() {
+    if (blocked) return toast({ title: PERSONALIZATION_BLOCK_MESSAGE, variant: "error" });
     setBusy(true);
     const res = await prepareGenerateInvoiceAction(invoice.id);
     setBusy(false);
@@ -84,7 +89,7 @@ export function GenerateInvoiceDialog({ invoice, trigger }: { invoice: GenerateI
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         {trigger ?? (
-          <Button type="button" variant="outline" size="sm">
+          <Button type="button" variant="outline" size="sm" disabled={blocked} title={blocked ? PERSONALIZATION_BLOCK_MESSAGE : undefined}>
             Generate invoice
           </Button>
         )}
@@ -95,6 +100,11 @@ export function GenerateInvoiceDialog({ invoice, trigger }: { invoice: GenerateI
           <DialogDescription>Confirm the invoice data before sending the billing request through Postmark.</DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
+          {blocked && (
+            <div className="rounded-md border border-violet-500/40 bg-violet-500/5 p-3 text-sm text-violet-700 dark:text-violet-300">
+              {PERSONALIZATION_BLOCK_MESSAGE}
+            </div>
+          )}
           <div className="grid gap-2 rounded-lg border p-3 text-sm">
             <InfoRow label="Organization" value={invoice.organizationName} />
             <InfoRow label="Client" value={invoice.clientName ?? "—"} />
@@ -149,7 +159,7 @@ export function GenerateInvoiceDialog({ invoice, trigger }: { invoice: GenerateI
             <Button type="button" variant="outline" onClick={() => setOpen(false)} disabled={busy}>
               Cancel
             </Button>
-            <Button type="button" onClick={onConfirm} disabled={busy}>
+            <Button type="button" onClick={onConfirm} disabled={busy || blocked} title={blocked ? PERSONALIZATION_BLOCK_MESSAGE : undefined}>
               {busy && <Loader2 className="h-4 w-4 animate-spin" />}
               Send
             </Button>

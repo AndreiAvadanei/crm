@@ -16,6 +16,7 @@ import { GenerateInvoiceDialog } from "@/components/invoices/generate-invoice-di
 import { DuplicateInvoiceButton } from "@/components/invoices/duplicate-invoice-button";
 import { saveXmlFile } from "@/components/invoices/saga-xml-button";
 import type { PartNumberOption } from "@/lib/part-numbers";
+import { personalizationBlockMessage } from "@/lib/invoice-issue-guard";
 import {
   deleteInvoiceAction,
   setInvoiceDealAction,
@@ -812,18 +813,23 @@ function AmountCell({ value, predicted, currency }: { value: number | null; pred
 /** Sticky bar with bulk Saga actions, shown when one or more rows are selected. */
 function BulkBar({
   ids,
+  blockedLabels,
   onClear,
   onRefresh,
 }: {
   ids: string[];
+  blockedLabels: string[];
   onClear: () => void;
   onRefresh: () => void;
 }) {
   const { toast } = useToast();
   const [downloading, setDownloading] = React.useState(false);
   const [emailing, setEmailing] = React.useState(false);
+  const blocked = blockedLabels.length > 0;
+  const blockTitle = blocked ? personalizationBlockMessage(blockedLabels) : undefined;
 
   async function onDownload() {
+    if (blocked) return toast({ title: personalizationBlockMessage(blockedLabels), variant: "error" });
     setDownloading(true);
     const res = await bulkDownloadInvoicesSagaXmlAction(ids);
     setDownloading(false);
@@ -840,6 +846,7 @@ function BulkBar({
   }
 
   async function onEmail() {
+    if (blocked) return toast({ title: personalizationBlockMessage(blockedLabels), variant: "error" });
     if (!confirm(`Send one accounting email with ${ids.length} invoice(s) and the combined XML attached?`)) return;
     setEmailing(true);
     const res = await bulkSendInvoicesEmailAction(ids);
@@ -853,15 +860,20 @@ function BulkBar({
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-muted/40 px-3 py-2">
       <span className="text-sm font-medium">{ids.length} selected</span>
-      <Button type="button" variant="outline" size="sm" onClick={onDownload} disabled={downloading || emailing}>
+      <Button type="button" variant="outline" size="sm" onClick={onDownload} disabled={downloading || emailing || blocked} title={blockTitle}>
         {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />} Download XML
       </Button>
-      <Button type="button" variant="outline" size="sm" onClick={onEmail} disabled={downloading || emailing}>
+      <Button type="button" variant="outline" size="sm" onClick={onEmail} disabled={downloading || emailing || blocked} title={blockTitle}>
         {emailing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />} Email all
       </Button>
       <Button type="button" variant="ghost" size="sm" onClick={onClear} disabled={downloading || emailing}>
         <X className="h-4 w-4" /> Clear
       </Button>
+      {blocked && (
+        <span className="text-xs text-violet-600 dark:text-violet-400">
+          {blockedLabels.length} need personalization
+        </span>
+      )}
     </div>
   );
 }
@@ -921,7 +933,14 @@ export function InvoicesTable({
   return (
     <div className="space-y-3">
       {canManage && selected.size > 0 && (
-        <BulkBar ids={Array.from(selected)} onClear={() => setSelected(new Set())} onRefresh={() => router.refresh()} />
+        <BulkBar
+          ids={Array.from(selected)}
+          blockedLabels={invoices
+            .filter((i) => selected.has(i.id) && i.needsPersonalization)
+            .map((i) => i.number || i.organizationName || i.id)}
+          onClear={() => setSelected(new Set())}
+          onRefresh={() => router.refresh()}
+        />
       )}
       <div className="rounded-lg border bg-card">
       <Table>

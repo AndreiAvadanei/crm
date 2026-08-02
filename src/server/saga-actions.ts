@@ -9,6 +9,7 @@ import { logActivity } from "@/lib/activity";
 import { sendEmail, renderEmailLayout } from "@/lib/email";
 import { assignInvoiceNumber } from "@/lib/invoice-numbering";
 import { buildInvoiceSagaXml, buildInvoicesSagaXml } from "@/lib/invoice-saga";
+import { personalizationBlockMessage } from "@/lib/invoice-issue-guard";
 
 const BILLING_EMAIL_FROM = "billing@bit-sentinel.com";
 const BILLING_EMAIL_TO = "romeo200564ro@gmail.com";
@@ -32,13 +33,25 @@ async function authorizeInvoices(user: AuthUser, invoiceIds: string[]) {
   if (unique.length === 0) throw new Error("No invoices selected.");
   const invoices = await prisma.invoice.findMany({
     where: { id: { in: unique } },
-    select: { id: true, clientId: true, status: true, organization: { select: { clientId: true } } },
+    select: {
+      id: true,
+      clientId: true,
+      status: true,
+      number: true,
+      needsPersonalization: true,
+      organization: { select: { clientId: true, sourceName: true } },
+    },
   });
   if (invoices.length !== unique.length) throw new Error("Some invoices were not found.");
   for (const inv of invoices) {
     if (!(await canEditOrgInvoices(user, inv.clientId ?? inv.organization.clientId))) {
       throw new Error("Not allowed for one or more of the selected invoices.");
     }
+  }
+  // Block invoices flagged for monthly personalization from being issued.
+  const blocked = invoices.filter((inv) => inv.needsPersonalization);
+  if (blocked.length > 0) {
+    throw new Error(personalizationBlockMessage(blocked.map((inv) => inv.number || inv.organization.sourceName || inv.id)));
   }
   return invoices;
 }

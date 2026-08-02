@@ -8,6 +8,8 @@ export type PeriodBucket = {
   label: string;
   currency: string;
   amount: number;
+  // Scheduled (expected, not-yet-issued) amount for the same bucket.
+  scheduled: number;
   count: number;
 };
 
@@ -17,6 +19,8 @@ export type MonthComparison = {
   currency: string;
   current: number;
   previous: number;
+  // Scheduled amount for the current year's month.
+  currentScheduled: number;
   delta: number;
   deltaPct: number | null;
 };
@@ -42,6 +46,8 @@ export type CurrencySummary = {
   yoyDelta: number;
   yoyDeltaPct: number | null;
   openToInvoice: number;
+  // Scheduled amount expected to be invoiced within the current year.
+  scheduledYear: number;
   expectedCashNext90: number;
   outstandingNet: number;
   invoiceCount: number;
@@ -52,7 +58,9 @@ export type YearMonthCell = {
   month: number;
   currency: string;
   amount: number;
+  scheduled: number;
   count: number;
+  scheduledCount: number;
 };
 
 export type ClientYearCell = {
@@ -61,6 +69,7 @@ export type ClientYearCell = {
   year: number;
   currency: string;
   amount: number;
+  scheduled: number;
 };
 
 // Revenue for a service category (1st part-number segment, e.g. "RED") in a
@@ -72,6 +81,7 @@ export type CategoryMonthCell = {
   month: number;
   currency: string;
   amount: number;
+  scheduled: number;
   count: number;
 };
 
@@ -83,6 +93,7 @@ export type ClassYearCell = {
   year: number;
   currency: string;
   amount: number;
+  scheduled: number;
 };
 
 // An unpaid, already-issued invoice, with enough context for the payments-due
@@ -245,11 +256,17 @@ function pct(delta: number, base: number): number | null {
   return base === 0 ? null : (delta / base) * 100;
 }
 
-function bump(map: Map<string, PeriodBucket>, key: string, label: string, currency: string, amount: number) {
-  const existing = map.get(key) ?? { key, label, currency, amount: 0, count: 0 };
-  existing.amount += amount;
-  existing.count += 1;
-  map.set(key, existing);
+// A scheduled invoice has no issue date yet but a planned/expected one. Its
+// revenue is "predicted" (not yet invoiced) and is only folded into totals when
+// the user opts in via the "include scheduled" toggle.
+function isScheduled(row: InvoiceInsightInput): boolean {
+  return !row.issueDate && !!row.expectedInvoiceDate;
+}
+
+// Effective date for bucketing: the issue date for issued invoices, else the
+// expected (planned) invoice date for scheduled ones.
+function effectiveDate(row: InvoiceInsightInput): Date | null {
+  return row.issueDate ?? row.expectedInvoiceDate ?? null;
 }
 
 function sumFor(rows: InvoiceInsightInput[], currency: string, predicate: (row: InvoiceInsightInput) => boolean): number {
@@ -268,14 +285,17 @@ function compareByPeriod(
     const period = idx + 1;
     const current = rows.filter((row) => row.currency === currency && row.issueDate && year(row.issueDate) === currentYear && getPeriod(row.issueDate) === period);
     const previous = rows.filter((row) => row.currency === currency && row.issueDate && year(row.issueDate) === currentYear - 1 && getPeriod(row.issueDate) === period);
+    const scheduledRows = rows.filter((row) => row.currency === currency && isScheduled(row) && year(row.expectedInvoiceDate!) === currentYear && getPeriod(row.expectedInvoiceDate!) === period);
     const amount = current.reduce((sum, row) => sum + netAmount(row), 0);
     const previousAmount = previous.reduce((sum, row) => sum + netAmount(row), 0);
+    const scheduled = scheduledRows.reduce((sum, row) => sum + netAmount(row), 0);
     const delta = amount - previousAmount;
     return {
       key: `${currentYear}-${period}`,
       label: label(period),
       currency,
       amount,
+      scheduled,
       previousAmount,
       delta,
       deltaPct: pct(delta, previousAmount),
@@ -342,6 +362,7 @@ export async function getInvoiceInsights(user: User, opts: { currency?: string |
     const previousYtd = sumFor(rows, currency, (row) => !!row.issueDate && year(row.issueDate) === previousYear && row.issueDate! <= prevYtdCutoff);
     const ytdDelta = invoicedYtd - previousYtd;
     const openToInvoice = sumFor(rows, currency, (row) => !row.issueDate && !!row.expectedInvoiceDate);
+    const scheduledYear = sumFor(rows, currency, (row) => isScheduled(row) && year(row.expectedInvoiceDate!) === currentYear);
     const expectedCashNext90 = rows.reduce((sum, row) => {
       if (row.currency !== currency) return sum;
       const cashDate = row.issueDate ? addDays(row.issueDate, 30) : row.expectedInvoiceDate ? addDays(row.expectedInvoiceDate, 40) : null;
@@ -360,6 +381,7 @@ export async function getInvoiceInsights(user: User, opts: { currency?: string |
       yoyDelta,
       yoyDeltaPct: pct(yoyDelta, previousYearTotal),
       openToInvoice,
+      scheduledYear,
       expectedCashNext90,
       outstandingNet: outstanding,
       invoiceCount: rows.filter((row) => row.currency === currency).length,
@@ -368,8 +390,14 @@ export async function getInvoiceInsights(user: User, opts: { currency?: string |
 
   const yearlyMap = new Map<string, PeriodBucket>();
   for (const row of rows) {
-    if (!row.issueDate) continue;
-    bump(yearlyMap, `${row.currency}-${year(row.issueDate)}`, String(year(row.issueDate)), row.currency, netAmount(row));
+    const d = effectiveDate(row);
+    if (!d) continue;
+    const key = `${row.currency}-${year(d)}`;
+    const bucket = yearlyMap.get(key) ?? { key, label: String(year(d)), currency: row.currency, amount: 0, scheduled: 0, count: 0 };
+    if (isScheduled(row)) bucket.scheduled += netAmount(row);
+    else bucket.amount += netAmount(row);
+    bucket.count += 1;
+    yearlyMap.set(key, bucket);
   }
 
   const monthly = activeCurrencies.flatMap((currency) =>
@@ -377,8 +405,9 @@ export async function getInvoiceInsights(user: User, opts: { currency?: string |
       const m = idx + 1;
       const current = sumFor(rows, currency, (row) => !!row.issueDate && year(row.issueDate) === currentYear && month(row.issueDate) === m);
       const previous = sumFor(rows, currency, (row) => !!row.issueDate && year(row.issueDate) === previousYear && month(row.issueDate) === m);
+      const currentScheduled = sumFor(rows, currency, (row) => isScheduled(row) && year(row.expectedInvoiceDate!) === currentYear && month(row.expectedInvoiceDate!) === m);
       const delta = current - previous;
-      return { month: m, label, currency, current, previous, delta, deltaPct: pct(delta, previous) };
+      return { month: m, label, currency, current, previous, currentScheduled, delta, deltaPct: pct(delta, previous) };
     })
   );
 
@@ -418,15 +447,22 @@ export async function getInvoiceInsights(user: User, opts: { currency?: string |
   const categoryMap = new Map<string, CategoryMonthCell>();
   const classMap = new Map<string, ClassYearCell>();
   for (const row of allRows) {
-    if (!row.issueDate) continue;
-    const y = year(row.issueDate);
-    const m = month(row.issueDate);
+    const d = effectiveDate(row);
+    if (!d) continue;
+    const y = year(d);
+    const m = month(d);
     const amount = netAmount(row);
+    const sched = isScheduled(row);
 
     const mKey = `${y}-${m}-${row.currency}`;
-    const mCell = matrixMap.get(mKey) ?? { year: y, month: m, currency: row.currency, amount: 0, count: 0 };
-    mCell.amount += amount;
-    mCell.count += 1;
+    const mCell = matrixMap.get(mKey) ?? { year: y, month: m, currency: row.currency, amount: 0, scheduled: 0, count: 0, scheduledCount: 0 };
+    if (sched) {
+      mCell.scheduled += amount;
+      mCell.scheduledCount += 1;
+    } else {
+      mCell.amount += amount;
+      mCell.count += 1;
+    }
     matrixMap.set(mKey, mCell);
 
     const cKey = `${row.organizationId}-${y}-${row.currency}`;
@@ -436,22 +472,28 @@ export async function getInvoiceInsights(user: User, opts: { currency?: string |
       year: y,
       currency: row.currency,
       amount: 0,
+      scheduled: 0,
     };
-    cCell.amount += amount;
+    if (sched) cCell.scheduled += amount;
+    else cCell.amount += amount;
     clientMap.set(cKey, cCell);
 
     // Split the invoice across category/class segments per its article part
     // numbers (proportional to line values). The segment amounts sum to `amount`.
     for (const seg of categorySegments(row)) {
       const catKey = `${seg.category}-${y}-${m}-${row.currency}`;
-      const catCell = categoryMap.get(catKey) ?? { category: seg.category, year: y, month: m, currency: row.currency, amount: 0, count: 0 };
-      catCell.amount += seg.amount;
-      catCell.count += 1;
+      const catCell = categoryMap.get(catKey) ?? { category: seg.category, year: y, month: m, currency: row.currency, amount: 0, scheduled: 0, count: 0 };
+      if (sched) catCell.scheduled += seg.amount;
+      else {
+        catCell.amount += seg.amount;
+        catCell.count += 1;
+      }
       categoryMap.set(catKey, catCell);
 
       const clsKey = `${seg.category}-${seg.serviceClass}-${y}-${row.currency}`;
-      const clsCell = classMap.get(clsKey) ?? { category: seg.category, serviceClass: seg.serviceClass, year: y, currency: row.currency, amount: 0 };
-      clsCell.amount += seg.amount;
+      const clsCell = classMap.get(clsKey) ?? { category: seg.category, serviceClass: seg.serviceClass, year: y, currency: row.currency, amount: 0, scheduled: 0 };
+      if (sched) clsCell.scheduled += seg.amount;
+      else clsCell.amount += seg.amount;
       classMap.set(clsKey, clsCell);
     }
   }

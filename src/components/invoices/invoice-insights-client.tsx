@@ -142,6 +142,9 @@ export function InvoiceInsightsClient({ data }: { data: InsightsData }) {
 
   const [reporting, setReporting] = React.useState(initialReporting);
   const [rates, setRates] = React.useState<Record<string, number>>({});
+  // When on, scheduled (not-yet-issued) invoices are folded into every figure,
+  // shown as a visually distinct "predicted" layer.
+  const [includeScheduled, setIncludeScheduled] = React.useState(false);
 
   // Build/refresh rate map whenever the reporting currency changes, restoring any
   // saved user overrides for that reporting currency from localStorage.
@@ -187,6 +190,7 @@ export function InvoiceInsightsClient({ data }: { data: InsightsData }) {
       invoicedYtd: 0,
       previousYtd: 0,
       openToInvoice: 0,
+      scheduledYear: 0,
       expectedCashNext90: 0,
       outstandingNet: 0,
       invoiceCount: 0,
@@ -197,15 +201,22 @@ export function InvoiceInsightsClient({ data }: { data: InsightsData }) {
       summary.invoicedYtd += convert(s.invoicedYtd, s.currency);
       summary.previousYtd += convert(s.previousYtd, s.currency);
       summary.openToInvoice += convert(s.openToInvoice, s.currency);
+      summary.scheduledYear += convert(s.scheduledYear, s.currency);
       summary.expectedCashNext90 += convert(s.expectedCashNext90, s.currency);
       summary.outstandingNet += convert(s.outstandingNet, s.currency);
       summary.invoiceCount += s.invoiceCount;
     }
 
-    const yearMap = new Map<string, number>();
-    for (const y of data.yearly) yearMap.set(y.label, (yearMap.get(y.label) ?? 0) + convert(y.amount, y.currency));
+    const yearMap = new Map<string, { invoiced: number; scheduled: number }>();
+    for (const y of data.yearly) {
+      const e = yearMap.get(y.label) ?? { invoiced: 0, scheduled: 0 };
+      e.invoiced += convert(y.amount, y.currency);
+      e.scheduled += convert(y.scheduled, y.currency);
+      yearMap.set(y.label, e);
+    }
     const yearly = Array.from(yearMap.entries())
-      .map(([label, amount]) => ({ label, amount }))
+      .map(([label, v]) => ({ label, invoiced: v.invoiced, scheduled: v.scheduled }))
+      .filter((r) => r.invoiced > 0 || (includeScheduled && r.scheduled > 0))
       .sort((a, b) => a.label.localeCompare(b.label));
 
     const monthly = MONTH_LABELS.map((label, idx) => {
@@ -213,15 +224,17 @@ export function InvoiceInsightsClient({ data }: { data: InsightsData }) {
       const rows = data.monthly.filter((m) => m.month === month);
       const current = rows.reduce((sum, m) => sum + convert(m.current, m.currency), 0);
       const previous = rows.reduce((sum, m) => sum + convert(m.previous, m.currency), 0);
-      return { label, current, previous };
+      const currentScheduled = rows.reduce((sum, m) => sum + convert(m.currentScheduled, m.currency), 0);
+      return { label, current, previous, currentScheduled };
     });
 
     const groupCompare = (list: PeriodCompare[]) => {
-      const map = new Map<string, { label: string; current: number; previous: number }>();
+      const map = new Map<string, { label: string; current: number; previous: number; scheduled: number }>();
       for (const row of list) {
-        const e = map.get(row.label) ?? { label: row.label, current: 0, previous: 0 };
+        const e = map.get(row.label) ?? { label: row.label, current: 0, previous: 0, scheduled: 0 };
         e.current += convert(row.amount, row.currency);
         e.previous += convert(row.previousAmount, row.currency);
+        e.scheduled += convert(row.scheduled, row.currency);
         map.set(row.label, e);
       }
       return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label));
@@ -251,7 +264,7 @@ export function InvoiceInsightsClient({ data }: { data: InsightsData }) {
       semesters: groupCompare(data.semesters),
       forecast,
     };
-  }, [data, convert]);
+  }, [data, convert, includeScheduled]);
 
   const yoyDelta = overall.summary.invoicedYear - overall.summary.previousYear;
   const ytdDelta = overall.summary.invoicedYtd - overall.summary.previousYtd;
@@ -289,18 +302,47 @@ export function InvoiceInsightsClient({ data }: { data: InsightsData }) {
               />
             </div>
           ))}
-          <p className="ml-auto max-w-sm text-xs text-muted-foreground">
-            All figures are net of VAT and converted to {reporting} at the rates above. Rates are approximate and saved in your browser.
-          </p>
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">Scenario</label>
+            <label
+              className="flex h-9 cursor-pointer items-center gap-2 rounded-md border border-input bg-background px-3 text-sm transition"
+              style={includeScheduled ? { borderColor: "var(--chart-4)", background: "color-mix(in oklab, var(--chart-4) 12%, transparent)" } : undefined}
+            >
+              <input
+                type="checkbox"
+                checked={includeScheduled}
+                onChange={(e) => setIncludeScheduled(e.target.checked)}
+                className="h-4 w-4 accent-[var(--chart-4)]"
+              />
+              Include scheduled invoices
+            </label>
+          </div>
+          <div className="ml-auto flex max-w-sm flex-col items-end gap-2">
+            <PredictedLegend active={includeScheduled} />
+            <p className="text-right text-xs text-muted-foreground">
+              Net of VAT, converted to {reporting}. {includeScheduled
+                ? "Predicted (scheduled, not-yet-issued) revenue is folded in and marked distinctly."
+                : "Only issued invoices are counted; tick “Include scheduled” to add predictions."}
+            </p>
+          </div>
         </CardContent>
       </Card>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <KpiCard
-          title={`Invoiced ${data.currentYear}`}
-          value={money(overall.summary.invoicedYtd, reporting)}
+          title={`Invoiced ${data.currentYear}${includeScheduled ? " + predicted" : ""}`}
+          value={money(overall.summary.invoicedYtd + (includeScheduled ? overall.summary.scheduledYear : 0), reporting)}
+          predicted={includeScheduled && overall.summary.scheduledYear > 0}
           footer={
             <div className="space-y-1">
+              {includeScheduled && overall.summary.scheduledYear > 0 && (
+                <div className="flex items-center gap-1.5 text-xs">
+                  <span className="h-2 w-2.5 rounded-sm" style={{ background: PREDICTED_SWATCH }} />
+                  <span className="text-muted-foreground">
+                    {money(overall.summary.invoicedYtd, reporting)} invoiced + {money(overall.summary.scheduledYear, reporting)} predicted
+                  </span>
+                </div>
+              )}
               <div className="flex items-center justify-between text-xs">
                 <span className="text-muted-foreground">vs {data.previousYear} YTD: {money(overall.summary.previousYtd, reporting)}</span>
                 <Delta value={ytdDelta} pctValue={pct(ytdDelta, overall.summary.previousYtd)} />
@@ -315,11 +357,13 @@ export function InvoiceInsightsClient({ data }: { data: InsightsData }) {
         <KpiCard
           title="Predicted cash · next 90d"
           value={money(overall.summary.expectedCashNext90, reporting)}
+          predicted
           footer={<span className="text-xs text-muted-foreground">Issued +30d, to-invoice +40d</span>}
         />
         <KpiCard
           title="Open to invoice"
           value={money(overall.summary.openToInvoice, reporting)}
+          predicted
           footer={<span className="text-xs text-muted-foreground">Scheduled, not yet issued</span>}
         />
         <KpiCard
@@ -330,18 +374,23 @@ export function InvoiceInsightsClient({ data }: { data: InsightsData }) {
       </div>
 
       <div className="grid gap-6 xl:grid-cols-2">
-        <ChartCard title="Invoiced net by year">
+        <ChartCard title={includeScheduled ? "Net by year · invoiced + predicted" : "Invoiced net by year"}>
           <ResponsiveContainer width="100%" height={300}>
             <BarChart data={overall.yearly} margin={{ left: 4, right: 8 }}>
+              <ChartDefs />
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
               <XAxis dataKey="label" tick={{ fontSize: 11, fill: "var(--muted-foreground)" }} />
               <YAxis tickFormatter={tickMoney} width={64} tick={{ fontSize: 11, fill: "var(--muted-foreground)" }} />
               <Tooltip content={(p) => <ChartTooltip {...p} currency={reporting} />} cursor={{ fill: "var(--accent)" }} />
-              <Bar dataKey="amount" name="Invoiced net" radius={[6, 6, 0, 0]}>
+              {includeScheduled && <Legend wrapperStyle={{ fontSize: 12 }} />}
+              <Bar dataKey="invoiced" name="Invoiced" stackId="y" radius={includeScheduled ? [0, 0, 0, 0] : [6, 6, 0, 0]}>
                 {overall.yearly.map((row) => (
                   <Cell key={row.label} fill={row.label === String(data.currentYear) ? "var(--chart-2)" : "var(--chart-1)"} />
                 ))}
               </Bar>
+              {includeScheduled && (
+                <Bar dataKey="scheduled" name="Predicted (scheduled)" stackId="y" fill="url(#predicted-hatch)" stroke="var(--chart-4)" strokeWidth={1} strokeDasharray="3 2" radius={[6, 6, 0, 0]} />
+              )}
             </BarChart>
           </ResponsiveContainer>
         </ChartCard>
@@ -349,13 +398,14 @@ export function InvoiceInsightsClient({ data }: { data: InsightsData }) {
         <ChartCard title={`Predicted cashflow · ${reporting}`}>
           <ResponsiveContainer width="100%" height={300}>
             <ComposedChart data={overall.forecast} margin={{ left: 4, right: 8 }}>
+              <ChartDefs />
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
               <XAxis dataKey="label" tick={{ fontSize: 10, fill: "var(--muted-foreground)" }} angle={-30} textAnchor="end" height={50} />
               <YAxis tickFormatter={tickMoney} width={64} tick={{ fontSize: 11, fill: "var(--muted-foreground)" }} />
               <Tooltip content={(p) => <ChartTooltip {...p} currency={reporting} />} />
               <Legend wrapperStyle={{ fontSize: 12 }} />
-              <Bar dataKey="invoiced" name="From invoiced" stackId="cash" fill="var(--chart-2)" radius={[0, 0, 0, 0]} />
-              <Bar dataKey="toInvoice" name="From to-invoice" stackId="cash" fill="var(--chart-4)" radius={[6, 6, 0, 0]} />
+              <Bar dataKey="invoiced" name="From invoiced (cash-in)" stackId="cash" fill="var(--chart-2)" radius={[0, 0, 0, 0]} />
+              <Bar dataKey="toInvoice" name="Predicted (to-invoice)" stackId="cash" fill="url(#predicted-hatch)" stroke="var(--chart-4)" strokeWidth={1} strokeDasharray="3 2" radius={[6, 6, 0, 0]} />
               <Line dataKey="cumulative" name="Cumulative" stroke="var(--chart-1)" strokeWidth={2} dot={false} />
             </ComposedChart>
           </ResponsiveContainer>
@@ -365,31 +415,35 @@ export function InvoiceInsightsClient({ data }: { data: InsightsData }) {
       <ChartCard title={`Monthly net · ${data.currentYear} vs ${data.previousYear}`}>
         <ResponsiveContainer width="100%" height={320}>
           <ComposedChart data={overall.monthly} margin={{ left: 4, right: 8 }}>
+            <ChartDefs />
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
             <XAxis dataKey="label" tick={{ fontSize: 11, fill: "var(--muted-foreground)" }} />
             <YAxis tickFormatter={tickMoney} width={64} tick={{ fontSize: 11, fill: "var(--muted-foreground)" }} />
             <Tooltip content={(p) => <ChartTooltip {...p} currency={reporting} />} />
             <Legend wrapperStyle={{ fontSize: 12 }} />
             <Bar dataKey="previous" name={String(data.previousYear)} fill="var(--chart-1)" radius={[4, 4, 0, 0]} />
-            <Bar dataKey="current" name={String(data.currentYear)} fill="var(--chart-2)" radius={[4, 4, 0, 0]} />
+            <Bar dataKey="current" name={`${data.currentYear} invoiced`} stackId="cur" fill="var(--chart-2)" radius={includeScheduled ? [0, 0, 0, 0] : [4, 4, 0, 0]} />
+            {includeScheduled && (
+              <Bar dataKey="currentScheduled" name={`${data.currentYear} predicted`} stackId="cur" fill="url(#predicted-hatch)" stroke="var(--chart-4)" strokeWidth={1} strokeDasharray="3 2" radius={[4, 4, 0, 0]} />
+            )}
           </ComposedChart>
         </ResponsiveContainer>
       </ChartCard>
 
       <div className="grid gap-6 xl:grid-cols-2">
-        <PeriodChart title={`Quarters · ${data.currentYear} vs ${data.previousYear}`} rows={overall.quarters} reporting={reporting} prevYear={data.previousYear} curYear={data.currentYear} tickMoney={tickMoney} />
-        <PeriodChart title={`Semesters · ${data.currentYear} vs ${data.previousYear}`} rows={overall.semesters} reporting={reporting} prevYear={data.previousYear} curYear={data.currentYear} tickMoney={tickMoney} />
+        <PeriodChart title={`Quarters · ${data.currentYear} vs ${data.previousYear}`} rows={overall.quarters} reporting={reporting} prevYear={data.previousYear} curYear={data.currentYear} tickMoney={tickMoney} includeScheduled={includeScheduled} />
+        <PeriodChart title={`Semesters · ${data.currentYear} vs ${data.previousYear}`} rows={overall.semesters} reporting={reporting} prevYear={data.previousYear} curYear={data.currentYear} tickMoney={tickMoney} includeScheduled={includeScheduled} />
       </div>
 
-      <HistoryHeatmap matrix={data.monthlyMatrix} convert={convert} reporting={reporting} currentYear={data.currentYear} />
+      <HistoryHeatmap matrix={data.monthlyMatrix} convert={convert} reporting={reporting} currentYear={data.currentYear} includeScheduled={includeScheduled} />
 
-      <CategoryYearMatrix categoryMonthly={data.categoryMonthly} convert={convert} reporting={reporting} currentYear={data.currentYear} />
+      <CategoryYearMatrix categoryMonthly={data.categoryMonthly} convert={convert} reporting={reporting} currentYear={data.currentYear} includeScheduled={includeScheduled} />
 
-      <ClassYearMatrix classYearly={data.classYearly} convert={convert} reporting={reporting} currentYear={data.currentYear} />
+      <ClassYearMatrix classYearly={data.classYearly} convert={convert} reporting={reporting} currentYear={data.currentYear} includeScheduled={includeScheduled} />
 
-      <CategoryMonthlyMatrix categoryMonthly={data.categoryMonthly} convert={convert} reporting={reporting} currentYear={data.currentYear} />
+      <CategoryMonthlyMatrix categoryMonthly={data.categoryMonthly} convert={convert} reporting={reporting} currentYear={data.currentYear} includeScheduled={includeScheduled} />
 
-      <ClientActivityMatrix clients={data.clientYearly} convert={convert} reporting={reporting} />
+      <ClientActivityMatrix clients={data.clientYearly} convert={convert} reporting={reporting} includeScheduled={includeScheduled} />
 
       <Card>
         <CardHeader>
@@ -415,11 +469,16 @@ export function InvoiceInsightsClient({ data }: { data: InsightsData }) {
                   <td className="py-2 pr-3 font-medium">{s.currency}</td>
                   <td className="py-2 pr-3 text-right tabular-nums">{s.invoiceCount}</td>
                   <td className="py-2 pr-3 text-right tabular-nums">{money(s.previousYear, s.currency)}</td>
-                  <td className="py-2 pr-3 text-right tabular-nums">{money(s.invoicedYear, s.currency)}</td>
+                  <td className="py-2 pr-3 text-right tabular-nums">
+                    {money(s.invoicedYear + (includeScheduled ? s.scheduledYear : 0), s.currency)}
+                    {includeScheduled && s.scheduledYear > 0 && (
+                      <span className="ml-1 text-[10px] text-[var(--chart-4)]" title={`Includes ${money(s.scheduledYear, s.currency)} predicted (scheduled)`}>+pred</span>
+                    )}
+                  </td>
                   <td className="py-2 pr-3 text-right"><Delta value={s.yoyDelta} pctValue={s.yoyDeltaPct} /></td>
                   <td className="py-2 pr-3 text-right tabular-nums">{money(s.openToInvoice, s.currency)}</td>
                   <td className="py-2 pr-3 text-right tabular-nums">{money(s.outstandingNet, s.currency)}</td>
-                  <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">{money(convert(s.invoicedYear, s.currency), reporting)}</td>
+                  <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">{money(convert(s.invoicedYear + (includeScheduled ? s.scheduledYear : 0), s.currency), reporting)}</td>
                 </tr>
               ))}
               {data.summaries.length === 0 && (
@@ -437,11 +496,14 @@ export function InvoiceInsightsClient({ data }: { data: InsightsData }) {
   );
 }
 
-function KpiCard({ title, value, footer }: { title: string; value: string; footer: React.ReactNode }) {
+function KpiCard({ title, value, footer, predicted }: { title: string; value: string; footer: React.ReactNode; predicted?: boolean }) {
   return (
-    <Card>
+    <Card style={predicted ? { borderColor: "color-mix(in oklab, var(--chart-4) 45%, var(--border))" } : undefined}>
       <CardContent className="space-y-2 py-4">
-        <div className="text-xs font-medium text-muted-foreground">{title}</div>
+        <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+          {predicted && <span className="h-2 w-2.5 rounded-sm" style={{ background: PREDICTED_SWATCH }} title="Includes predicted (scheduled) revenue" />}
+          {title}
+        </div>
         <div className="text-2xl font-semibold tabular-nums">{value}</div>
         {footer}
       </CardContent>
@@ -467,25 +529,31 @@ function PeriodChart({
   prevYear,
   curYear,
   tickMoney,
+  includeScheduled,
 }: {
   title: string;
-  rows: { label: string; current: number; previous: number }[];
+  rows: { label: string; current: number; previous: number; scheduled: number }[];
   reporting: string;
   prevYear: number;
   curYear: number;
   tickMoney: (v: number) => string;
+  includeScheduled: boolean;
 }) {
   return (
     <ChartCard title={title}>
       <ResponsiveContainer width="100%" height={280}>
         <BarChart data={rows} margin={{ left: 4, right: 8 }}>
+          <ChartDefs />
           <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
           <XAxis dataKey="label" tick={{ fontSize: 11, fill: "var(--muted-foreground)" }} />
           <YAxis tickFormatter={tickMoney} width={64} tick={{ fontSize: 11, fill: "var(--muted-foreground)" }} />
           <Tooltip content={(p) => <ChartTooltip {...p} currency={reporting} />} cursor={{ fill: "var(--accent)" }} />
           <Legend wrapperStyle={{ fontSize: 12 }} />
           <Bar dataKey="previous" name={String(prevYear)} fill="var(--chart-1)" radius={[4, 4, 0, 0]} />
-          <Bar dataKey="current" name={String(curYear)} fill="var(--chart-2)" radius={[4, 4, 0, 0]} />
+          <Bar dataKey="current" name={`${curYear}${includeScheduled ? " invoiced" : ""}`} stackId="cur" fill="var(--chart-2)" radius={includeScheduled ? [0, 0, 0, 0] : [4, 4, 0, 0]} />
+          {includeScheduled && (
+            <Bar dataKey="scheduled" name={`${curYear} predicted`} stackId="cur" fill="url(#predicted-hatch)" stroke="var(--chart-4)" strokeWidth={1} strokeDasharray="3 2" radius={[4, 4, 0, 0]} />
+          )}
         </BarChart>
       </ResponsiveContainer>
     </ChartCard>
@@ -497,6 +565,85 @@ function heatStyle(value: number, max: number): React.CSSProperties {
   if (value <= 0 || max <= 0) return {};
   const ratio = Math.min(1, value / max);
   return { backgroundColor: `color-mix(in oklab, var(--success) ${Math.round(8 + ratio * 55)}%, transparent)` };
+}
+
+// CSS swatch used in legends to represent predicted (scheduled) revenue.
+const PREDICTED_SWATCH = "repeating-linear-gradient(45deg, var(--chart-4) 0 2px, color-mix(in oklab, var(--chart-4) 20%, transparent) 2px 5px)";
+
+// SVG diagonal-hatch pattern so predicted (scheduled) bar segments read as
+// "not yet invoiced" at a glance. Rendered as a child <defs> of each chart.
+function ChartDefs() {
+  return (
+    <defs>
+      <pattern id="predicted-hatch" width={6} height={6} patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+        <rect width={6} height={6} fill="var(--chart-4)" opacity={0.18} />
+        <line x1={0} y1={0} x2={0} y2={6} stroke="var(--chart-4)" strokeWidth={2.5} />
+      </pattern>
+    </defs>
+  );
+}
+
+// Small legend clarifying the invoiced vs predicted encoding used across charts
+// and tables. `active` highlights it once predictions are folded in.
+function PredictedLegend({ active }: { active: boolean }) {
+  return (
+    <div className={`flex items-center gap-3 text-xs ${active ? "text-foreground" : "text-muted-foreground"}`}>
+      <span className="inline-flex items-center gap-1.5">
+        <span className="h-2.5 w-3.5 rounded-sm" style={{ background: "var(--chart-2)" }} />
+        Invoiced
+      </span>
+      <span className="inline-flex items-center gap-1.5">
+        <span className="h-2.5 w-3.5 rounded-sm" style={{ background: PREDICTED_SWATCH, outline: "1px dashed var(--chart-4)", outlineOffset: "-1px" }} />
+        Predicted (scheduled)
+      </span>
+    </div>
+  );
+}
+
+// A per-cell split of invoiced (actual) vs scheduled (predicted) amounts, both
+// already converted to the reporting currency.
+type Split = { inv: number; sched: number };
+
+function splitValue(s: Split, include: boolean): number {
+  return s.inv + (include ? s.sched : 0);
+}
+
+// Heatmap table cell that combines invoiced + (optionally) predicted revenue.
+// Cells carrying predictions get a dashed accent outline and a breakdown tooltip
+// so combined figures stay distinguishable from actuals.
+function HeatCell({
+  split,
+  include,
+  max,
+  reporting,
+  extraClass,
+}: {
+  split: Split;
+  include: boolean;
+  max: number;
+  reporting: string;
+  extraClass?: string;
+}) {
+  const value = splitValue(split, include);
+  const predicted = include && split.sched > 0;
+  const style: React.CSSProperties = { ...heatStyle(value, max) };
+  if (predicted) {
+    style.outline = "1px dashed var(--chart-4)";
+    style.outlineOffset = "-1px";
+  }
+  const title = predicted
+    ? `Invoiced ${money(split.inv, reporting)} · predicted ${money(split.sched, reporting)} = ${money(value, reporting)}`
+    : undefined;
+  return (
+    <td className={`rounded px-2 py-1.5 ${extraClass ?? ""}`} style={style} title={title}>
+      {value > 0 ? compactMoney(value, reporting) : "·"}
+    </td>
+  );
+}
+
+// Combined-total cell (row/column totals) with the same predicted affordance.
+function totalText(split: Split, include: boolean, reporting: string): string {
+  return compactMoney(splitValue(split, include), reporting);
 }
 
 // Inactivity buckets that get progressively "hotter" the longer a client has
@@ -528,52 +675,64 @@ function HistoryHeatmap({
   convert,
   reporting,
   currentYear,
+  includeScheduled,
 }: {
   matrix: YearMonthCell[];
   convert: Convert;
   reporting: string;
   currentYear: number;
+  includeScheduled: boolean;
 }) {
-  const years = React.useMemo(() => Array.from(new Set(matrix.map((c) => c.year))).sort((a, b) => a - b), [matrix]);
+  const years = React.useMemo(() => {
+    const set = new Set<number>();
+    for (const c of matrix) if (c.amount > 0 || (includeScheduled && c.scheduled > 0)) set.add(c.year);
+    return Array.from(set).sort((a, b) => a - b);
+  }, [matrix, includeScheduled]);
 
-  // year -> month(1..12) -> converted amount
+  // year -> month(1..12) -> { invoiced, scheduled } converted amounts
   const byYear = React.useMemo(() => {
-    const map = new Map<number, number[]>();
-    for (const y of years) map.set(y, Array(12).fill(0));
+    const map = new Map<number, Split[]>();
+    for (const y of years) map.set(y, Array.from({ length: 12 }, () => ({ inv: 0, sched: 0 })));
     for (const c of matrix) {
       const arr = map.get(c.year);
-      if (arr) arr[c.month - 1] += convert(c.amount, c.currency);
+      if (arr) {
+        arr[c.month - 1].inv += convert(c.amount, c.currency);
+        arr[c.month - 1].sched += convert(c.scheduled, c.currency);
+      }
     }
     return map;
   }, [matrix, years, convert]);
 
   const maxMonthCell = React.useMemo(() => {
     let max = 0;
-    for (const arr of byYear.values()) for (const v of arr) if (v > max) max = v;
+    for (const arr of byYear.values()) for (const s of arr) { const v = splitValue(s, includeScheduled); if (v > max) max = v; }
     return max;
-  }, [byYear]);
+  }, [byYear, includeScheduled]);
+
+  const sumSplit = (arr: Split[]) => arr.reduce((a, b) => ({ inv: a.inv + b.inv, sched: a.sched + b.sched }), { inv: 0, sched: 0 });
 
   const quarterRows = years.map((y) => {
     const m = byYear.get(y)!;
-    const q = [0, 1, 2, 3].map((qi) => m[qi * 3] + m[qi * 3 + 1] + m[qi * 3 + 2]);
+    const q = [0, 1, 2, 3].map((qi) => sumSplit([m[qi * 3], m[qi * 3 + 1], m[qi * 3 + 2]]));
     return { year: y, q };
   });
-  const maxQuarter = Math.max(1, ...quarterRows.flatMap((r) => r.q));
+  const maxQuarter = Math.max(1, ...quarterRows.flatMap((r) => r.q.map((s) => splitValue(s, includeScheduled))));
 
   const semesterRows = years.map((y) => {
     const m = byYear.get(y)!;
-    const s1 = m.slice(0, 6).reduce((a, b) => a + b, 0);
-    const s2 = m.slice(6).reduce((a, b) => a + b, 0);
-    return { year: y, s1, s2, ratio: s1 === 0 ? null : (s2 / s1) * 100 };
+    const s1 = sumSplit(m.slice(0, 6));
+    const s2 = sumSplit(m.slice(6));
+    const s1v = splitValue(s1, includeScheduled);
+    const s2v = splitValue(s2, includeScheduled);
+    return { year: y, s1, s2, ratio: s1v === 0 ? null : (s2v / s1v) * 100 };
   });
-  const maxSemester = Math.max(1, ...semesterRows.flatMap((r) => [r.s1, r.s2]));
-
-  const cell = (v: number) => (v > 0 ? compactMoney(v, reporting) : "·");
+  const maxSemester = Math.max(1, ...semesterRows.flatMap((r) => [splitValue(r.s1, includeScheduled), splitValue(r.s2, includeScheduled)]));
 
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="gap-2 sm:flex-row sm:items-center sm:justify-between">
         <CardTitle>Revenue by year × month (full history)</CardTitle>
+        {includeScheduled && <PredictedLegend active />}
       </CardHeader>
       <CardContent className="space-y-6">
         <div className="overflow-x-auto">
@@ -590,14 +749,14 @@ function HistoryHeatmap({
             <tbody>
               {years.map((y) => {
                 const m = byYear.get(y)!;
-                const total = m.reduce((a, b) => a + b, 0);
+                const total = sumSplit(m);
                 return (
                   <tr key={y} className={y === currentYear ? "font-medium" : ""}>
                     <td className="sticky left-0 z-10 bg-card px-2 py-1.5 text-left font-medium">{y}</td>
-                    {m.map((v, i) => (
-                      <td key={i} className="rounded px-2 py-1.5" style={heatStyle(v, maxMonthCell)}>{cell(v)}</td>
+                    {m.map((s, i) => (
+                      <HeatCell key={i} split={s} include={includeScheduled} max={maxMonthCell} reporting={reporting} />
                     ))}
-                    <td className="px-2 py-1.5 font-semibold">{compactMoney(total, reporting)}</td>
+                    <td className="px-2 py-1.5 font-semibold">{totalText(total, includeScheduled, reporting)}</td>
                   </tr>
                 );
               })}
@@ -622,8 +781,8 @@ function HistoryHeatmap({
                 {quarterRows.map((r) => (
                   <tr key={r.year} className={r.year === currentYear ? "font-medium" : ""}>
                     <td className="px-2 py-1.5 text-left font-medium">{r.year}</td>
-                    {r.q.map((v, i) => (
-                      <td key={i} className="rounded px-2 py-1.5" style={heatStyle(v, maxQuarter)}>{cell(v)}</td>
+                    {r.q.map((s, i) => (
+                      <HeatCell key={i} split={s} include={includeScheduled} max={maxQuarter} reporting={reporting} />
                     ))}
                   </tr>
                 ))}
@@ -646,8 +805,8 @@ function HistoryHeatmap({
                 {semesterRows.map((r) => (
                   <tr key={r.year} className={r.year === currentYear ? "font-medium" : ""}>
                     <td className="px-2 py-1.5 text-left font-medium">{r.year}</td>
-                    <td className="rounded px-2 py-1.5" style={heatStyle(r.s1, maxSemester)}>{cell(r.s1)}</td>
-                    <td className="rounded px-2 py-1.5" style={heatStyle(r.s2, maxSemester)}>{cell(r.s2)}</td>
+                    <HeatCell split={r.s1} include={includeScheduled} max={maxSemester} reporting={reporting} />
+                    <HeatCell split={r.s2} include={includeScheduled} max={maxSemester} reporting={reporting} />
                     <td className={`px-2 py-1.5 ${r.ratio == null ? "text-muted-foreground" : r.ratio >= 100 ? "text-[var(--success)]" : "text-destructive"}`}>
                       {r.ratio == null ? "—" : `${r.ratio.toFixed(0)}%`}
                     </td>
@@ -666,12 +825,18 @@ function ClientActivityMatrix({
   clients,
   convert,
   reporting,
+  includeScheduled,
 }: {
   clients: ClientYearCell[];
   convert: Convert;
   reporting: string;
+  includeScheduled: boolean;
 }) {
-  const years = React.useMemo(() => Array.from(new Set(clients.map((c) => c.year))).sort((a, b) => a - b), [clients]);
+  const years = React.useMemo(() => {
+    const set = new Set<number>();
+    for (const c of clients) if (c.amount > 0 || (includeScheduled && c.scheduled > 0)) set.add(c.year);
+    return Array.from(set).sort((a, b) => a - b);
+  }, [clients, includeScheduled]);
   const latestYear = years.length ? years[years.length - 1] : new Date().getUTCFullYear();
 
   const [sortBy, setSortBy] = React.useState<number | "total" | "inactive">("total");
@@ -702,19 +867,39 @@ function ClientActivityMatrix({
     }
   }, [visibleYears, sortBy]);
 
-  type Row = { id: string; name: string; byYear: Map<number, number>; total: number; lastActive: number };
-  const rows = React.useMemo(() => {
-    const map = new Map<string, Row>();
+  type Row = { id: string; name: string; byYear: Map<number, Split>; total: number; lastActive: number };
+  // Raw per-year splits (invoiced/predicted), independent of the toggle.
+  const rawRows = React.useMemo(() => {
+    const map = new Map<string, { id: string; name: string; byYear: Map<number, Split> }>();
     for (const c of clients) {
-      const amount = convert(c.amount, c.currency);
-      const r = map.get(c.clientId) ?? { id: c.clientId, name: c.clientName, byYear: new Map(), total: 0, lastActive: 0 };
-      r.byYear.set(c.year, (r.byYear.get(c.year) ?? 0) + amount);
-      r.total += amount;
-      if (amount > 0 && c.year > r.lastActive) r.lastActive = c.year;
+      const r = map.get(c.clientId) ?? { id: c.clientId, name: c.clientName, byYear: new Map<number, Split>() };
+      const s = r.byYear.get(c.year) ?? { inv: 0, sched: 0 };
+      s.inv += convert(c.amount, c.currency);
+      s.sched += convert(c.scheduled, c.currency);
+      r.byYear.set(c.year, s);
       map.set(c.clientId, r);
     }
     return Array.from(map.values());
   }, [clients, convert]);
+
+  // Totals / last-active recomputed whenever predictions are toggled.
+  const rows = React.useMemo<Row[]>(() => {
+    return rawRows.map((r) => {
+      let total = 0;
+      let lastActive = 0;
+      for (const [y, s] of r.byYear) {
+        const v = splitValue(s, includeScheduled);
+        total += v;
+        if (v > 0 && y > lastActive) lastActive = y;
+      }
+      return { ...r, total, lastActive };
+    }).filter((r) => r.total > 0);
+  }, [rawRows, includeScheduled]);
+
+  const valFor = React.useCallback(
+    (r: Row, y: number) => splitValue(r.byYear.get(y) ?? { inv: 0, sched: 0 }, includeScheduled),
+    [includeScheduled]
+  );
 
   const sorted = React.useMemo(() => {
     let list = rows;
@@ -722,7 +907,7 @@ function ClientActivityMatrix({
       list = list.filter((r) => bucketFor(Math.max(0, latestYear - r.lastActive)).id === inactivityFilter);
     }
     if (typeof sortBy === "number" && onlyInactive) {
-      list = list.filter((r) => (r.byYear.get(sortBy) ?? 0) <= 0);
+      list = list.filter((r) => valFor(r, sortBy) <= 0);
     }
     if (sortBy === "inactive") {
       // Longest-inactive first; ties broken by larger historic total.
@@ -732,9 +917,9 @@ function ClientActivityMatrix({
           : (latestYear - b.lastActive) - (latestYear - a.lastActive)
       );
     }
-    const metric = (r: Row) => (sortBy === "total" ? r.total : r.byYear.get(sortBy) ?? 0);
+    const metric = (r: Row) => (sortBy === "total" ? r.total : valFor(r, sortBy));
     return [...list].sort((a, b) => metric(b) - metric(a));
-  }, [rows, sortBy, onlyInactive, latestYear, inactivityFilter]);
+  }, [rows, sortBy, onlyInactive, latestYear, inactivityFilter, valFor]);
 
   const filtered = React.useMemo(
     () => (showAll ? sorted : sorted.slice(0, LIMIT)),
@@ -743,14 +928,17 @@ function ClientActivityMatrix({
 
   const maxCell = React.useMemo(() => {
     let max = 0;
-    for (const r of rows) for (const v of r.byYear.values()) if (v > max) max = v;
+    for (const r of rows) for (const s of r.byYear.values()) { const v = splitValue(s, includeScheduled); if (v > max) max = v; }
     return max;
-  }, [rows]);
+  }, [rows, includeScheduled]);
 
   return (
     <Card>
       <CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <CardTitle>Client activity over time ({rows.length})</CardTitle>
+        <div className="flex items-center gap-3">
+          <CardTitle>Client activity over time ({rows.length})</CardTitle>
+          {includeScheduled && <PredictedLegend active />}
+        </div>
         <div className="flex flex-wrap items-center gap-3">
           {yearOptions.length > 0 && (
             <label className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -871,14 +1059,16 @@ function ClientActivityMatrix({
                       );
                     })()}
                   </td>
-                  {visibleYears.map((y) => {
-                    const v = r.byYear.get(y) ?? 0;
-                    return (
-                      <td key={y} className={`rounded px-2 py-1.5 ${sortBy === y ? "ring-1 ring-inset ring-[var(--ring)]" : ""}`} style={heatStyle(v, maxCell)}>
-                        {v > 0 ? compactMoney(v, reporting) : "·"}
-                      </td>
-                    );
-                  })}
+                  {visibleYears.map((y) => (
+                    <HeatCell
+                      key={y}
+                      split={r.byYear.get(y) ?? { inv: 0, sched: 0 }}
+                      include={includeScheduled}
+                      max={maxCell}
+                      reporting={reporting}
+                      extraClass={sortBy === y ? "ring-1 ring-inset ring-[var(--ring)]" : ""}
+                    />
+                  ))}
                   <td className="px-2 py-1.5 font-semibold">{compactMoney(r.total, reporting)}</td>
                 </tr>
               );
@@ -923,51 +1113,62 @@ function CategoryYearMatrix({
   convert,
   reporting,
   currentYear,
+  includeScheduled,
 }: {
   categoryMonthly: CategoryMonthCell[];
   convert: Convert;
   reporting: string;
   currentYear: number;
+  includeScheduled: boolean;
 }) {
-  const years = React.useMemo(
-    () => Array.from(new Set(categoryMonthly.map((c) => c.year))).sort((a, b) => a - b),
-    [categoryMonthly]
-  );
+  const years = React.useMemo(() => {
+    const set = new Set<number>();
+    for (const c of categoryMonthly) if (c.amount > 0 || (includeScheduled && c.scheduled > 0)) set.add(c.year);
+    return Array.from(set).sort((a, b) => a - b);
+  }, [categoryMonthly, includeScheduled]);
 
   const { rows, totalsByYear, grandTotal, maxCell } = React.useMemo(() => {
-    const map = new Map<string, Map<number, number>>();
+    const map = new Map<string, Map<number, Split>>();
     for (const c of categoryMonthly) {
-      const byYear = map.get(c.category) ?? new Map<number, number>();
-      byYear.set(c.year, (byYear.get(c.year) ?? 0) + convert(c.amount, c.currency));
+      const byYear = map.get(c.category) ?? new Map<number, Split>();
+      const s = byYear.get(c.year) ?? { inv: 0, sched: 0 };
+      s.inv += convert(c.amount, c.currency);
+      s.sched += convert(c.scheduled, c.currency);
+      byYear.set(c.year, s);
       map.set(c.category, byYear);
     }
     const rows = Array.from(map.entries())
       .map(([category, byYear]) => ({
         category,
         byYear,
-        total: Array.from(byYear.values()).reduce((a, b) => a + b, 0),
+        total: Array.from(byYear.values()).reduce((a, b) => a + splitValue(b, includeScheduled), 0),
       }))
+      .filter((r) => r.total > 0)
       .sort((a, b) => b.total - a.total);
-    const totalsByYear = new Map<number, number>();
-    let grandTotal = 0;
+    const totalsByYear = new Map<number, Split>();
+    const grandTotal: Split = { inv: 0, sched: 0 };
     let maxCell = 0;
     for (const r of rows) {
       for (const y of years) {
-        const v = r.byYear.get(y) ?? 0;
-        totalsByYear.set(y, (totalsByYear.get(y) ?? 0) + v);
-        grandTotal += v;
+        const s = r.byYear.get(y) ?? { inv: 0, sched: 0 };
+        const t = totalsByYear.get(y) ?? { inv: 0, sched: 0 };
+        t.inv += s.inv;
+        t.sched += s.sched;
+        totalsByYear.set(y, t);
+        grandTotal.inv += s.inv;
+        grandTotal.sched += s.sched;
+        const v = splitValue(s, includeScheduled);
         if (v > maxCell) maxCell = v;
       }
     }
     return { rows, totalsByYear, grandTotal, maxCell };
-  }, [categoryMonthly, convert, years]);
-
-  const cell = (v: number) => (v > 0 ? compactMoney(v, reporting) : "·");
+  }, [categoryMonthly, convert, years, includeScheduled]);
 
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="gap-2 sm:flex-row sm:items-center sm:justify-between">
         <CardTitle>Revenue by category × year</CardTitle>
+        {includeScheduled && <PredictedLegend active />}
       </CardHeader>
       <CardContent className="overflow-x-auto">
         <table className="w-full border-separate border-spacing-0 text-right text-xs tabular-nums">
@@ -986,12 +1187,9 @@ function CategoryYearMatrix({
                 <td className="sticky left-0 z-10 bg-card px-2 py-1.5 text-left">
                   <span className={`inline-flex rounded px-1.5 py-0.5 text-[11px] font-medium ${categoryClass(r.category)}`}>{r.category}</span>
                 </td>
-                {years.map((y) => {
-                  const v = r.byYear.get(y) ?? 0;
-                  return (
-                    <td key={y} className="rounded px-2 py-1.5" style={heatStyle(v, maxCell)}>{cell(v)}</td>
-                  );
-                })}
+                {years.map((y) => (
+                  <HeatCell key={y} split={r.byYear.get(y) ?? { inv: 0, sched: 0 }} include={includeScheduled} max={maxCell} reporting={reporting} />
+                ))}
                 <td className="px-2 py-1.5 font-semibold">{compactMoney(r.total, reporting)}</td>
               </tr>
             ))}
@@ -1004,9 +1202,9 @@ function CategoryYearMatrix({
               <tr className="border-t font-semibold">
                 <td className="sticky left-0 z-10 bg-card px-2 py-2 text-left">Total</td>
                 {years.map((y) => (
-                  <td key={y} className="px-2 py-2">{compactMoney(totalsByYear.get(y) ?? 0, reporting)}</td>
+                  <td key={y} className="px-2 py-2">{totalText(totalsByYear.get(y) ?? { inv: 0, sched: 0 }, includeScheduled, reporting)}</td>
                 ))}
-                <td className="px-2 py-2">{compactMoney(grandTotal, reporting)}</td>
+                <td className="px-2 py-2">{totalText(grandTotal, includeScheduled, reporting)}</td>
               </tr>
             </tfoot>
           )}
@@ -1024,46 +1222,52 @@ function ClassYearMatrix({
   convert,
   reporting,
   currentYear,
+  includeScheduled,
 }: {
   classYearly: ClassYearCell[];
   convert: Convert;
   reporting: string;
   currentYear: number;
+  includeScheduled: boolean;
 }) {
-  const years = React.useMemo(
-    () => Array.from(new Set(classYearly.map((c) => c.year))).sort((a, b) => a - b),
-    [classYearly]
-  );
+  const years = React.useMemo(() => {
+    const set = new Set<number>();
+    for (const c of classYearly) if (c.amount > 0 || (includeScheduled && c.scheduled > 0)) set.add(c.year);
+    return Array.from(set).sort((a, b) => a - b);
+  }, [classYearly, includeScheduled]);
 
   const { rows, maxCell } = React.useMemo(() => {
-    const map = new Map<string, { category: string; serviceClass: string; byYear: Map<number, number>; total: number }>();
+    const map = new Map<string, { category: string; serviceClass: string; byYear: Map<number, Split>; total: number }>();
     const categoryTotals = new Map<string, number>();
     for (const c of classYearly) {
       const key = `${c.category}||${c.serviceClass}`;
-      const amount = convert(c.amount, c.currency);
-      const row = map.get(key) ?? { category: c.category, serviceClass: c.serviceClass, byYear: new Map<number, number>(), total: 0 };
-      row.byYear.set(c.year, (row.byYear.get(c.year) ?? 0) + amount);
-      row.total += amount;
+      const row = map.get(key) ?? { category: c.category, serviceClass: c.serviceClass, byYear: new Map<number, Split>(), total: 0 };
+      const s = row.byYear.get(c.year) ?? { inv: 0, sched: 0 };
+      s.inv += convert(c.amount, c.currency);
+      s.sched += convert(c.scheduled, c.currency);
+      row.byYear.set(c.year, s);
       map.set(key, row);
-      categoryTotals.set(c.category, (categoryTotals.get(c.category) ?? 0) + amount);
     }
     let maxCell = 0;
-    for (const r of map.values()) for (const v of r.byYear.values()) if (v > maxCell) maxCell = v;
-    const rows = Array.from(map.values()).sort((a, b) => {
+    for (const r of map.values()) {
+      r.total = Array.from(r.byYear.values()).reduce((a, b) => a + splitValue(b, includeScheduled), 0);
+      categoryTotals.set(r.category, (categoryTotals.get(r.category) ?? 0) + r.total);
+      for (const s of r.byYear.values()) { const v = splitValue(s, includeScheduled); if (v > maxCell) maxCell = v; }
+    }
+    const rows = Array.from(map.values()).filter((r) => r.total > 0).sort((a, b) => {
       const catDelta = (categoryTotals.get(b.category) ?? 0) - (categoryTotals.get(a.category) ?? 0);
       if (catDelta !== 0) return catDelta;
       if (a.category !== b.category) return a.category.localeCompare(b.category);
       return b.total - a.total;
     });
     return { rows, maxCell };
-  }, [classYearly, convert]);
-
-  const cell = (v: number) => (v > 0 ? compactMoney(v, reporting) : "·");
+  }, [classYearly, convert, includeScheduled]);
 
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="gap-2 sm:flex-row sm:items-center sm:justify-between">
         <CardTitle>Revenue by service class × year</CardTitle>
+        {includeScheduled && <PredictedLegend active />}
       </CardHeader>
       <CardContent className="overflow-x-auto">
         <table className="w-full border-separate border-spacing-0 text-right text-xs tabular-nums">
@@ -1086,12 +1290,9 @@ function ClassYearMatrix({
                   <span className={`inline-flex rounded px-1.5 py-0.5 text-[11px] font-medium ${categoryClass(r.category)}`}>{r.category}</span>
                 </td>
                 <td className="px-2 py-1.5 text-left text-muted-foreground">{r.serviceClass}</td>
-                {years.map((y) => {
-                  const v = r.byYear.get(y) ?? 0;
-                  return (
-                    <td key={y} className="rounded px-2 py-1.5" style={heatStyle(v, maxCell)}>{cell(v)}</td>
-                  );
-                })}
+                {years.map((y) => (
+                  <HeatCell key={y} split={r.byYear.get(y) ?? { inv: 0, sched: 0 }} include={includeScheduled} max={maxCell} reporting={reporting} />
+                ))}
                 <td className="px-2 py-1.5 font-semibold">{compactMoney(r.total, reporting)}</td>
               </tr>
             ))}
@@ -1112,21 +1313,24 @@ function CategoryMonthlyMatrix({
   convert,
   reporting,
   currentYear,
+  includeScheduled,
 }: {
   categoryMonthly: CategoryMonthCell[];
   convert: Convert;
   reporting: string;
   currentYear: number;
+  includeScheduled: boolean;
 }) {
   const [selected, setSelected] = React.useState<string>("all");
 
-  // category -> year -> month[12] (converted)
+  // category -> year -> month[12] split (converted)
   const byCategory = React.useMemo(() => {
-    const map = new Map<string, Map<number, number[]>>();
+    const map = new Map<string, Map<number, Split[]>>();
     for (const c of categoryMonthly) {
-      const byYear = map.get(c.category) ?? new Map<number, number[]>();
-      const arr = byYear.get(c.year) ?? Array(12).fill(0);
-      arr[c.month - 1] += convert(c.amount, c.currency);
+      const byYear = map.get(c.category) ?? new Map<number, Split[]>();
+      const arr = byYear.get(c.year) ?? Array.from({ length: 12 }, () => ({ inv: 0, sched: 0 }));
+      arr[c.month - 1].inv += convert(c.amount, c.currency);
+      arr[c.month - 1].sched += convert(c.scheduled, c.currency);
       byYear.set(c.year, arr);
       map.set(c.category, byYear);
     }
@@ -1137,11 +1341,11 @@ function CategoryMonthlyMatrix({
     const totals = new Map<string, number>();
     for (const [cat, byYear] of byCategory) {
       let t = 0;
-      for (const arr of byYear.values()) for (const v of arr) t += v;
+      for (const arr of byYear.values()) for (const s of arr) t += splitValue(s, includeScheduled);
       totals.set(cat, t);
     }
-    return Array.from(totals.entries()).sort((a, b) => b[1] - a[1]).map(([cat]) => cat);
-  }, [byCategory]);
+    return Array.from(totals.entries()).filter(([, t]) => t > 0).sort((a, b) => b[1] - a[1]).map(([cat]) => cat);
+  }, [byCategory, includeScheduled]);
 
   const shown = selected === "all" ? categories : categories.filter((c) => c === selected);
 
@@ -1150,17 +1354,18 @@ function CategoryMonthlyMatrix({
     for (const cat of shown) {
       const byYear = byCategory.get(cat);
       if (!byYear) continue;
-      for (const arr of byYear.values()) for (const v of arr) if (v > max) max = v;
+      for (const arr of byYear.values()) for (const s of arr) { const v = splitValue(s, includeScheduled); if (v > max) max = v; }
     }
     return max;
-  }, [byCategory, shown]);
-
-  const cell = (v: number) => (v > 0 ? compactMoney(v, reporting) : "·");
+  }, [byCategory, shown, includeScheduled]);
 
   return (
     <Card>
       <CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <CardTitle>Category by year & month (with monthly average)</CardTitle>
+        <div className="flex items-center gap-3">
+          <CardTitle>Category by year & month (with monthly average)</CardTitle>
+          {includeScheduled && <PredictedLegend active />}
+        </div>
         <label className="flex items-center gap-2 text-xs text-muted-foreground">
           Category
           <select
@@ -1192,11 +1397,13 @@ function CategoryMonthlyMatrix({
             {shown.map((cat) => {
               const byYear = byCategory.get(cat);
               if (!byYear) return null;
-              const catYears = Array.from(byYear.keys()).sort((a, b) => a - b);
+              const catYears = Array.from(byYear.keys())
+                .filter((y) => byYear.get(y)!.some((s) => splitValue(s, includeScheduled) > 0))
+                .sort((a, b) => a - b);
               return catYears.map((y, idx) => {
                 const months = byYear.get(y)!;
-                const total = months.reduce((a, b) => a + b, 0);
-                const activeMonths = months.filter((v) => v > 0).length;
+                const total = months.reduce((a, b) => a + splitValue(b, includeScheduled), 0);
+                const activeMonths = months.filter((s) => splitValue(s, includeScheduled) > 0).length;
                 const avg = activeMonths > 0 ? total / activeMonths : null;
                 return (
                   <tr key={`${cat}-${y}`} className={y === currentYear ? "font-medium" : ""}>
@@ -1206,8 +1413,8 @@ function CategoryMonthlyMatrix({
                       </td>
                     )}
                     <td className="px-2 py-1.5 text-left font-medium">{y}</td>
-                    {months.map((v, i) => (
-                      <td key={i} className="rounded px-2 py-1.5" style={heatStyle(v, maxCell)}>{cell(v)}</td>
+                    {months.map((s, i) => (
+                      <HeatCell key={i} split={s} include={includeScheduled} max={maxCell} reporting={reporting} />
                     ))}
                     <td className="px-2 py-1.5 font-semibold">{compactMoney(total, reporting)}</td>
                     <td className="px-2 py-1.5 text-muted-foreground">{avg == null ? "—" : compactMoney(avg, reporting)}</td>
@@ -1220,7 +1427,7 @@ function CategoryMonthlyMatrix({
             )}
           </tbody>
         </table>
-        <p className="mt-3 text-xs text-muted-foreground">Avg (Medie) = yearly total ÷ number of months with revenue.</p>
+        <p className="mt-3 text-xs text-muted-foreground">Avg (Medie) = yearly total ÷ number of months with revenue{includeScheduled ? " (predictions included)" : ""}.</p>
       </CardContent>
     </Card>
   );

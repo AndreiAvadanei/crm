@@ -10,6 +10,7 @@ import { logActivity } from "@/lib/activity";
 import { sendEmail } from "@/lib/email";
 import { buildInvoiceSagaXml } from "@/lib/invoice-saga";
 import { assignInvoiceNumber } from "@/lib/invoice-numbering";
+import { PERSONALIZATION_BLOCK_MESSAGE } from "@/lib/invoice-issue-guard";
 import { computeInvoiceTotals, lineNetValue, round2, type LineAmountInput } from "@/lib/invoice-totals";
 import { resolveOrgVatPercent, resolveInvoiceVatPercent, parseVatPercentInput, inferVatPercentFromAmounts } from "@/lib/invoice-vat";
 import { resolvePartNumberCode } from "@/lib/part-numbers";
@@ -1063,6 +1064,7 @@ export async function prepareGenerateInvoiceAction(invoiceId: string): Promise<R
   if (!inv) return { error: "Not found." };
   if (!(await canEditOrgInvoices(user, inv.clientId ?? inv.organization.clientId))) return { error: "Not allowed." };
   if (inv.status !== InvoiceStatus.IN_ASTEPTARE) return { error: "Only pending invoices can be generated." };
+  if (inv.needsPersonalization) return { error: PERSONALIZATION_BLOCK_MESSAGE };
   // Assign the next FacturaNumar from the series (no-op if already numbered).
   const assignedNumber = await assignInvoiceNumber(invoiceId);
 
