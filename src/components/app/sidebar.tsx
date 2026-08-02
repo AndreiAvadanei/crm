@@ -8,6 +8,7 @@ import {
   Building2,
   Building,
   Receipt,
+  FileSignature,
   ChartColumnIncreasing,
   Users,
   SlidersHorizontal,
@@ -29,6 +30,7 @@ const mainNav: NavItem[] = [
   { href: "/clients", label: "Clients", icon: Building2 },
   { href: "/organizations", label: "Organizations", icon: Building },
   { href: "/invoices", label: "Invoices", icon: Receipt },
+  { href: "/contract-numbers", label: "Contract Numbers", icon: FileSignature },
   { href: "/tasks", label: "Tasks", icon: CheckSquare },
 ];
 

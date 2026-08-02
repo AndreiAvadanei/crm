@@ -40,6 +40,10 @@ export type ActivityAction =
   | "invoice_generate_requested"
   | "invoice_bulk_generate_requested"
   | "invoice_files_received"
+  // Contract numbers
+  | "contract_number_created"
+  | "contract_number_updated"
+  | "contract_number_deleted"
   // Admin: users
   | "user_created"
   | "user_updated"
@@ -123,10 +127,23 @@ export function activityEntityHref(
   entityId: string | null | undefined,
   meta?: Meta
 ): string | undefined {
+  if (entity === "Invoice" && entityId) return `/invoices/${entityId}`;
   const salesId = s(meta, "salesId");
   if (salesId) return `/deals/${salesId}`;
   if (entity === "Client" && entityId) return `/clients/${entityId}`;
   return undefined;
+}
+
+/**
+ * Comma-joined list of the field labels that changed (from `meta.changes`),
+ * truncated after `max` with a "+N more" suffix. Empty string when none.
+ */
+function changedFields(meta?: Meta, max = 4): string {
+  const labels = activityChanges(meta).map((c) => c.label);
+  if (!labels.length) return "";
+  const shown = labels.slice(0, max).join(", ");
+  const extra = labels.length > max ? ` +${labels.length - max} more` : "";
+  return `${shown}${extra}`;
 }
 
 /**
@@ -249,15 +266,36 @@ export function activityPhrase(action: string, meta?: Meta): string {
     // Invoices
     case "invoice_created": {
       const n = s(meta, "number");
-      return n ? `created invoice ${quote(n)}` : "created an invoice";
+      const org = s(meta, "organization");
+      const amount = s(meta, "amountLabel");
+      const count = Number(s(meta, "count") ?? "1");
+      if (count > 1) {
+        const forOrg = org ? ` for ${org}` : "";
+        return `created ${count} recurring invoices${forOrg}${amount ? ` (${amount} each)` : ""}`;
+      }
+      const subject = n ? `invoice ${quote(n)}` : org ? `an invoice for ${org}` : "an invoice";
+      return `created ${subject}${amount ? ` \u2014 ${amount}` : ""}`;
     }
     case "invoice_updated": {
       const n = s(meta, "number");
-      return n ? `updated invoice ${quote(n)}` : "updated an invoice";
+      const org = s(meta, "organization");
+      const subject = n ? `invoice ${quote(n)}` : org ? `the invoice for ${org}` : "an invoice";
+      const fields = changedFields(meta);
+      return fields ? `updated ${subject} (${fields})` : `updated ${subject}`;
     }
     case "invoice_deleted": {
       const n = s(meta, "number");
-      return n ? `deleted invoice ${quote(n)}` : "deleted an invoice";
+      const org = s(meta, "organization");
+      if (n) return `deleted invoice ${quote(n)}`;
+      return org ? `deleted an invoice for ${org}` : "deleted an invoice";
+    }
+    case "invoice_imported": {
+      const imported = s(meta, "imported");
+      const file = s(meta, "fileName");
+      const base = imported
+        ? `imported ${imported} invoice${imported === "1" ? "" : "s"}`
+        : "imported invoices";
+      return file ? `${base} from ${file}` : base;
     }
     case "invoice_generate_requested": {
       const n = s(meta, "number");
@@ -272,6 +310,19 @@ export function activityPhrase(action: string, meta?: Meta): string {
       const c = s(meta, "fileCount");
       const files = c ? ` (${c} file${c === "1" ? "" : "s"})` : "";
       return n ? `received generated invoice ${quote(n)}${files}` : `received generated invoice${files}`;
+    }
+    // Contract numbers
+    case "contract_number_created": {
+      const n = s(meta, "number");
+      return n ? `created contract number ${quote(n)}` : "created a contract number";
+    }
+    case "contract_number_updated": {
+      const n = s(meta, "number");
+      return n ? `updated contract number ${quote(n)}` : "updated a contract number";
+    }
+    case "contract_number_deleted": {
+      const n = s(meta, "number");
+      return n ? `deleted contract number ${quote(n)}` : "deleted a contract number";
     }
     // Admin: users
     case "user_created": {

@@ -7,6 +7,7 @@ import { InvoiceStatus, Prisma } from "@/generated/prisma";
 import { requireUser } from "@/lib/auth/guards";
 import { canEditClient, isAdmin } from "@/lib/rbac";
 import { logActivity } from "@/lib/activity";
+import { changeList, diffBool, diffCurrency, diffDate, diffPlain, diffText, type ActivityChange } from "@/lib/activity-diff";
 import { sendEmail } from "@/lib/email";
 import { buildInvoiceSagaXml } from "@/lib/invoice-saga";
 import { assignInvoiceNumber } from "@/lib/invoice-numbering";
@@ -419,7 +420,7 @@ export async function createInvoiceAction(formData: FormData): Promise<Result> {
   if (!organizationId) return { error: "Organization is required." };
   const org = await prisma.organization.findUnique({
     where: { id: organizationId },
-    select: { clientId: true, country: true, tvaPercent: true },
+    select: { clientId: true, sourceName: true, country: true, tvaPercent: true },
   });
   if (!org) return { error: "Organization not found." };
   if (!(await canEditOrgInvoices(user, org.clientId))) return { error: "Not allowed." };
@@ -470,7 +471,15 @@ export async function createInvoiceAction(formData: FormData): Promise<Result> {
     action: "invoice_created",
     entity: "Invoice",
     entityId: firstId,
-    meta: { organizationId, count },
+    meta: {
+      organizationId,
+      organization: org.sourceName,
+      count,
+      currency: fields.currency,
+      amountLabel: fmtMoney(totals.total, fields.currency),
+      lineCount: lines.length,
+      salesId: fields.salesIdSnapshot,
+    },
   });
   revalidatePath("/invoices");
   if (org.clientId) revalidatePath(`/clients/${org.clientId}`);
@@ -555,13 +564,25 @@ export async function updateInvoiceAction(invoiceId: string, formData: FormData)
       number: true,
       clientId: true,
       organizationId: true,
+      status: true,
       paid: true,
+      needsPersonalization: true,
+      currency: true,
+      paymentTermDays: true,
+      expectedInvoiceDate: true,
+      contractRef: true,
+      servicesDescription: true,
+      issuerName: true,
+      salesIdSnapshot: true,
+      finalClientId: true,
       vatPercent: true,
       totalBaseAmount: true,
       vatAmount: true,
       totalAmount: true,
       unpaidAmount: true,
-      organization: { select: { clientId: true } },
+      finalClient: { select: { name: true } },
+      deal: { select: { salesId: true } },
+      organization: { select: { clientId: true, sourceName: true } },
       lines: {
         orderBy: { createdAt: "asc" },
         select: { quantity: true, unitPrice: true, value: true, total: true },
@@ -574,11 +595,13 @@ export async function updateInvoiceAction(invoiceId: string, formData: FormData)
   // Optional re-assignment of organization.
   let organizationId = str(formData, "organizationId") ?? existing.organizationId;
   let clientId = existing.clientId;
+  let newOrgName = existing.organization.sourceName;
   if (organizationId !== existing.organizationId) {
-    const org = await prisma.organization.findUnique({ where: { id: organizationId }, select: { clientId: true } });
+    const org = await prisma.organization.findUnique({ where: { id: organizationId }, select: { clientId: true, sourceName: true } });
     if (!org) return { error: "Organization not found." };
     if (!(await canEditOrgInvoices(user, org.clientId))) return { error: "Not allowed for that organization." };
     clientId = org.clientId;
+    newOrgName = org.sourceName;
   }
 
   const { fields, lines, saleMissing } = await invoiceData(formData, invoiceId);
@@ -598,14 +621,14 @@ export async function updateInvoiceAction(invoiceId: string, formData: FormData)
     ...fields,
   };
 
-  if (financialChanged) {
-    const totals = computeInvoiceTotals(lines, vatPercent);
+  const newTotals = financialChanged ? computeInvoiceTotals(lines, vatPercent) : null;
+  if (newTotals) {
     Object.assign(updateData, {
       vatPercent,
-      totalBaseAmount: totals.base,
-      vatAmount: totals.vat,
-      totalAmount: totals.total,
-      unpaidAmount: fields.paid ? 0 : totals.total,
+      totalBaseAmount: newTotals.base,
+      vatAmount: newTotals.vat,
+      totalAmount: newTotals.total,
+      unpaidAmount: fields.paid ? 0 : newTotals.total,
     });
   } else if (fields.paid !== existing.paid) {
     updateData.unpaidAmount = fields.paid
@@ -624,12 +647,47 @@ export async function updateInvoiceAction(invoiceId: string, formData: FormData)
     financialChanged ? vatPercent : storedVatPercent(existing) ?? vatPercent,
     financialChanged ? undefined : existing.lines
   );
+
+  // Build a field-level diff so the activity feed reads verbosely (which fields
+  // changed, from → to) instead of a bare "updated an invoice". Best-effort.
+  let changes: ActivityChange[] = [];
+  try {
+    let newFinalClientName = existing.finalClient?.name ?? null;
+    if ((fields.finalClientId ?? null) !== (existing.finalClientId ?? null)) {
+      newFinalClientName = fields.finalClientId
+        ? (await prisma.finalClient.findUnique({ where: { id: fields.finalClientId }, select: { name: true } }))?.name ?? null
+        : null;
+    }
+    const prevTotal = existing.totalAmount != null ? Number(existing.totalAmount) : null;
+    const newTotal = newTotals ? newTotals.total : prevTotal;
+    const prevVat = storedVatPercent(existing);
+    const term = (n: number | null | undefined) => (n == null ? null : `${n} days`);
+    changes = changeList(
+      diffPlain("status", "Status", existing.status, fields.status),
+      diffPlain("organization", "Organization", existing.organization.sourceName, newOrgName),
+      diffPlain("deal", "Deal", existing.deal?.salesId ?? existing.salesIdSnapshot, fields.salesIdSnapshot),
+      diffPlain("finalClient", "Final client", existing.finalClient?.name ?? null, newFinalClientName),
+      diffText("contractRef", "Contract ref", existing.contractRef, fields.contractRef),
+      diffText("services", "Services", existing.servicesDescription, fields.servicesDescription),
+      diffText("issuer", "Issuer", existing.issuerName, fields.issuerName),
+      diffPlain("currency", "Currency", existing.currency, fields.currency),
+      diffPlain("paymentTerm", "Payment term", term(existing.paymentTermDays), term(fields.paymentTermDays)),
+      diffDate("expectedDate", "Expected date", existing.expectedInvoiceDate, fields.expectedInvoiceDate),
+      diffBool("paid", "Paid", existing.paid, fields.paid),
+      diffBool("needsPersonalization", "Needs personalization", existing.needsPersonalization, fields.needsPersonalization),
+      prevVat != null ? diffPlain("vatPercent", "VAT %", `${round2(prevVat)}%`, `${round2(vatPercent)}%`) : null,
+      diffCurrency("total", "Total", prevTotal, newTotal),
+    );
+  } catch {
+    // Diff is best-effort; never block the update on it.
+  }
+
   await logActivity({
     actorId: user.id,
     action: "invoice_updated",
     entity: "Invoice",
     entityId: invoiceId,
-    meta: { number: existing.number, organizationId },
+    meta: { number: existing.number, organization: newOrgName, salesId: fields.salesIdSnapshot, changes },
   });
   revalidatePath("/invoices");
   revalidatePath(`/invoices/${invoiceId}`);
@@ -643,7 +701,7 @@ export async function setInvoicePaidAction(invoiceId: string, paid: boolean): Pr
   const user = await requireUser();
   const inv = await prisma.invoice.findUnique({
     where: { id: invoiceId },
-    select: { id: true, number: true, clientId: true, salesIdSnapshot: true, organization: { select: { clientId: true } } },
+    select: { id: true, number: true, paid: true, clientId: true, salesIdSnapshot: true, organization: { select: { clientId: true, sourceName: true } } },
   });
   if (!inv) return { error: "Not found." };
   if (!(await canEditOrgInvoices(user, inv.clientId ?? inv.organization.clientId))) return { error: "Not allowed." };
@@ -654,7 +712,13 @@ export async function setInvoicePaidAction(invoiceId: string, paid: boolean): Pr
     action: "invoice_updated",
     entity: "Invoice",
     entityId: invoiceId,
-    meta: { number: inv.number, paid },
+    meta: {
+      number: inv.number,
+      organization: inv.organization.sourceName,
+      salesId: inv.salesIdSnapshot,
+      paid,
+      changes: changeList(diffBool("paid", "Paid", inv.paid, paid)),
+    },
   });
   revalidatePath("/invoices");
   revalidatePath(`/invoices/${invoiceId}`);
@@ -671,7 +735,7 @@ export async function setInvoiceNeedsPersonalizationAction(
   const user = await requireUser();
   const inv = await prisma.invoice.findUnique({
     where: { id: invoiceId },
-    select: { id: true, number: true, clientId: true, salesIdSnapshot: true, organization: { select: { clientId: true } } },
+    select: { id: true, number: true, needsPersonalization: true, clientId: true, salesIdSnapshot: true, organization: { select: { clientId: true, sourceName: true } } },
   });
   if (!inv) return { error: "Not found." };
   if (!(await canEditOrgInvoices(user, inv.clientId ?? inv.organization.clientId))) return { error: "Not allowed." };
@@ -682,7 +746,15 @@ export async function setInvoiceNeedsPersonalizationAction(
     action: "invoice_updated",
     entity: "Invoice",
     entityId: invoiceId,
-    meta: { number: inv.number, needsPersonalization },
+    meta: {
+      number: inv.number,
+      organization: inv.organization.sourceName,
+      salesId: inv.salesIdSnapshot,
+      needsPersonalization,
+      changes: changeList(
+        diffBool("needsPersonalization", "Needs personalization", inv.needsPersonalization, needsPersonalization)
+      ),
+    },
   });
   revalidatePath("/invoices");
   revalidatePath(`/invoices/${invoiceId}`);
@@ -696,7 +768,7 @@ export async function setInvoiceDealAction(invoiceId: string, salesId: string | 
   const user = await requireUser();
   const inv = await prisma.invoice.findUnique({
     where: { id: invoiceId },
-    select: { id: true, number: true, clientId: true, salesIdSnapshot: true, organization: { select: { clientId: true } } },
+    select: { id: true, number: true, clientId: true, salesIdSnapshot: true, organization: { select: { clientId: true, sourceName: true } } },
   });
   if (!inv) return { error: "Not found." };
   if (!(await canEditOrgInvoices(user, inv.clientId ?? inv.organization.clientId))) return { error: "Not allowed." };
@@ -713,7 +785,12 @@ export async function setInvoiceDealAction(invoiceId: string, salesId: string | 
     action: "invoice_updated",
     entity: "Invoice",
     entityId: invoiceId,
-    meta: { number: inv.number, salesId: sale.salesId },
+    meta: {
+      number: inv.number,
+      organization: inv.organization.sourceName,
+      salesId: sale.salesId,
+      changes: changeList(diffPlain("deal", "Deal", inv.salesIdSnapshot, sale.salesId)),
+    },
   });
   revalidatePath("/invoices");
   revalidatePath(`/invoices/${invoiceId}`);
@@ -728,15 +805,17 @@ export async function setInvoiceFinalClientAction(invoiceId: string, finalClient
   const user = await requireUser();
   const inv = await prisma.invoice.findUnique({
     where: { id: invoiceId },
-    select: { id: true, number: true, clientId: true, salesIdSnapshot: true, organization: { select: { clientId: true } } },
+    select: { id: true, number: true, clientId: true, salesIdSnapshot: true, finalClient: { select: { name: true } }, organization: { select: { clientId: true, sourceName: true } } },
   });
   if (!inv) return { error: "Not found." };
   if (!(await canEditOrgInvoices(user, inv.clientId ?? inv.organization.clientId))) return { error: "Not allowed." };
 
   const id = finalClientId?.trim() || null;
+  let newName: string | null = null;
   if (id) {
-    const exists = await prisma.finalClient.findUnique({ where: { id }, select: { id: true } });
+    const exists = await prisma.finalClient.findUnique({ where: { id }, select: { name: true } });
     if (!exists) return { error: "Final client not found." };
+    newName = exists.name;
   }
 
   await prisma.invoice.update({ where: { id: invoiceId }, data: { finalClientId: id } });
@@ -745,7 +824,13 @@ export async function setInvoiceFinalClientAction(invoiceId: string, finalClient
     action: "invoice_updated",
     entity: "Invoice",
     entityId: invoiceId,
-    meta: { number: inv.number, finalClientId: id },
+    meta: {
+      number: inv.number,
+      organization: inv.organization.sourceName,
+      salesId: inv.salesIdSnapshot,
+      finalClientId: id,
+      changes: changeList(diffPlain("finalClient", "Final client", inv.finalClient?.name ?? null, newName)),
+    },
   });
   revalidatePath("/invoices");
   revalidatePath(`/invoices/${invoiceId}`);
@@ -763,19 +848,27 @@ export async function setInvoiceTextFieldAction(
   const user = await requireUser();
   const inv = await prisma.invoice.findUnique({
     where: { id: invoiceId },
-    select: { id: true, number: true, clientId: true, salesIdSnapshot: true, organization: { select: { clientId: true } } },
+    select: { id: true, number: true, contractRef: true, servicesDescription: true, clientId: true, salesIdSnapshot: true, organization: { select: { clientId: true, sourceName: true } } },
   });
   if (!inv) return { error: "Not found." };
   if (!(await canEditOrgInvoices(user, inv.clientId ?? inv.organization.clientId))) return { error: "Not allowed." };
 
   const trimmed = value.trim();
+  const before = field === "contractRef" ? inv.contractRef : inv.servicesDescription;
+  const label = field === "contractRef" ? "Contract ref" : "Services";
   await prisma.invoice.update({ where: { id: invoiceId }, data: { [field]: trimmed || null } });
   await logActivity({
     actorId: user.id,
     action: "invoice_updated",
     entity: "Invoice",
     entityId: invoiceId,
-    meta: { number: inv.number, field },
+    meta: {
+      number: inv.number,
+      organization: inv.organization.sourceName,
+      salesId: inv.salesIdSnapshot,
+      field,
+      changes: changeList(diffText(field, label, before, trimmed || null)),
+    },
   });
   revalidatePath("/invoices");
   revalidatePath(`/invoices/${invoiceId}`);
@@ -789,21 +882,27 @@ export async function setInvoiceExpectedDateAction(invoiceId: string, date: stri
   const user = await requireUser();
   const inv = await prisma.invoice.findUnique({
     where: { id: invoiceId },
-    select: { id: true, number: true, clientId: true, salesIdSnapshot: true, organization: { select: { clientId: true } } },
+    select: { id: true, number: true, expectedInvoiceDate: true, clientId: true, salesIdSnapshot: true, organization: { select: { clientId: true, sourceName: true } } },
   });
   if (!inv) return { error: "Not found." };
   if (!(await canEditOrgInvoices(user, inv.clientId ?? inv.organization.clientId))) return { error: "Not allowed." };
 
+  const newDate = parseDate(date ?? undefined);
   await prisma.invoice.update({
     where: { id: invoiceId },
-    data: { expectedInvoiceDate: parseDate(date ?? undefined) },
+    data: { expectedInvoiceDate: newDate },
   });
   await logActivity({
     actorId: user.id,
     action: "invoice_updated",
     entity: "Invoice",
     entityId: invoiceId,
-    meta: { number: inv.number },
+    meta: {
+      number: inv.number,
+      organization: inv.organization.sourceName,
+      salesId: inv.salesIdSnapshot,
+      changes: changeList(diffDate("expectedDate", "Expected date", inv.expectedInvoiceDate, newDate)),
+    },
   });
   revalidatePath("/invoices");
   revalidatePath(`/invoices/${invoiceId}`);
@@ -1159,7 +1258,7 @@ export async function deleteInvoiceAction(invoiceId: string): Promise<Result> {
   const user = await requireUser();
   const inv = await prisma.invoice.findUnique({
     where: { id: invoiceId },
-    select: { id: true, number: true, clientId: true, salesIdSnapshot: true, organization: { select: { clientId: true } } },
+    select: { id: true, number: true, clientId: true, salesIdSnapshot: true, organization: { select: { clientId: true, sourceName: true } } },
   });
   if (!inv) return { error: "Not found." };
   if (!(await canEditOrgInvoices(user, inv.clientId ?? inv.organization.clientId))) return { error: "Not allowed." };
@@ -1170,7 +1269,7 @@ export async function deleteInvoiceAction(invoiceId: string): Promise<Result> {
     action: "invoice_deleted",
     entity: "Invoice",
     entityId: invoiceId,
-    meta: { number: inv.number },
+    meta: { number: inv.number, organization: inv.organization.sourceName, salesId: inv.salesIdSnapshot },
   });
   revalidatePath("/invoices");
   if (inv.clientId) revalidatePath(`/clients/${inv.clientId}`);

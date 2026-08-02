@@ -73,6 +73,13 @@ enum InvoiceStatus {
   OTHER
 }
 
+// Direction of a tracked contract number relative to us: IN = contract where we
+// are the client/beneficiary, OUT = contract we issue to a customer.
+enum ContractType {
+  IN
+  OUT
+}
+
 // ---------------------------------------------------------------------------
 // Users / auth
 // ---------------------------------------------------------------------------
@@ -110,6 +117,7 @@ model User {
   accessRules    AccessRule[]
   auditLogs      AuditLog[]
   jiraAccountIds JiraUserMap[]
+  contractNumbers ContractNumber[] @relation("ContractCreatedBy")
 }
 
 model Session {
@@ -356,6 +364,7 @@ model Organization {
   cod_post   String?
 
   invoices   Invoice[]
+  contractNumbers ContractNumber[]
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -391,6 +400,7 @@ model Issuer {
   isDefault  Boolean   @default(false)
   isActive   Boolean   @default(true)
   invoices   Invoice[]
+  contractNumbers ContractNumber[]
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 }
@@ -583,6 +593,43 @@ model InvoiceLine {
   @@unique([invoiceId, sourceLineKey])
   @@index([invoiceId])
   @@index([partNumberId])
+}
+
+// ---------------------------------------------------------------------------
+// Contract numbers registry
+// ---------------------------------------------------------------------------
+// A tracked contract number tied to one of our own companies (Issuer). The
+// counterparty is either a linked Organization (picked from the list) or free
+// text captured in `clientName` when no organization matches. Any active user
+// can create; a SALES user may only view the `number` of records they did not
+// create (other fields are masked), while admins and the creator see/edit all.
+model ContractNumber {
+  id               String        @id @default(cuid())
+  // Owning company (one of our issuing legal entities).
+  issuerId         String
+  issuer           Issuer        @relation(fields: [issuerId], references: [id], onDelete: Restrict)
+  // The contract number / reference text.
+  number           String
+  // Optional link to a billing Organization when the client was matched from
+  // the list. `clientName` always holds the display name (org name or free text).
+  organizationId   String?
+  organization     Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  clientName       String
+  type             ContractType  @default(IN)
+  isFrameAgreement Boolean       @default(false)
+  expiresAt        DateTime?
+  comment          String?       @db.Text
+  // Creator: drives per-user edit/visibility rules. Name snapshot survives user deletion.
+  createdById      String?
+  createdBy        User?         @relation("ContractCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdByName    String?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  @@index([issuerId])
+  @@index([organizationId])
+  @@index([createdById])
+  @@index([createdAt])
 }
 
 // Issued invoice documents (PDFs) returned by accounting and stored locally.
