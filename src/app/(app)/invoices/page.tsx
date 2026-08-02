@@ -30,10 +30,10 @@ function parseStatus(v?: string): InvoiceStatus | undefined {
 export default async function InvoicesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; status?: string; client?: string; organization?: string; currency?: string; issuer?: string; dateField?: string; from?: string; to?: string; noDates?: string; unpaid?: string; unpaidDays?: string; groupBy?: string; tab?: string; sort?: string; dir?: string; page?: string }>;
+  searchParams: Promise<{ q?: string; status?: string; client?: string; organization?: string; currency?: string; issuer?: string; dateField?: string; from?: string; to?: string; noDates?: string; unpaid?: string; unpaidDays?: string; noPartNumber?: string; groupBy?: string; tab?: string; sort?: string; dir?: string; page?: string }>;
 }) {
   const user = await requireFullAuth();
-  const { q, status, client, organization, currency, issuer, dateField, from, to, noDates, unpaid, unpaidDays, groupBy, tab, sort, dir, page } = await searchParams;
+  const { q, status, client, organization, currency, issuer, dateField, from, to, noDates, unpaid, unpaidDays, noPartNumber, groupBy, tab, sort, dir, page } = await searchParams;
   const dateFieldOpt: "expected" | "issued" | undefined = dateField === "expected" || dateField === "issued" ? dateField : undefined;
   const noDatesOpt = noDates === "1";
   const unpaidDaysOpt = (() => {
@@ -41,6 +41,7 @@ export default async function InvoicesPage({
     return Number.isFinite(n) && n > 0 ? n : undefined;
   })();
   const unpaidOnlyOpt = unpaid === "1" || unpaidDaysOpt != null;
+  const noPartNumberOpt = noPartNumber === "1";
   const tabOpt: InvoiceTab = tab === "invoiced" ? "invoiced" : "to_invoice";
   const dirOpt = dir === "asc" ? "asc" : dir === "desc" ? "desc" : undefined;
   const groupByOrganization = groupBy === "organization";
@@ -58,6 +59,7 @@ export default async function InvoicesPage({
     noDates: noDatesOpt,
     unpaidOnly: unpaidOnlyOpt,
     unpaidMinDays: unpaidDaysOpt,
+    noPartNumber: noPartNumberOpt,
   };
 
   const [clientVis, dealVis] = await Promise.all([clientVisibilityWhere(user), dealVisibilityWhere(user)]);
@@ -161,7 +163,7 @@ export default async function InvoicesPage({
         {total > CLIENTS_PAGE_SIZE && (
           <Pagination
             pathname="/invoices"
-            params={{ q, status, client, organization, currency, issuer, dateField, from, to, noDates, unpaid: unpaidOnlyOpt ? "1" : undefined, unpaidDays: unpaidDaysOpt != null ? String(unpaidDaysOpt) : undefined, groupBy: groupByOrganization ? "organization" : undefined, tab, sort, dir, page }}
+            params={{ q, status, client, organization, currency, issuer, dateField, from, to, noDates, unpaid: unpaidOnlyOpt ? "1" : undefined, unpaidDays: unpaidDaysOpt != null ? String(unpaidDaysOpt) : undefined, noPartNumber: noPartNumberOpt ? "1" : undefined, groupBy: groupByOrganization ? "organization" : undefined, tab, sort, dir, page }}
             page={invoicePage.page}
             total={total}
             pageSize={invoicePage.pageSize}

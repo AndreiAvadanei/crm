@@ -175,6 +175,7 @@ export function InvoiceFilters({
   const unpaidDaysRaw = params.get("unpaidDays") ?? "";
   const unpaidDays = unpaidDaysRaw && Number.parseInt(unpaidDaysRaw, 10) > 0 ? unpaidDaysRaw : "";
   const unpaid = params.get("unpaid") === "1" || Boolean(unpaidDays);
+  const noPartNumber = params.get("noPartNumber") === "1";
   const groupByOrg = params.get("groupBy") === "organization";
 
   const datePrefix = dateField === "issued" ? "Issued" : dateField === "expected" ? "Expected" : "Date";
@@ -191,6 +192,7 @@ export function InvoiceFilters({
       label: unpaidDays ? `Unpaid ≥ ${unpaidDays} days` : "Unpaid",
       onRemove: () => setParams({ unpaid: "", unpaidDays: "" }),
     });
+  if (noPartNumber) chips.push({ key: "noPartNumber", label: "No part number", onRemove: () => setParam("noPartNumber", "") });
   if (noDates) chips.push({ key: "noDates", label: "No date set", onRemove: () => setParam("noDates", "") });
   else if (from || to)
     chips.push({
@@ -204,7 +206,7 @@ export function InvoiceFilters({
   const activeCount = chips.filter((c) => c.key !== "groupBy").length;
 
   const clearAll = () =>
-    setParams({ status: "", currency: "", issuer: "", dateField: "", from: "", to: "", noDates: "", unpaid: "", unpaidDays: "" });
+    setParams({ status: "", currency: "", issuer: "", dateField: "", from: "", to: "", noDates: "", unpaid: "", unpaidDays: "", noPartNumber: "" });
 
   return (
     <div className="flex flex-1 flex-wrap items-center gap-2">
@@ -259,6 +261,19 @@ export function InvoiceFilters({
             </select>
           </FilterField>
         )}
+
+        <div className="space-y-2 rounded-lg border p-3 sm:col-span-2">
+          <span className="text-xs font-medium text-muted-foreground">Part number</span>
+          <label className="inline-flex cursor-pointer items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="h-4 w-4 cursor-pointer"
+              checked={noPartNumber}
+              onChange={(e) => setParam("noPartNumber", e.target.checked ? "1" : "")}
+            />
+            Missing part number
+          </label>
+        </div>
 
         <div className="space-y-2 rounded-lg border p-3 sm:col-span-2">
           <span className="text-xs font-medium text-muted-foreground">Payment</span>

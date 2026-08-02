@@ -27,6 +27,8 @@ export interface InvoiceListOpts {
   unpaidOnly?: boolean;
   /** When set with unpaid, only issued invoices at least this many days old (by issue date). */
   unpaidMinDays?: number;
+  /** Only invoices with no part number assigned (neither invoice-level nor on any line). */
+  noPartNumber?: boolean;
   /** Workflow tab: "to_invoice" (not issued) | "invoiced" (issued) | undefined (all). */
   tab?: InvoiceTab;
   /** Column to sort by (defaults to tab-aware smart ordering). */
@@ -193,6 +195,14 @@ async function buildInvoiceWhere(user: User, opts: InvoiceListOpts): Promise<Pri
     cutoff.setUTCDate(cutoff.getUTCDate() - opts.unpaidMinDays);
     cutoff.setUTCHours(23, 59, 59, 999);
     and.push({ issueDate: { not: null, lte: cutoff } });
+  }
+  if (opts.noPartNumber) {
+    // No part number anywhere: not on the invoice itself and not on any line.
+    and.push({
+      partNumberId: null,
+      partNumberCode: null,
+      lines: { none: { OR: [{ partNumberId: { not: null } }, { partNumberCode: { not: null } }] } },
+    });
   }
   return { AND: and };
 }
