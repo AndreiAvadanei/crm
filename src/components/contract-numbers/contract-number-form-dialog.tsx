@@ -212,8 +212,8 @@ export function ContractNumberFormDialog({
                   onChange={(e) => set("type", e.target.value as "IN" | "OUT")}
                   className="form-control h-9 w-full px-3"
                 >
-                  <option value="IN">In (we are the client)</option>
-                  <option value="OUT">Out (we issue to a customer)</option>
+                  <option value="IN">In (we are the supplier)</option>
+                  <option value="OUT">Out (we are the client)</option>
                 </select>
               </div>
               <div className="space-y-2">

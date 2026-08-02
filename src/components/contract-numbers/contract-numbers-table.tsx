@@ -1,6 +1,7 @@
 "use client";
 
-import { Pencil, Lock } from "lucide-react";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
+import { Pencil, Lock, ArrowUp, ArrowDown, ChevronsUpDown } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +15,57 @@ import { deleteContractNumberAction } from "@/server/contract-number-actions";
 import { formatDate } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 import type { ContractNumberRow } from "@/lib/contract-number-stats";
+
+/** Clickable column header that cycles asc -> desc -> default via URL params. */
+function SortHeader({
+  label,
+  sortKey,
+  className,
+}: {
+  label: string;
+  sortKey: string;
+  className?: string;
+}) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const params = useSearchParams();
+  const current = params.get("sort");
+  const dir = params.get("dir") === "asc" ? "asc" : "desc";
+  const active = current === sortKey;
+
+  function toggle() {
+    const sp = new URLSearchParams(Array.from(params.entries()));
+    if (!active) {
+      sp.set("sort", sortKey);
+      sp.set("dir", "asc");
+    } else if (dir === "asc") {
+      sp.set("sort", sortKey);
+      sp.set("dir", "desc");
+    } else {
+      sp.delete("sort");
+      sp.delete("dir");
+    }
+    sp.delete("page");
+    router.replace(`${pathname}?${sp.toString()}`);
+  }
+
+  return (
+    <TableHead className={className}>
+      <button
+        type="button"
+        onClick={toggle}
+        className={cn("inline-flex w-full items-center gap-1 hover:text-foreground", active && "text-foreground")}
+      >
+        {label}
+        {active ? (
+          dir === "asc" ? <ArrowUp className="h-3.5 w-3.5" /> : <ArrowDown className="h-3.5 w-3.5" />
+        ) : (
+          <ChevronsUpDown className="h-3.5 w-3.5 opacity-40" />
+        )}
+      </button>
+    </TableHead>
+  );
+}
 
 export function ContractNumbersTable({
   contractNumbers,
@@ -30,14 +82,14 @@ export function ContractNumbersTable({
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Contract number</TableHead>
-            <TableHead>Company</TableHead>
-            <TableHead>Client</TableHead>
-            <TableHead>Type</TableHead>
-            <TableHead>Frame</TableHead>
-            <TableHead>Expires</TableHead>
+            <SortHeader label="Contract number" sortKey="number" />
+            <SortHeader label="Company" sortKey="company" />
+            <SortHeader label="Client" sortKey="client" />
+            <SortHeader label="Type" sortKey="type" />
+            <SortHeader label="Frame" sortKey="frame" />
+            <SortHeader label="Expires" sortKey="expires" />
             <TableHead>Comment</TableHead>
-            <TableHead>Created by</TableHead>
+            <SortHeader label="Created by" sortKey="created" />
             <TableHead className="w-px text-right">Actions</TableHead>
           </TableRow>
         </TableHeader>

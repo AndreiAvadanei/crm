@@ -45,11 +45,17 @@ export type CurrencySummary = {
   previousYear: number;
   yoyDelta: number;
   yoyDeltaPct: number | null;
+  // Not-yet-issued (scheduled) amount, across every year.
   openToInvoice: number;
+  // Not-yet-issued (scheduled) amount whose expected date lands in the current year.
+  openToInvoiceYear: number;
   // Scheduled amount expected to be invoiced within the current year.
   scheduledYear: number;
   expectedCashNext90: number;
+  // Issued-but-unpaid balance, across every year.
   outstandingNet: number;
+  // Issued-but-unpaid balance for invoices issued in the current year.
+  outstandingNetYear: number;
   invoiceCount: number;
 };
 
@@ -362,13 +368,19 @@ export async function getInvoiceInsights(user: User, opts: { currency?: string |
     const previousYtd = sumFor(rows, currency, (row) => !!row.issueDate && year(row.issueDate) === previousYear && row.issueDate! <= prevYtdCutoff);
     const ytdDelta = invoicedYtd - previousYtd;
     const openToInvoice = sumFor(rows, currency, (row) => !row.issueDate && !!row.expectedInvoiceDate);
+    const openToInvoiceYear = sumFor(rows, currency, (row) => !row.issueDate && !!row.expectedInvoiceDate && year(row.expectedInvoiceDate!) === currentYear);
     const scheduledYear = sumFor(rows, currency, (row) => isScheduled(row) && year(row.expectedInvoiceDate!) === currentYear);
     const expectedCashNext90 = rows.reduce((sum, row) => {
       if (row.currency !== currency) return sum;
       const cashDate = row.issueDate ? addDays(row.issueDate, 30) : row.expectedInvoiceDate ? addDays(row.expectedInvoiceDate, 40) : null;
       return cashDate && cashDate >= now && cashDate <= next90 ? sum + netAmount(row) : sum;
     }, 0);
-    const outstanding = rows.reduce((sum, row) => sum + (row.currency === currency ? outstandingNet(row) : 0), 0);
+    // "Invoiced but not received": already-issued invoices with a positive unpaid balance.
+    const outstanding = rows.reduce((sum, row) => sum + (row.currency === currency && !!row.issueDate ? outstandingNet(row) : 0), 0);
+    const outstandingYear = rows.reduce(
+      (sum, row) => sum + (row.currency === currency && !!row.issueDate && year(row.issueDate) === currentYear ? outstandingNet(row) : 0),
+      0
+    );
     const yoyDelta = invoicedYear - previousYearTotal;
     return {
       currency,
@@ -381,9 +393,11 @@ export async function getInvoiceInsights(user: User, opts: { currency?: string |
       yoyDelta,
       yoyDeltaPct: pct(yoyDelta, previousYearTotal),
       openToInvoice,
+      openToInvoiceYear,
       scheduledYear,
       expectedCashNext90,
       outstandingNet: outstanding,
+      outstandingNetYear: outstandingYear,
       invoiceCount: rows.filter((row) => row.currency === currency).length,
     };
   });

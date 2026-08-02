@@ -3,12 +3,53 @@ import { prisma } from "@/lib/db";
 import { isAdmin } from "@/lib/rbac";
 import { Prisma, type ContractType, type User } from "@/generated/prisma";
 
+export type ContractSortKey =
+  | "number"
+  | "company"
+  | "client"
+  | "type"
+  | "frame"
+  | "expires"
+  | "created";
+
 export interface ContractNumberListOpts {
   search?: string;
   /** Restrict to a single owning company (Issuer). */
   issuerId?: string;
+  /** Filter by direction. */
+  type?: ContractType;
+  /** Filter by frame agreement: "yes" | "no". */
+  frame?: "yes" | "no";
+  sort?: string;
+  dir?: "asc" | "desc";
   page?: number;
   pageSize: number;
+}
+
+// Sort keys and filters that operate on confidential fields. For SALES users
+// these are scoped to their own records so a hidden field never influences the
+// ordering or membership of records they may only see by number.
+const CONFIDENTIAL_SORTS = new Set<string>(["client", "type", "frame", "expires"]);
+
+function orderByFor(sort: string | undefined, dir: "asc" | "desc"): Prisma.ContractNumberOrderByWithRelationInput {
+  switch (sort) {
+    case "number":
+      return { number: dir };
+    case "company":
+      return { issuer: { name: dir } };
+    case "client":
+      return { clientName: dir };
+    case "type":
+      return { type: dir };
+    case "frame":
+      return { isFrameAgreement: dir };
+    case "expires":
+      return { expiresAt: dir };
+    case "created":
+      return { createdAt: dir };
+    default:
+      return { createdAt: "desc" };
+  }
 }
 
 /**
@@ -48,6 +89,14 @@ export async function getPaginatedContractNumbers(
   const admin = isAdmin(user);
   const and: Prisma.ContractNumberWhereInput[] = [];
   if (opts.issuerId) and.push({ issuerId: opts.issuerId });
+  if (opts.type) and.push({ type: opts.type });
+  if (opts.frame === "yes") and.push({ isFrameAgreement: true });
+  if (opts.frame === "no") and.push({ isFrameAgreement: false });
+
+  // SALES users may only view the confidential fields of their own records, so
+  // any filter/sort that touches a confidential field is scoped to those.
+  const usesConfidential = !!opts.type || !!opts.frame || CONFIDENTIAL_SORTS.has(opts.sort ?? "");
+  if (!admin && usesConfidential) and.push({ createdById: user.id });
 
   if (opts.search) {
     const q = opts.search.trim();
@@ -73,12 +122,14 @@ export async function getPaginatedContractNumbers(
 
   const where: Prisma.ContractNumberWhereInput = and.length ? { AND: and } : {};
   const page = Math.max(1, opts.page ?? 1);
+  const dir: "asc" | "desc" = opts.dir === "asc" ? "asc" : "desc";
+  const orderBy = orderByFor(opts.sort, dir);
 
   const [total, rows] = await Promise.all([
     prisma.contractNumber.count({ where }),
     prisma.contractNumber.findMany({
       where,
-      orderBy: { createdAt: "desc" },
+      orderBy,
       skip: (page - 1) * opts.pageSize,
       take: opts.pageSize,
       include: {

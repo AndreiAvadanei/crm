@@ -145,6 +145,9 @@ export function InvoiceInsightsClient({ data }: { data: InsightsData }) {
   // When on, scheduled (not-yet-issued) invoices are folded into every figure,
   // shown as a visually distinct "predicted" layer.
   const [includeScheduled, setIncludeScheduled] = React.useState(false);
+  // Scopes the "Open to invoice" / "Outstanding" KPIs. Off = current year only;
+  // on = the entire history.
+  const [pipelineAllYears, setPipelineAllYears] = React.useState(false);
 
   // Build/refresh rate map whenever the reporting currency changes, restoring any
   // saved user overrides for that reporting currency from localStorage.
@@ -190,9 +193,11 @@ export function InvoiceInsightsClient({ data }: { data: InsightsData }) {
       invoicedYtd: 0,
       previousYtd: 0,
       openToInvoice: 0,
+      openToInvoiceYear: 0,
       scheduledYear: 0,
       expectedCashNext90: 0,
       outstandingNet: 0,
+      outstandingNetYear: 0,
       invoiceCount: 0,
     };
     for (const s of data.summaries) {
@@ -201,9 +206,11 @@ export function InvoiceInsightsClient({ data }: { data: InsightsData }) {
       summary.invoicedYtd += convert(s.invoicedYtd, s.currency);
       summary.previousYtd += convert(s.previousYtd, s.currency);
       summary.openToInvoice += convert(s.openToInvoice, s.currency);
+      summary.openToInvoiceYear += convert(s.openToInvoiceYear, s.currency);
       summary.scheduledYear += convert(s.scheduledYear, s.currency);
       summary.expectedCashNext90 += convert(s.expectedCashNext90, s.currency);
       summary.outstandingNet += convert(s.outstandingNet, s.currency);
+      summary.outstandingNetYear += convert(s.outstandingNetYear, s.currency);
       summary.invoiceCount += s.invoiceCount;
     }
 
@@ -268,6 +275,11 @@ export function InvoiceInsightsClient({ data }: { data: InsightsData }) {
 
   const yoyDelta = overall.summary.invoicedYear - overall.summary.previousYear;
   const ytdDelta = overall.summary.invoicedYtd - overall.summary.previousYtd;
+  // "Open to invoice" + "Outstanding" scope: current year by default, or all-time.
+  const pipelineScopeLabel = pipelineAllYears ? "all years" : String(data.currentYear);
+  const openToInvoiceValue = pipelineAllYears ? overall.summary.openToInvoice : overall.summary.openToInvoiceYear;
+  const invoicedNotReceivedValue = pipelineAllYears ? overall.summary.outstandingNet : overall.summary.outstandingNetYear;
+  const outstandingValue = openToInvoiceValue + invoicedNotReceivedValue;
   const otherCurrencies = present.filter((c) => c !== reporting);
   const tickMoney = (v: number) => compactMoney(v, reporting);
 
@@ -317,6 +329,18 @@ export function InvoiceInsightsClient({ data }: { data: InsightsData }) {
               Include scheduled invoices
             </label>
           </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">Pipeline period</label>
+            <label className="flex h-9 cursor-pointer items-center gap-2 rounded-md border border-input bg-background px-3 text-sm transition">
+              <input
+                type="checkbox"
+                checked={pipelineAllYears}
+                onChange={(e) => setPipelineAllYears(e.target.checked)}
+                className="h-4 w-4"
+              />
+              Entire period (all years)
+            </label>
+          </div>
           <div className="ml-auto flex max-w-sm flex-col items-end gap-2">
             <PredictedLegend active={includeScheduled} />
             <p className="text-right text-xs text-muted-foreground">
@@ -361,15 +385,23 @@ export function InvoiceInsightsClient({ data }: { data: InsightsData }) {
           footer={<span className="text-xs text-muted-foreground">Issued +30d, to-invoice +40d</span>}
         />
         <KpiCard
-          title="Open to invoice"
-          value={money(overall.summary.openToInvoice, reporting)}
+          title={`Open to invoice · ${pipelineScopeLabel}`}
+          value={money(openToInvoiceValue, reporting)}
           predicted
-          footer={<span className="text-xs text-muted-foreground">Scheduled, not yet issued</span>}
+          footer={
+            <span className="text-xs text-muted-foreground">
+              Scheduled, not yet issued{pipelineAllYears ? " (all years)" : ` (${data.currentYear})`}
+            </span>
+          }
         />
         <KpiCard
-          title="Outstanding (net)"
-          value={money(overall.summary.outstandingNet, reporting)}
-          footer={<span className="text-xs text-muted-foreground">{overall.summary.invoiceCount} invoices total</span>}
+          title={`Outstanding (net) · ${pipelineScopeLabel}`}
+          value={money(outstandingValue, reporting)}
+          footer={
+            <span className="text-xs text-muted-foreground">
+              {money(openToInvoiceValue, reporting)} to invoice + {money(invoicedNotReceivedValue, reporting)} invoiced, not received
+            </span>
+          }
         />
       </div>
 
@@ -459,7 +491,7 @@ export function InvoiceInsightsClient({ data }: { data: InsightsData }) {
                 <th className="py-2 pr-3 text-right">{data.currentYear}</th>
                 <th className="py-2 pr-3 text-right">YoY</th>
                 <th className="py-2 pr-3 text-right">To invoice</th>
-                <th className="py-2 pr-3 text-right">Outstanding</th>
+                <th className="py-2 pr-3 text-right">Not received</th>
                 <th className="py-2 pr-3 text-right">≈ {reporting} (year)</th>
               </tr>
             </thead>
@@ -476,8 +508,8 @@ export function InvoiceInsightsClient({ data }: { data: InsightsData }) {
                     )}
                   </td>
                   <td className="py-2 pr-3 text-right"><Delta value={s.yoyDelta} pctValue={s.yoyDeltaPct} /></td>
-                  <td className="py-2 pr-3 text-right tabular-nums">{money(s.openToInvoice, s.currency)}</td>
-                  <td className="py-2 pr-3 text-right tabular-nums">{money(s.outstandingNet, s.currency)}</td>
+                  <td className="py-2 pr-3 text-right tabular-nums">{money(pipelineAllYears ? s.openToInvoice : s.openToInvoiceYear, s.currency)}</td>
+                  <td className="py-2 pr-3 text-right tabular-nums">{money(pipelineAllYears ? s.outstandingNet : s.outstandingNetYear, s.currency)}</td>
                   <td className="py-2 pr-3 text-right tabular-nums text-muted-foreground">{money(convert(s.invoicedYear + (includeScheduled ? s.scheduledYear : 0), s.currency), reporting)}</td>
                 </tr>
               ))}

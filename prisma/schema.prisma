@@ -73,8 +73,8 @@ enum InvoiceStatus {
   OTHER
 }
 
-// Direction of a tracked contract number relative to us: IN = contract where we
-// are the client/beneficiary, OUT = contract we issue to a customer.
+// Direction of a tracked contract number relative to us: IN = we are the
+// supplier, OUT = we are the client.
 enum ContractType {
   IN
   OUT
