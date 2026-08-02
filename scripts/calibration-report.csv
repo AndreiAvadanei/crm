@@ -392,5 +392,27 @@ accounting:BT.R.BIT 270,BLUE-MDR-C-5,BLUE-MDR-C-5,yes,32,MEDIUM-ish,amount~final
 accounting:BT.R.BIT 277,RED-PEN-S-G-1,RED-C-M-MM-16,no,38,MEDIUM-ish,amount~final data final (49d)
 accounting:BT.R.BIT 278,RED-PEN-S-G-1,BLUE-MDR-C-100,no,31,MEDIUM-ish,amount~final
 accounting:BT.BIT 1078,RED-PEN-B-E-B-15,RED-PEN-B-E-B-15,yes,46,MEDIUM-ish,amount~final data final (0d)
-accounting:BT.BIT 106,RED-PEN-S-WB-1,RED-PEN-S-WB-1,yes,51,MEDIUM-ish,amount~avans data avans (0d)
-accounting:BT.BIT 161.,RED-PEN-S-B-1,RED-PEN-S-B-1,yes,30,MEDIUM-ish,amount~final
+accounting:valuta:BT.BIT 39,RED-PEN-S-B-1,RED-PEN-S-B-1,yes,48,MEDIUM-ish,amount~final data final (0d)
+accounting:valuta:BT.BIT 63,RED-PEN-S-B-1,RED-PEN-S-B-1,yes,45,MEDIUM-ish,amount~final data final (0d)
+accounting:valuta:BT.BIT 86,RED-PEN-S-B-1,RED-PEN-S-B-1,yes,33,MEDIUM-ish,amount~final data final (334d)
+accounting:valuta:BT.BIT 87,RED-PEN-S-B-1,RED-PEN-S-B-1,yes,45,MEDIUM-ish,amount~final data final (0d)
+accounting:valuta:BT.BIT 106,RED-PEN-S-WB-1,RED-PEN-S-WB-1,yes,51,MEDIUM-ish,amount~avans data avans (0d)
+accounting:valuta:BT.BIT 119,RED-PEN-B-E-B-5,RED-PEN-B-E-B-5,yes,3,LOW-ish,same year
+accounting:valuta:BT.BIT 126,RED-PEN-S-B-1,RED-PEN-S-B-1,yes,30,MEDIUM-ish,amount~final
+accounting:valuta:BT.BIT 127,RED-PEN-B-E-B-5,RED-PEN-B-E-B-5,yes,3,LOW-ish,same year
+accounting:valuta:BT.BIT 146,RED-PEN-S-B-1,RED-PEN-S-B-1,yes,45,MEDIUM-ish,amount~final data final (0d)
+accounting:valuta:BT.BIT 161.,RED-PEN-S-B-1,RED-PEN-S-B-1,yes,30,MEDIUM-ish,amount~final
+accounting:valuta:BT.BIT 183,RED-PEN-S-B-1,RED-PEN-S-B-1,yes,30,MEDIUM-ish,amount~final
+accounting:valuta:BT.BIT 187,RED-PEN-B-E-B-50,RED-PEN-B-E-B-50,yes,45,MEDIUM-ish,amount~avans data avans (0d)
+accounting:valuta:BT.BIT 189,RED-PEN-B-E-B-50,RED-PEN-B-E-B-50,yes,45,MEDIUM-ish,amount~avans data avans (21d)
+accounting:valuta:BT.BIT 197,RED-PEN-B-E-B-5,RED-PEN-B-E-B-5,yes,45,MEDIUM-ish,amount~avans data avans (1d)
+accounting:valuta:BT.BIT 202,BLUE-IR-OC-6,BLUE-IR-OC-6,yes,16,LOW-ish,data final (0d)
+accounting:valuta:BT.BIT 204,RED-PEN-B-E-B-5,RED-PEN-B-E-B-5,yes,45,MEDIUM-ish,amount~avans data avans (28d)
+accounting:valuta:BT.BIT 216,RED-PEN-B-E-B-5,RED-PEN-B-E-B-5,yes,30,MEDIUM-ish,amount~final
+accounting:valuta:BT.BIT 217,RED-PEN-S-B-1,RED-PEN-S-B-1,yes,48,MEDIUM-ish,amount~final data final (0d)
+accounting:valuta:BT.BIT 235,BLUE-IR-OC-6,BLUE-IR-OC-6,yes,46,MEDIUM-ish,amount~final data final (1d)
+accounting:valuta:BT.BIT 253,RED-PEN-B-E-B-7,RED-PEN-B-E-B-7,yes,45,MEDIUM-ish,amount~avans data avans (0d)
+accounting:valuta:BT.BIT 258,RED-PEN-B-E-B-7,RED-PEN-B-E-B-7,yes,45,MEDIUM-ish,amount~avans data avans (15d)
+accounting:valuta:BT.R.BIT 261,RED-PEN-B-E-B-5,RED-PEN-B-E-B-5,yes,45,MEDIUM-ish,amount~total data final (0d)
+accounting:valuta:BT.R.BIT 58,RED-PEN-B-E-B-7,RED-PEN-B-E-B-7,yes,45,MEDIUM-ish,amount~final data final (0d)
+accounting:valuta:BT.R.BIT 60,RED-PEN-B-E-B-5,RED-PEN-B-E-B-15,no,45,MEDIUM-ish,amount~final data final (0d)

@@ -49,10 +49,10 @@ function hasBlockingErrors(preview: InvoiceImportPreview | null): boolean {
 function importFileNameError(fileName: string): string | null {
   if (!/\.(xls|xlsx)$/i.test(fileName)) return "Only .xls and .xlsx files are supported.";
   const lower = fileName.toLowerCase();
-  const hasRon = /\bron\b/.test(lower) || lower.includes("ron -") || lower.includes("- ron");
+  const hasRon = /\b(?:ron|lei)\b/.test(lower) || lower.includes("ron -") || lower.includes("- ron");
   const hasValuta = lower.includes("valuta");
   if (hasRon && hasValuta) return "File name must identify only one export type: RON or valuta.";
-  if (!hasRon && !hasValuta) return 'File name must include "ron" or "valuta" so the importer can validate it.';
+  if (!hasRon && !hasValuta) return 'File name must include "ron", "lei", or "valuta" so the importer can validate it.';
   return null;
 }
 
@@ -135,7 +135,12 @@ export function InvoiceImportDialog({ issuers = [] }: { issuers?: { id: string; 
   async function onApply() {
     if (!preview || hasBlockingErrors(preview)) return;
     if (!importFile) return toast({ title: "Re-run preview before applying.", variant: "error" });
-    if (issuers.length > 0 && !issuerId) return toast({ title: "Select the issuer these invoices belong to", variant: "error" });
+    if (!issuerId) {
+      return toast({
+        title: issuers.length > 0 ? "Select the issuer these invoices belong to" : "Add an issuer before importing invoices",
+        variant: "error",
+      });
+    }
     setBusy("apply");
     const fd = new FormData();
     fd.set("file", importFile);
@@ -165,7 +170,7 @@ export function InvoiceImportDialog({ issuers = [] }: { issuers?: { id: string; 
         <DialogHeader>
           <DialogTitle>Import accounting invoices</DialogTitle>
           <DialogDescription>
-            Preview `ron - facturi.xls` or `valuta - facturi.xls`, review errors and new organizations, then apply the upsert.
+            Preview a RON/lei or valuta invoice export, review errors and new organizations, then apply the upsert.
           </DialogDescription>
         </DialogHeader>
 
@@ -209,8 +214,8 @@ export function InvoiceImportDialog({ issuers = [] }: { issuers?: { id: string; 
             <span className="text-xs text-muted-foreground">All imported invoices are stamped as issued by this entity.</span>
           </div>
         ) : (
-          <p className="text-xs text-muted-foreground">
-            Tip: add issuers in Settings to tag imported invoices with the entity that issued them.
+          <p className="text-xs text-destructive">
+            Add an issuer in Settings before importing. The issuer is required for stable invoice identity.
           </p>
         )}
 
@@ -338,7 +343,11 @@ export function InvoiceImportDialog({ issuers = [] }: { issuers?: { id: string; 
           <Button variant="outline" type="button" onClick={() => setOpen(false)}>
             Cancel
           </Button>
-          <Button type="button" disabled={!preview || hasBlockingErrors(preview) || busy != null} onClick={onApply}>
+          <Button
+            type="button"
+            disabled={!preview || hasBlockingErrors(preview) || busy != null || issuers.length === 0 || !issuerId}
+            onClick={onApply}
+          >
             {busy === "apply" && <Loader2 className="h-4 w-4 animate-spin" />}
             Apply import
           </Button>

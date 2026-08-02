@@ -1,0 +1,37 @@
+{
+  "generatedAt": "2026-08-02T07:56:49.959Z",
+  "asOf": "2026-08-02",
+  "inputs": {
+    "lei": {
+      "file": "data-init/Facturi in lei cu detalii Bit.xls",
+      "sha256": "05dadba849be04c74f87773448f9447b12d1f053e1717c66ff4566d8ec2d62ed",
+      "invoices": 1383
+    },
+    "valuta": {
+      "file": "data-init/Facturi in valuta cu detalii BIT.xls",
+      "sha256": "027286a92f6823e3c83d8704e5d276779373dac5a95321d17b003821de2fed73",
+      "invoices": 307
+    },
+    "production": {
+      "file": "data-init/production-invoices-snapshot.json",
+      "sha256": "7b894261eb8c6985a5140c2d4f8f0679468f47cc56f3f505d1d2716973556ed5",
+      "invoices": 1442
+    },
+    "tracker": {
+      "file": "data-init/Internal Affairs - 2023_2024_2025_2026 - Proiecte.csv",
+      "sha256": "ce976a188ac7f95cb5d95b48ab247f182810a9f7fee18df480f6fa607b625ffa",
+      "activities": 1571
+    },
+    "partNumbers": {
+      "file": "data-init/part-numbers.xlsx",
+      "sha256": "872b8aa6c3b21a98684e0f710a27fafd0d455d9d3daef799a009e8e2df52e821",
+      "templates": 71
+    }
+  },
+  "reconciliation": {
+    "knownAccountingInvoices": 1721,
+    "currentRowsMissingInProduction": 279,
+    "withinFileReusedNumbers": 21,
+    "trackerSlots": 1733
+  }
+}

@@ -146,13 +146,13 @@ Optional enrichment: the org edit form's **ANAF** button pulls company data by C
 
 ## Step 4 — Invoices (historical)
 
-**You need:** SAGA/WinMentor **facturi** exports as `.xls/.xlsx`. **Filename must contain `ron` OR `valuta`** (not both), e.g. `ron - facturi.xls`, `valuta - facturi.xls`.
+**You need:** SAGA/WinMentor **facturi** exports as `.xls/.xlsx`. **Filename must contain `ron`/`lei` OR `valuta`** (not both), e.g. `Facturi in lei.xls`, `ron - facturi.xls`, `valuta - facturi.xls`.
 
 UI: `/invoices` -> Import -> **select issuer** -> preview -> apply.
 
-Required headers: `nr_iesire`, `denumire`, `data`, `baza_tva`, `tva`, `neachitat`, `denumire1`. Valuta files also need `cod_valuta`; RON files must not have it. Line items read from `denumire1`, `um`, `cantitate`, `pret_unitar`, `valoare`, `total1`, etc.
+Required headers: `id_iesire`, `nr_iesire`, `denumire`, `data`, `baza_tva`, `tva`, `neachitat`, `denumire1`. Valuta files also require `cod_valuta`, `val_val`, `tva_val`, `pu_val`, `val_val1`, and `tva_val1`; RON files must not have `cod_valuta`. RON line items use `pret_unitar`, `valoare`, and `total1`. Valuta line items use the original-currency fields `pu_val`, `val_val1`, and `tva_val1`; `pret_unitar`/`valoare` and `baza_tva`/`tva` are retained only in the raw source data as RON conversions.
 
-Behavior: groups rows by `nr_iesire` into one invoice + multiple `InvoiceLine`s; upserts on `externalRecordId = accounting:{nr_iesire}`; matches/creates orgs by `sourceName`; `paid` inferred when `neachitat` is zero.
+Behavior: groups rows by the source invoice ID `id_iesire` into one invoice + multiple `InvoiceLine`s; the displayed `nr_iesire` is intentionally non-unique. Upserts use `externalRecordId = accounting:{issuerId}:{ron|valuta}:{id_iesire}`; matches/creates orgs by `sourceName`; `paid` is inferred when `neachitat` is zero. Valuta totals use `val_val + tva_val` in the original currency.
 
 ---
 
@@ -271,7 +271,7 @@ DB-backed secrets (managed in Admin -> Settings, not env): `inbound_webhook_secr
 | Data | Format | UI | CLI | Webhook | Idempotency key |
 |---|---|---|---|---|---|
 | Organizations | `.xls/.xlsx` | `/organizations` | `link-organizations.ts` (CSV) | — | `Organization.sourceName` |
-| Invoices (accounting) | `.xls/.xlsx` | `/invoices` | `import-invoices.ts` (CSV) | — | `accounting:{nr_iesire}` or `Record ID` |
+| Invoices (accounting) | `.xls/.xlsx` | `/invoices` | `import-invoices.ts` (CSV) | — | `accounting:{issuerId}:{kind}:{id_iesire}` or `Record ID` |
 | Invoice PDFs | PDF base64 JSON | — | — | `invoice-files` | message dedupe + invoice match |
 | Part numbers | `.xlsx` | Settings | — | — | `PartNumber.code` |
 | Issuers | — | Settings (manual) | — | — | `Issuer.name` |

@@ -1,12 +1,12 @@
 invoiceOrg,invoiceOrgNorm,invoiceCUI,invoiceCount,nearestTrackerOrg,jaccard,note
 CYBERGHOST SRL,cyberghost,RO28003392,1,,0.00,no good match
 VOX CARRIER SRL,vox carrier,16582118,4,,0.00,no good match
-BLUETEQ BUSINESS SRL,blueteq business,34851087,3,latitude business application,0.20,no good match
+BLUETEQ BUSINESS SRL,blueteq business,34851087,5,latitude business application,0.20,no good match
 VELERA NETWORK SRL,velera network,RO31861094,1,european union agency for network and information security,0.10,no good match
 CREATIVE MEDIA DEVELOPMENT SRL,creative media development,RO29128734,30,ovidiu development,0.20,no good match
 RENANIA TRADE SRL,renania trade,RO8006912,1,,0.00,no good match
 SETY ROBOTICS SRL,sety robotics,RO14168455,1,,0.00,no good match
-SC GEORANKER SRL,georanker,RO36656945,1,,0.00,no good match
+SC GEORANKER SRL,georanker,RO36656945,2,,0.00,no good match
 MARKETIZATOR FRIENDS SRL,marketizator friends,,1,,0.00,no good match
 FAN COURIER EXPRESS SRL,fan courier express,RO13838336,3,,0.00,no good match
 SYNEVO ROMANIA SRL,synevo romania,RO6479639,1,altex romania,0.25,no good match
@@ -76,5 +76,23 @@ GOLIN HARRIS PUBLIC RELATIONS SA,golin harris public relations,RO10596424,1,,0.0
 DIRECTORATUL NATIONAL DE SECURITATE CIBERNETICA,directoratul national de securitate cibernetica,28598894,1,directoratul national de securitate cibernetica dnsc,0.80,auto-fuzzy (used)
 VAIDA LAURA-LUCIA,vaida laura-lucia,2691015125186,1,pf laura-lucia vaida,1.00,auto-fuzzy (used)
 QUANTUM CONTA S.R.L.,quantum conta,49046817,1,,0.00,no good match
-DOMAININDEX SARL,domainindex sarl,LU 25730102,1,,0.00,no good match
-MASERNET GMBH,masernet,DE326739998,1,quanto masernet,0.33,no good match
+SWISS CLASS TRADE AG,swiss class trade,CHE-110.163.822,5,,0.00,no good match
+FINDIE DEVELOPEMENT LIMITED,findie developement,09384486,1,,0.00,no good match
+BLOCKWORKS AG,blockworks,CH-150.3.476.557-8,1,,0.00,no good match
+DOMAININDEX SARL,domainindex sarl,LU 25730102,9,,0.00,no good match
+SC GERALKA PROJECT AG SRL,geralka project,103114066,2,impact edtech project consortium,0.17,no good match
+SC REPAY.ME FL GMBH SRL,repay me fl,FL-00025752160,4,,0.00,no good match
+KUENDE SWISS GMBH,kuende swiss,CHE-212.734.877,1,,0.00,no good match
+CASHFREE NV,cashfree nv,BE0663774859,1,,0.00,no good match
+PANBET CURACAO N.V.,panbet curacao n v,118257,5,,0.00,no good match
+CENTRYS INC,centrys,,4,,0.00,no good match
+HITTAPUNKTSE AB,hittapunktse ab,SE556663034801,1,,0.00,no good match
+YOUTH BOARD OF CYPRUS NATIONAL AGENCY OF ERASMUS+YOUTH PROGRAM,youth board of cyprus national agency of erasmus+youth program,,1,directoratul national de securitate cibernetica dnsc,0.09,no good match
+AURACHAIN AG,aurachain,231063316,4,,0.00,no good match
+"THE COMPANY INTEGO,INC",the company intego,65-0918822,2,the brief,0.20,no good match
+MASERNET GMBH,masernet,DE326739998,15,quanto masernet,0.33,no good match
+ENISA,enisa,EL 999083483,3,,0.00,no good match
+NORWEGIAN UNIVERSITY OF SCIENCE AND TECHNOLOGY,norwegian university of science and technology,NO974767880MVA,2,caucasus university,0.17,no good match
+ORION INC,orion,2078297,2,,0.00,no good match
+THE COMPANY FISCAL SOLUTIONS,the company fiscal solutions,103247586,2,fiscal solutions doo,0.40,review
+STILLFRONT GROUP AB PUBL,stillfront group ab publ,SE556721307801,4,stillfront group ab,0.67,review

@@ -9,7 +9,7 @@ import { isAdmin } from "@/lib/rbac";
 import { logActivity } from "@/lib/activity";
 
 type Result<T> = { ok?: boolean; error?: string } & T;
-type InvoiceWorkbookKind = "ron" | "valuta";
+export type InvoiceWorkbookKind = "ron" | "valuta";
 
 export type InvoiceImportLinePreview = {
   rowNumber: number;
@@ -25,6 +25,8 @@ export type InvoiceImportLinePreview = {
 
 export type InvoiceImportPreviewRow = {
   importKey: string;
+  sourceInvoiceId: string;
+  workbookKind: InvoiceWorkbookKind;
   number: string;
   organizationName: string;
   organizationExists: boolean;
@@ -56,16 +58,17 @@ export type InvoiceImportPreview = {
   createdOrganizationCount: number;
 };
 
-const REQUIRED_COLUMNS = ["nr_iesire", "denumire", "data", "baza_tva", "tva", "neachitat", "denumire1"];
+const REQUIRED_COLUMNS = ["id_iesire", "nr_iesire", "denumire", "data", "baza_tva", "tva", "neachitat", "denumire1"];
+const VALUTA_REQUIRED_COLUMNS = ["cod_valuta", "val_val", "tva_val", "pu_val", "val_val1", "tva_val1"];
 
 function inferWorkbookKind(fileName: string): { kind?: InvoiceWorkbookKind; error?: string } {
   const lower = fileName.toLowerCase();
-  const hasRon = /\bron\b/.test(lower) || lower.includes("ron -") || lower.includes("- ron");
+  const hasRon = /\b(?:ron|lei)\b/.test(lower) || lower.includes("ron -") || lower.includes("- ron");
   const hasValuta = lower.includes("valuta");
   if (hasRon && hasValuta) return { error: "File name must identify only one export type: RON or valuta." };
   if (hasRon) return { kind: "ron" };
   if (hasValuta) return { kind: "valuta" };
-  return { error: 'File name must include "ron" or "valuta" so the importer can validate the export type.' };
+  return { error: 'File name must include "ron", "lei", or "valuta" so the importer can validate the export type.' };
 }
 
 function clean(value: unknown): string | null {
@@ -91,6 +94,13 @@ function parseDecimal(value: string | null): string | null {
   const n = Number(s);
   if (!Number.isFinite(n)) return null;
   return n.toFixed(4).replace(/\.?0+$/, "");
+}
+
+function sumDecimals(...values: Array<string | null>): string | null {
+  const parsed = values.map(parseDecimal).filter((value): value is string => value != null);
+  if (parsed.length === 0) return null;
+  const total = parsed.reduce((sum, value) => sum.plus(value), new Prisma.Decimal(0));
+  return total.toFixed(4).replace(/\.?0+$/, "");
 }
 
 function isZero(value: string | null): boolean {
@@ -157,8 +167,12 @@ function validateHeaders(rows: Record<string, unknown>[], kind: InvoiceWorkbookK
   if (rows.length === 0) return ["The workbook has no data rows."];
   const headers = new Set(Object.keys(rows[0] ?? {}).map((h) => h.toLowerCase()));
   const errors = REQUIRED_COLUMNS.filter((column) => !headers.has(column)).map((column) => `Missing required column "${column}".`);
-  if (kind === "valuta" && !headers.has("cod_valuta")) {
-    errors.push('Valuta invoice exports must include the "cod_valuta" column.');
+  if (kind === "valuta") {
+    errors.push(
+      ...VALUTA_REQUIRED_COLUMNS.filter((column) => !headers.has(column)).map(
+        (column) => `Valuta invoice exports must include the "${column}" column.`
+      )
+    );
   }
   if (kind === "ron" && headers.has("cod_valuta")) {
     errors.push('This looks like a valuta export because it has "cod_valuta"; upload it as a valuta file.');
@@ -181,6 +195,7 @@ function parseWorkbook(buffer: Buffer, fileName: string, kind: InvoiceWorkbookKi
 
   rows.forEach((row, index) => {
     const rowNumber = index + 2;
+    const sourceInvoiceId = get(row, "id_iesire");
     const number = get(row, "nr_iesire");
     const organizationName = get(row, "denumire");
     const issueDateRaw = get(row, "data");
@@ -188,36 +203,61 @@ function parseWorkbook(buffer: Buffer, fileName: string, kind: InvoiceWorkbookKi
     const rowErrors: string[] = [];
     const rowWarnings: string[] = [];
 
+    if (!sourceInvoiceId) rowErrors.push("Missing id_iesire.");
     if (!number) rowErrors.push("Missing nr_iesire.");
     if (!organizationName) rowErrors.push("Missing denumire.");
     if (!issueDateRaw) rowErrors.push("Missing data.");
     if (issueDateRaw && !issueDate) rowErrors.push(`Invalid data "${issueDateRaw}".`);
 
-    const key = number || `row-${rowNumber}`;
+    const key = sourceInvoiceId || `row-${rowNumber}`;
     const originalValues = rawRecord(row);
+    const lineValue = parseDecimal(get(row, kind === "valuta" ? "val_val1" : "valoare"));
+    const lineVat = kind === "valuta" ? parseDecimal(get(row, "tva_val1")) : null;
     const line: InvoiceImportLinePreview = {
       rowNumber,
       serviceDescription: get(row, "denumire1"),
       textSupplement: get(row, "text_supl"),
       unitOfMeasure: normalizeUnit(get(row, "um")),
       quantity: parseDecimal(get(row, "cantitate")),
-      unitPrice: parseDecimal(get(row, "pret_unitar")),
-      value: parseDecimal(get(row, "valoare")),
-      total: parseDecimal(get(row, "total1")),
+      unitPrice: parseDecimal(get(row, kind === "valuta" ? "pu_val" : "pret_unitar")),
+      value: lineValue,
+      total: kind === "valuta" ? sumDecimals(lineValue, lineVat) : parseDecimal(get(row, "total1")),
       originalValues,
     };
     if (!line.serviceDescription) rowWarnings.push("Missing denumire1/service article.");
 
-    const totalBaseAmount = parseDecimal(get(row, "baza_tva"));
-    const vatAmount = parseDecimal(get(row, "tva"));
+    // Valuta exports contain both original-currency and converted-RON values:
+    // val_val/tva_val are the invoice amounts, while baza_tva/tva are RON.
+    const totalBaseAmount = parseDecimal(get(row, kind === "valuta" ? "val_val" : "baza_tva"));
+    const vatAmount = parseDecimal(get(row, kind === "valuta" ? "tva_val" : "tva"));
     const headerTotal = parseDecimal(get(row, "total"));
-    const totalAmount = headerTotal && !isZero(headerTotal) ? headerTotal : totalBaseAmount;
+    const totalAmount =
+      kind === "valuta"
+        ? sumDecimals(totalBaseAmount, vatAmount)
+        : headerTotal ?? sumDecimals(totalBaseAmount, vatAmount);
     const unpaidAmount = parseDecimal(get(row, "neachitat"));
     const currency = normalizeCurrency(get(row, "cod_valuta"), fallbackCurrency);
 
     const organizationExists = organizationName ? existingOrgNames.has(organizationName.toLowerCase()) : false;
     const existing = groups.get(key);
     if (existing) {
+      const consistencyChecks: Array<[string, string | null, string | null]> = [
+        ["nr_iesire", existing.number, number],
+        ["denumire", existing.organizationName, organizationName],
+        ["data", existing.issueDate, issueDate],
+        ["cod_valuta", existing.currency, currency],
+        ["base amount", existing.totalBaseAmount, totalBaseAmount],
+        ["VAT amount", existing.vatAmount, vatAmount],
+        ["total amount", existing.totalAmount, totalAmount],
+        ["neachitat", existing.unpaidAmount, unpaidAmount],
+      ];
+      for (const [field, expected, actual] of consistencyChecks) {
+        if ((expected ?? "") !== (actual ?? "")) {
+          existing.errors.push(
+            `Row ${rowNumber}: id_iesire "${key}" has inconsistent ${field} (expected "${expected ?? ""}", got "${actual ?? ""}").`
+          );
+        }
+      }
       existing.lines.push(line);
       existing.articleCount = existing.lines.length;
       existing.servicesPreview = uniqueJoin(existing.lines.map((l) => l.serviceDescription));
@@ -228,8 +268,10 @@ function parseWorkbook(buffer: Buffer, fileName: string, kind: InvoiceWorkbookKi
     }
 
     groups.set(key, {
-      importKey: `accounting:${key}`,
-      number: number ?? key,
+      importKey: `accounting:${kind}:${key}`,
+      sourceInvoiceId: sourceInvoiceId ?? "",
+      workbookKind: kind,
+      number: number ?? "",
       organizationName: organizationName ?? "",
       organizationExists,
       willCreateOrganization: !!organizationName && !organizationExists,
@@ -252,6 +294,21 @@ function parseWorkbook(buffer: Buffer, fileName: string, kind: InvoiceWorkbookKi
   });
 
   const invoices = Array.from(groups.values());
+  const invoiceIdsByNumber = new Map<string, Set<string>>();
+  for (const invoice of invoices) {
+    if (!invoice.number || !invoice.sourceInvoiceId) continue;
+    const ids = invoiceIdsByNumber.get(invoice.number) ?? new Set<string>();
+    ids.add(invoice.sourceInvoiceId);
+    invoiceIdsByNumber.set(invoice.number, ids);
+  }
+  for (const invoice of invoices) {
+    const ids = invoiceIdsByNumber.get(invoice.number);
+    if (ids && ids.size > 1) {
+      invoice.warnings.push(
+        `Invoice number "${invoice.number}" is reused by ${ids.size} source invoices; they will be imported separately by id_iesire.`
+      );
+    }
+  }
   return {
     fileName,
     sheetName,
@@ -311,22 +368,39 @@ function toJson(value: Record<string, string | null>): Prisma.InputJsonValue {
 async function upsertPreviewInvoice(
   row: InvoiceImportPreviewRow,
   userName: string,
-  issuer: { id: string; name: string } | null
+  issuer: { id: string; name: string }
 ): Promise<string> {
   const org = await getOrCreateOrganization(row.organizationName);
-  const existing =
-    (await prisma.invoice.findUnique({ where: { externalRecordId: row.importKey }, select: { id: true } })) ??
-    (await prisma.invoice.findFirst({ where: { number: row.number }, select: { id: true } }));
+  const importKey = `accounting:${issuer.id}:${row.workbookKind}:${row.sourceInvoiceId}`;
+  let existing = await prisma.invoice.findUnique({
+    where: { externalRecordId: importKey },
+    select: { id: true },
+  });
+
+  // Safely migrate the old accounting:{number} key only when it belongs to this
+  // exact source invoice. Never reconcile on invoice number alone.
+  if (!existing) {
+    const legacy = await prisma.invoice.findUnique({
+      where: { externalRecordId: `accounting:${row.number}` },
+      select: { id: true, externalRef: true, originalValues: true },
+    });
+    const originalValues =
+      legacy?.originalValues && typeof legacy.originalValues === "object" && !Array.isArray(legacy.originalValues)
+        ? (legacy.originalValues as Prisma.JsonObject)
+        : null;
+    const legacySourceId = clean(originalValues?.id_iesire) ?? clean(legacy?.externalRef);
+    if (legacy && legacySourceId === row.sourceInvoiceId) existing = { id: legacy.id };
+  }
 
   const data = {
-    externalRecordId: row.importKey,
+    externalRecordId: importKey,
     externalRef: row.originalValues.id_iesire ?? row.originalValues.id_solicit ?? null,
     number: row.number,
     status: InvoiceStatus.GENERATA,
     organizationId: org.organizationId,
     clientId: org.clientId,
     servicesDescription: row.servicesPreview,
-    amountRaw: row.originalValues.val_val ? `${row.originalValues.val_val} ${row.currency ?? ""}`.trim() : row.totalAmount,
+    amountRaw: row.totalAmount ? `${row.totalAmount} ${row.currency ?? ""}`.trim() : null,
     currency: row.currency,
     paymentTermDays: paymentTermDays(row.issueDate, row.originalValues.scadent),
     issueDate: toDate(row.issueDate),
@@ -336,36 +410,38 @@ async function upsertPreviewInvoice(
     totalBaseAmount: toNullableDecimal(row.totalBaseAmount),
     vatAmount: toNullableDecimal(row.vatAmount),
     unpaidAmount: toNullableDecimal(row.unpaidAmount),
-    totalRaw: row.originalValues.total ?? row.totalAmount,
+    totalRaw: row.totalAmount,
     invoiceInfo: row.invoiceInfo,
     originalValues: toJson(row.originalValues),
     createdByName: userName,
-    // Only stamp the issuer when one was chosen for this import, so re-imports
-    // without a selection don't wipe a previously-set issuer.
-    ...(issuer ? { issuerId: issuer.id, issuerName: issuer.name } : {}),
+    issuerId: issuer.id,
+    issuerName: issuer.name,
   };
 
-  const invoice = existing
-    ? await prisma.invoice.update({ where: { id: existing.id }, data, select: { id: true } })
-    : await prisma.invoice.create({ data, select: { id: true } });
+  const invoice = await prisma.$transaction(async (tx) => {
+    const saved = existing
+      ? await tx.invoice.update({ where: { id: existing.id }, data, select: { id: true } })
+      : await tx.invoice.create({ data, select: { id: true } });
 
-  await prisma.invoiceLine.deleteMany({ where: { invoiceId: invoice.id } });
-  if (row.lines.length > 0) {
-    await prisma.invoiceLine.createMany({
-      data: row.lines.map((line, index) => ({
-        invoiceId: invoice.id,
-        sourceLineKey: `${line.rowNumber}-${index + 1}`,
-        serviceDescription: line.serviceDescription,
-        textSupplement: line.textSupplement,
-        unitOfMeasure: line.unitOfMeasure,
-        quantity: toNullableDecimal(line.quantity),
-        unitPrice: toNullableDecimal(line.unitPrice),
-        value: toNullableDecimal(line.value),
-        total: toNullableDecimal(line.total),
-        originalValues: toJson(line.originalValues),
-      })),
-    });
-  }
+    await tx.invoiceLine.deleteMany({ where: { invoiceId: saved.id } });
+    if (row.lines.length > 0) {
+      await tx.invoiceLine.createMany({
+        data: row.lines.map((line, index) => ({
+          invoiceId: saved.id,
+          sourceLineKey: `${row.sourceInvoiceId}:${index + 1}`,
+          serviceDescription: line.serviceDescription,
+          textSupplement: line.textSupplement,
+          unitOfMeasure: line.unitOfMeasure,
+          quantity: toNullableDecimal(line.quantity),
+          unitPrice: toNullableDecimal(line.unitPrice),
+          value: toNullableDecimal(line.value),
+          total: toNullableDecimal(line.total),
+          originalValues: toJson(line.originalValues),
+        })),
+      });
+    }
+    return saved;
+  });
   return invoice.id;
 }
 
@@ -383,6 +459,7 @@ export async function applyInvoiceWorkbookImportAction(
 
   const issuerIdRaw = formData.get("issuerId");
   const issuerId = typeof issuerIdRaw === "string" && issuerIdRaw.length > 0 ? issuerIdRaw : undefined;
+  if (!issuerId) return { error: "Select the issuer before importing invoices." };
 
   // Re-parse the uploaded workbook here instead of accepting the parsed preview
   // as an argument. Server Action arguments are serialized into an array, and a
@@ -397,11 +474,8 @@ export async function applyInvoiceWorkbookImportAction(
   const blockingErrors = [...preview.errors, ...preview.invoices.flatMap((row) => row.errors)];
   if (blockingErrors.length > 0) return { error: `Fix ${blockingErrors.length} import error(s) before applying.` };
 
-  let issuer: { id: string; name: string } | null = null;
-  if (issuerId) {
-    issuer = await prisma.issuer.findUnique({ where: { id: issuerId }, select: { id: true, name: true } });
-    if (!issuer) return { error: "Selected issuer no longer exists. Re-open the dialog and pick again." };
-  }
+  const issuer = await prisma.issuer.findUnique({ where: { id: issuerId }, select: { id: true, name: true } });
+  if (!issuer) return { error: "Selected issuer no longer exists. Re-open the dialog and pick again." };
 
   let imported = 0;
   let createdOrganizations = 0;

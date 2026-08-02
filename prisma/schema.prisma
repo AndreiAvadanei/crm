@@ -438,8 +438,9 @@ model InvoiceSeries {
 
 model Invoice {
   id             String        @id @default(cuid())
-  // Source idempotency key: Airtable "Record ID" for imports, "manual-<cuid>" for
-  // records created through the UI. Unique so re-imports update in place.
+  // Source idempotency key: issuer/kind/id_iesire for accounting imports,
+  // Airtable "Record ID" for legacy imports, or "manual-<cuid>" for UI records.
+  // Unique so re-imports update the exact same source invoice in place.
   externalRecordId String      @unique
   // Original request reference from the source export ("Referinta cerere").
   externalRef    String?
