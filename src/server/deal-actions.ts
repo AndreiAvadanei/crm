@@ -9,7 +9,12 @@ import { saveCustomFieldsFromForm } from "@/lib/custom-fields";
 import { saveFile, deleteFile } from "@/lib/storage";
 import { logActivity } from "@/lib/activity";
 import { sanitizeCommentHtml, htmlToPlainText, commentHasContent } from "@/lib/sanitize";
-import { notifyNewDeal, notifyNewComment } from "@/lib/notifications";
+import {
+  notifyDealAssigned,
+  notifyNewDeal,
+  notifyNewComment,
+  notifyTaskAssigned,
+} from "@/lib/notifications";
 import { getDefaultDealOwnerId } from "@/lib/settings";
 import {
   changeList,
@@ -156,7 +161,10 @@ export async function createDealAction(formData: FormData): Promise<Result> {
     revalidatePath("/clients");
   }
   revalidatePath("/deals");
-  await notifyNewDeal(deal.id, user.id);
+  await Promise.all([
+    notifyNewDeal(deal.id, user.id, true),
+    notifyDealAssigned(deal.id, user.id),
+  ]);
   return { ok: true, id: deal.id, salesId: deal.salesId };
 }
 
@@ -251,6 +259,9 @@ export async function updateDealAction(dealId: string, formData: FormData): Prom
     entityId: dealId,
     meta: { title: finalTitle, salesId: before?.salesId, stageName: stage?.name, changes },
   });
+  if (newOwnerId && newOwnerId !== before?.ownerId) {
+    await notifyDealAssigned(dealId, user.id);
+  }
   revalidatePath("/deals");
   revalidatePath("/deals/[salesId]", "page");
   return { ok: true };
@@ -327,7 +338,7 @@ export async function createTaskAction(dealId: string, formData: FormData): Prom
     urgencyRaw && ["LOW", "MEDIUM", "HIGH", "CRITICAL"].includes(urgencyRaw)
       ? (urgencyRaw as "LOW" | "MEDIUM" | "HIGH" | "CRITICAL")
       : "MEDIUM";
-  await prisma.task.create({
+  const task = await prisma.task.create({
     data: {
       dealId,
       title,
@@ -346,6 +357,7 @@ export async function createTaskAction(dealId: string, formData: FormData): Prom
   });
   revalidatePath("/deals/[salesId]", "page");
   revalidatePath("/tasks");
+  await notifyTaskAssigned(task.id, user.id);
   return { ok: true };
 }
 

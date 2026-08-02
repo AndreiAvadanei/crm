@@ -63,6 +63,28 @@ export type ClientYearCell = {
   amount: number;
 };
 
+// Revenue for a service category (1st part-number segment, e.g. "RED") in a
+// given year/month. The client rolls these up into the category-by-year table
+// and the per-year/month/average table.
+export type CategoryMonthCell = {
+  category: string;
+  year: number;
+  month: number;
+  currency: string;
+  amount: number;
+  count: number;
+};
+
+// Revenue for a service class (2nd part-number segment, e.g. "PEN") within its
+// category, by year. Feeds the "Clasa servicii / Categorie / Clasa" table.
+export type ClassYearCell = {
+  category: string;
+  serviceClass: string;
+  year: number;
+  currency: string;
+  amount: number;
+};
+
 export type InvoiceInsights = {
   generatedAt: Date;
   currentYear: number;
@@ -77,6 +99,8 @@ export type InvoiceInsights = {
   forecast: ForecastBucket[];
   monthlyMatrix: YearMonthCell[];
   clientYearly: ClientYearCell[];
+  categoryMonthly: CategoryMonthCell[];
+  classYearly: ClassYearCell[];
 };
 
 type InvoiceInsightInput = {
@@ -91,7 +115,24 @@ type InvoiceInsightInput = {
   unpaidAmount: unknown;
   organizationId: string;
   organizationName: string;
+  partNumberCode: string | null;
 };
+
+// Label used when an invoice has no resolved part-number code, so category
+// totals still reconcile with the overall revenue figures.
+const UNCATEGORIZED = "(uncategorized)";
+
+// Split a resolved part-number code (e.g. "RED-PEN-B-I-B-30") into its service
+// category (1st segment) and class (2nd segment). Codes without a class fall
+// back to "—" so they still group under their category.
+function parseServiceCode(code: string | null): { category: string; serviceClass: string } {
+  const trimmed = code?.trim();
+  if (!trimmed) return { category: UNCATEGORIZED, serviceClass: "—" };
+  const parts = trimmed.split("-");
+  const category = parts[0]?.toUpperCase() || UNCATEGORIZED;
+  const serviceClass = parts[1]?.toUpperCase() || "—";
+  return { category, serviceClass };
+}
 
 const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -212,6 +253,7 @@ export async function getInvoiceInsights(user: User, opts: { currency?: string |
       vatAmount: true,
       unpaidAmount: true,
       organizationId: true,
+      partNumberCode: true,
       organization: { select: { legalName: true, sourceName: true } },
     },
   });
@@ -222,6 +264,7 @@ export async function getInvoiceInsights(user: User, opts: { currency?: string |
     currency: row.currency || "RON",
     organizationId: row.organizationId,
     organizationName: row.organization?.legalName || row.organization?.sourceName || "—",
+    partNumberCode: row.partNumberCode ?? null,
   }));
   const currencies = Array.from(new Set(allRows.map((row) => row.currency))).sort();
   const selectedCurrency = opts.currency && currencies.includes(opts.currency) ? opts.currency : null;
@@ -311,6 +354,8 @@ export async function getInvoiceInsights(user: User, opts: { currency?: string |
   // client can build the year×month heatmap and the client-activity matrix.
   const matrixMap = new Map<string, YearMonthCell>();
   const clientMap = new Map<string, ClientYearCell>();
+  const categoryMap = new Map<string, CategoryMonthCell>();
+  const classMap = new Map<string, ClassYearCell>();
   for (const row of allRows) {
     if (!row.issueDate) continue;
     const y = year(row.issueDate);
@@ -333,6 +378,19 @@ export async function getInvoiceInsights(user: User, opts: { currency?: string |
     };
     cCell.amount += amount;
     clientMap.set(cKey, cCell);
+
+    const { category, serviceClass } = parseServiceCode(row.partNumberCode);
+
+    const catKey = `${category}-${y}-${m}-${row.currency}`;
+    const catCell = categoryMap.get(catKey) ?? { category, year: y, month: m, currency: row.currency, amount: 0, count: 0 };
+    catCell.amount += amount;
+    catCell.count += 1;
+    categoryMap.set(catKey, catCell);
+
+    const clsKey = `${category}-${serviceClass}-${y}-${row.currency}`;
+    const clsCell = classMap.get(clsKey) ?? { category, serviceClass, year: y, currency: row.currency, amount: 0 };
+    clsCell.amount += amount;
+    classMap.set(clsKey, clsCell);
   }
 
   return {
@@ -349,5 +407,7 @@ export async function getInvoiceInsights(user: User, opts: { currency?: string |
     forecast: Array.from(forecastMap.values()).sort((a, b) => a.currency.localeCompare(b.currency) || a.label.localeCompare(b.label)).slice(0, 36),
     monthlyMatrix: Array.from(matrixMap.values()),
     clientYearly: Array.from(clientMap.values()),
+    categoryMonthly: Array.from(categoryMap.values()),
+    classYearly: Array.from(classMap.values()),
   };
 }

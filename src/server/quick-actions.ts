@@ -14,7 +14,7 @@ import { prisma } from "@/lib/db";
 import { Prisma } from "@/generated/prisma";
 import { requireUser } from "@/lib/auth/guards";
 import { isAdmin, canEditDeal, canEditClient, canLinkClientToDeal } from "@/lib/rbac";
-import { notifyDealShared } from "@/lib/notifications";
+import { notifyDealAssigned, notifyDealShared, notifyTaskAssigned } from "@/lib/notifications";
 import { sanitizeCommentHtml, commentHasContent } from "@/lib/sanitize";
 import {
   changeList,
@@ -163,6 +163,10 @@ export async function quickUpdateDealAction(dealId: string, patch: DealPatch): P
     stageName: newStageName,
     changes,
   });
+
+  if (patch.ownerId && patch.ownerId !== before?.ownerId) {
+    await notifyDealAssigned(dealId, user.id);
+  }
 
   revalidatePath("/deals");
   revalidatePath("/deals/[salesId]", "page");
@@ -406,6 +410,10 @@ export async function quickUpdateTaskAction(taskId: string, patch: TaskPatch): P
     changes,
   });
 
+  if (patch.assigneeId && patch.assigneeId !== task.assigneeId) {
+    await notifyTaskAssigned(taskId, user.id);
+  }
+
   revalidatePath("/tasks");
   revalidatePath("/deals/[salesId]", "page");
   return { ok: true };
@@ -462,6 +470,8 @@ export async function quickCreateTaskAction(
     salesId: deal?.salesId,
     title: deal?.title,
   });
+
+  await notifyTaskAssigned(created.id, user.id);
 
   revalidatePath("/tasks");
   revalidatePath("/deals/[salesId]", "page");

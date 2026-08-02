@@ -1,0 +1,51 @@
+{
+  "groups": [
+    {
+      "id": "DONA GROUP",
+      "members": [
+        "S.C. SIEPCOFAR S.A.",
+        "SANVERO HEALTHCARE S.R.L.",
+        "Societatea DONA. LOGISTICA S.A",
+        "DONA. LOGISTICA S.A.",
+        "Societatea DONA. CARGO S.A",
+        "DONA. CARGO S.R.L.",
+        "DONA MARKETING GRUP SRL"
+      ],
+      "confirmedMappings": [
+        {
+          "partNumber": "BLUE-MDR-C-725",
+          "contractId": "296",
+          "effectiveFrom": "2024-08-06",
+          "allGroupInvoices": true
+        }
+      ]
+    },
+    {
+      "id": "MENDOLA GROUP",
+      "members": [
+        "MENDOLA INVESTMENT GROUP S.A.",
+        "MENDOLA PRO SRL",
+        "LAMAJOLE S.R.L.",
+        "DECO CENTER SRL",
+        "ROSECO SRL"
+      ],
+      "confirmedMappings": [
+        {
+          "partNumber": "BLUE-MDR-C-9",
+          "effectiveFrom": "2025-08-13",
+          "allGroupInvoices": true
+        }
+      ]
+    },
+    {
+      "id": "MILLENIUM GROUP",
+      "members": [
+        "ART & CRAFT DESIGN SRL",
+        "MILLENIUM PRO DESIGN SRL",
+        "MILENIUM PRO DESIGN SRL",
+        "GRAFTEX PRODCOM SRL"
+      ],
+      "confirmedMappings": []
+    }
+  ]
+}

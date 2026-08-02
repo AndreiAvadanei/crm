@@ -1,0 +1,26 @@
+{
+  "generatedAt": "2026-08-02T08:58:51.245Z",
+  "host": "root@46.224.17.213",
+  "container": "crm-web-1",
+  "exitCode": 2,
+  "result": {
+    "mode": "dry-run",
+    "reviewFile": "data-init/invoice-part-number-review - invoice-part-number-review.csv.csv",
+    "reviewSha256": "b210886b42701b6df442d1821f09e237d8c4b6f5e293fec809815125e11410a5",
+    "backupPath": null,
+    "totalReviewRows": 1729,
+    "approvedRows": 1364,
+    "preparedRows": 1362,
+    "skippedRows": 0,
+    "newFinalClients": 172,
+    "contractsToSet": 1351,
+    "partNumbersToSet": 1362,
+    "finalClientsToSet": 1362,
+    "errors": [
+      "Part number has no production template: PHISH-P-L-YY-A-15000 (accounting:cms666eir000ws04jza2jvnbg:ron:5935)",
+      "Part number has no production template: PHISH-P-L-YY-A-15000 (accounting:cms666eir000ws04jza2jvnbg:ron:58046)"
+    ],
+    "skipped": []
+  },
+  "stderr": ""
+}

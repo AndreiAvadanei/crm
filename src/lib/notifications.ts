@@ -33,8 +33,13 @@ async function activeRecipients(ids: Iterable<string>, excludeId?: string): Prom
 /**
  * Notify on a new deal: ALL active admins + the deal owner + users the deal is
  * explicitly shared with (Share subject=DEAL). The actor (creator) is excluded.
+ * The owner can also be excluded when they receive a separate assignment email.
  */
-export async function notifyNewDeal(dealId: string, actorId: string): Promise<void> {
+export async function notifyNewDeal(
+  dealId: string,
+  actorId: string,
+  excludeOwner = false
+): Promise<void> {
   try {
     const deal = await prisma.deal.findUnique({
       where: { id: dealId },
@@ -51,7 +56,7 @@ export async function notifyNewDeal(dealId: string, actorId: string): Promise<vo
       ...admins.map((a) => a.id),
       ...(deal.ownerId ? [deal.ownerId] : []),
       ...shares.map((s) => s.userId),
-    ];
+    ].filter((id) => !excludeOwner || id !== deal.ownerId);
     const recipients = await activeRecipients(candidateIds, actorId);
     if (recipients.length === 0) return;
 
@@ -81,6 +86,50 @@ View deal: ${url}`;
     await sendEmail({ to: recipients.map((r) => r.email), subject, html, text });
   } catch (err) {
     console.error("[notifications] notifyNewDeal failed", err);
+  }
+}
+
+/**
+ * Notify the current owner that a deal has been assigned to them.
+ * The actor is excluded, so assigning a deal to yourself never sends an email.
+ */
+export async function notifyDealAssigned(dealId: string, actorId: string): Promise<void> {
+  try {
+    const deal = await prisma.deal.findUnique({
+      where: { id: dealId },
+      include: { owner: true, client: true, stage: true },
+    });
+    if (!deal?.ownerId) return;
+
+    const recipients = await activeRecipients([deal.ownerId], actorId);
+    if (recipients.length === 0) return;
+
+    const actor = await prisma.user.findUnique({ where: { id: actorId }, select: { name: true } });
+    const assignedBy = actor?.name ?? "Someone";
+    const url = `${APP_BASE_URL}/deals/${deal.salesId}`;
+    const amount = deal.amountEur != null ? `€${Number(deal.amountEur).toLocaleString("en-US")}` : "—";
+    const subject = `Deal assigned: ${deal.title} (${deal.salesId})`;
+    const bodyHtml = `
+      <p style="margin:0 0 12px;"><strong>${esc(assignedBy)}</strong> assigned a deal to you.</p>
+      <table role="presentation" cellpadding="0" cellspacing="0" style="font-size:14px;line-height:1.6;">
+        <tr><td style="color:#6b7280;padding-right:12px;">Title</td><td><strong>${esc(deal.title)}</strong></td></tr>
+        <tr><td style="color:#6b7280;padding-right:12px;">Client</td><td>${esc(deal.client?.name) || "—"}</td></tr>
+        <tr><td style="color:#6b7280;padding-right:12px;">Amount</td><td>${amount}</td></tr>
+        <tr><td style="color:#6b7280;padding-right:12px;">Stage</td><td>${esc(deal.stage?.name) || "—"}</td></tr>
+      </table>`;
+    const html = renderEmailLayout(subject, bodyHtml, url, "View deal");
+    const text = `${assignedBy} assigned a deal to you.
+
+Title: ${deal.title}
+Client: ${deal.client?.name ?? "—"}
+Amount: ${amount}
+Stage: ${deal.stage?.name ?? "—"}
+
+View deal: ${url}`;
+
+    await sendEmail({ to: recipients.map((r) => r.email), subject, html, text });
+  } catch (err) {
+    console.error("[notifications] notifyDealAssigned failed", err);
   }
 }
 
@@ -196,12 +245,18 @@ export async function notifyTaskAssigned(taskId: string, actorId: string | null)
     const recipients = await activeRecipients([task.assigneeId], actorId ?? undefined);
     if (recipients.length === 0) return;
 
+    const actor = actorId
+      ? await prisma.user.findUnique({ where: { id: actorId }, select: { name: true } })
+      : null;
+    const assignedBy = actor?.name;
     const url = `${APP_BASE_URL}/deals/${task.deal.salesId}`;
     const due = task.dueDate ? task.dueDate.toISOString().slice(0, 10) : "—";
     const priority = urgencyLabel(task.urgency as TaskUrgency);
-    const subject = `New task: ${task.title} (${task.deal.salesId})`;
+    const subject = `Task assigned: ${task.title} (${task.deal.salesId})`;
     const bodyHtml = `
-      <p style="margin:0 0 12px;">A task was assigned to you.</p>
+      <p style="margin:0 0 12px;">${
+        assignedBy ? `<strong>${esc(assignedBy)}</strong> assigned a task to you.` : "A task was assigned to you."
+      }</p>
       <table role="presentation" cellpadding="0" cellspacing="0" style="font-size:14px;line-height:1.6;">
         <tr><td style="color:#6b7280;padding-right:12px;">Task</td><td><strong>${esc(task.title)}</strong></td></tr>
         <tr><td style="color:#6b7280;padding-right:12px;">Deal</td><td>${esc(task.deal.title)} (${esc(task.deal.salesId)})</td></tr>
@@ -209,7 +264,7 @@ export async function notifyTaskAssigned(taskId: string, actorId: string | null)
         <tr><td style="color:#6b7280;padding-right:12px;">Priority</td><td>${esc(priority)}</td></tr>
       </table>`;
     const html = renderEmailLayout(subject, bodyHtml, url, "View task");
-    const text = `A task was assigned to you.
+    const text = `${assignedBy ? `${assignedBy} assigned a task to you.` : "A task was assigned to you."}
 
 Task: ${task.title}
 Deal: ${task.deal.title} (${task.deal.salesId})

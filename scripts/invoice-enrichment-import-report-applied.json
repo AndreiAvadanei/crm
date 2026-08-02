@@ -1,0 +1,26 @@
+{
+  "generatedAt": "2026-08-02T09:01:07.810Z",
+  "host": "root@46.224.17.213",
+  "container": "crm-web-1",
+  "exitCode": 0,
+  "result": {
+    "mode": "apply",
+    "reviewFile": "data-init/invoice-part-number-review - invoice-part-number-review.csv.csv",
+    "reviewSha256": "b210886b42701b6df442d1821f09e237d8c4b6f5e293fec809815125e11410a5",
+    "backupPath": "/root/crm-backups/crm-before-invoice-enrichment-20260802-085605-valid.sql.gz",
+    "annualPhishMonths": "12",
+    "totalReviewRows": 1729,
+    "approvedRows": 1364,
+    "preparedRows": 1364,
+    "skippedRows": 0,
+    "newFinalClients": 172,
+    "contractsToSet": 1352,
+    "partNumbersToSet": 1364,
+    "finalClientsToSet": 1364,
+    "errors": [],
+    "skipped": [],
+    "verificationErrors": [],
+    "importedRows": 1364
+  },
+  "stderr": ""
+}

@@ -43,13 +43,16 @@ const VALUTA_FILE = arg("valuta", "data-init/Facturi in valuta cu detalii BIT.xl
 const PRODUCTION_FILE = arg("production", "data-init/production-invoices-snapshot.json");
 const TRACKER_FILE = arg("tracker", "data-init/Internal Affairs - 2023_2024_2025_2026 - Proiecte.csv");
 const PART_NUMBER_FILE = arg("partNumbers", "data-init/part-numbers.xlsx");
+const COMPANY_GROUP_FILE = arg("companyGroups", "scripts/tracker-company-groups.json");
 const ALIAS_FILE = arg("aliases", "scripts/tracker-org-aliases.json");
 const REVIEW_OUT = arg("reviewOut", "scripts/invoice-part-number-review.csv");
 const DETAIL_OUT = arg("detailOut", "scripts/invoice-part-number-proposal.csv");
 const COMPANY_OUT = arg("companyOut", "scripts/invoice-mapping-company-summary.csv");
 const SCHEDULE_OUT = arg("scheduleOut", "scripts/invoice-schedule-reconciliation.csv");
 const FORECAST_OUT = arg("forecastOut", "scripts/upcoming-invoice-forecast.csv");
+const NOT_INVOICED_OUT = arg("notInvoicedOut", "scripts/not-invoiced-or-upcoming.csv");
 const MISSING_RON_OUT = arg("missingRonOut", "scripts/production-missing-ron-invoices.csv");
+const PRODUCTION_ONLY_OUT = arg("productionOnlyOut", "scripts/production-only-invoices.csv");
 const NUMBER_REUSE_OUT = arg("numberReuseOut", "scripts/production-number-reuse-anomalies.csv");
 const METADATA_OUT = arg("metadataOut", "scripts/invoice-mapping-run-metadata.json");
 const AS_OF_RAW = arg("as-of", new Date().toISOString().slice(0, 10));
@@ -129,6 +132,16 @@ function parseAmount(raw: string): number | null {
 function parseDate(value: string): Date | null {
   const text = clean(value);
   if (!text) return null;
+  const ymd = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (ymd) {
+    const year = Number(ymd[1]);
+    const month = Number(ymd[2]);
+    const day = Number(ymd[3]);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+      ? date
+      : null;
+  }
   const dmy = text.match(/(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})/);
   if (dmy) {
     let year = Number(dmy[3]);
@@ -274,6 +287,14 @@ function milestone(value: string): "avans" | "final" | "storno" | "" {
 // Invoice source parsing
 // ---------------------------------------------------------------------------
 type InvoiceSource = "ron" | "valuta";
+type IssuerCode = "CYE" | "BSS" | "";
+
+function normalizeIssuer(value: unknown, invoiceNumber = ""): IssuerCode {
+  const text = stripDiacritics(clean(value).toLowerCase());
+  if (/\b(cye|cyberedu|cyber edu)\b/.test(text) || /^B\.CYB\b/i.test(invoiceNumber)) return "CYE";
+  if (/\b(bss|bit sentinel)\b/.test(text) || /^BT(?:\.R)?\.BIT\b/i.test(invoiceNumber)) return "BSS";
+  return "";
+}
 
 type InvoiceLine = {
   index: number;
@@ -292,6 +313,9 @@ type Invoice = {
   orgNorm: string;
   issueDate: Date | null;
   currency: string;
+  issuer: IssuerCode;
+  existingFinalClientId: string;
+  existingFinalClientName: string;
   amountLocal: number | null;
   amountContract: number | null;
   exchangeRate: number | null;
@@ -352,6 +376,9 @@ function loadInvoices(file: string, source: InvoiceSource): Invoice[] {
         orgNorm: normalizeCompany(organization),
         issueDate: parseInvoiceDate(get("data")),
         currency: (get("cod_valuta") || "RON").toUpperCase(),
+        issuer: normalizeIssuer("", number),
+        existingFinalClientId: "",
+        existingFinalClientName: "",
         // Tracker values are service/net values; compare against baza_tva, not
         // VAT-inclusive total.
         amountLocal: base != null ? Math.abs(base) : total == null ? null : Math.abs(total),
@@ -407,6 +434,9 @@ type ProductionSnapshot = {
     organization: string;
     issueDate: string | null;
     currency: string | null;
+    issuerName: string | null;
+    finalClientId: string | null;
+    finalClientName: string | null;
     totalAmount: string | null;
     totalBaseAmount: string | null;
     servicesDescription: string | null;
@@ -428,7 +458,11 @@ function loadProductionInvoices(file: string): Invoice[] {
   for (const raw of snapshot.invoices) {
     if (!raw.number) continue;
     const original = raw.originalValues ?? {};
-    const source: InvoiceSource = (raw.currency ?? "RON").toUpperCase() === "RON" ? "ron" : "valuta";
+    const keyIdentity = raw.externalRecordId?.match(/:(ron|valuta):([^:]+)$/);
+    const source: InvoiceSource = keyIdentity?.[1] === "ron" || keyIdentity?.[1] === "valuta"
+      ? keyIdentity[1]
+      : (raw.currency ?? "RON").toUpperCase() === "RON" ? "ron" : "valuta";
+    const sourceId = clean(original.id_iesire) || keyIdentity?.[2] || raw.id;
     const exchangeRaw = parseAmount(clean(original.curs ?? original.curs_ref));
     const exchangeRate = exchangeRaw && exchangeRaw > 1 ? exchangeRaw : null;
     const serviceText = [
@@ -458,7 +492,7 @@ function loadProductionInvoices(file: string): Invoice[] {
     });
     const invoice: Invoice = {
       sourceKey: `production:${raw.id}`,
-      sourceId: raw.id,
+      sourceId,
       dbKey: raw.externalRecordId,
       source,
       number: raw.number,
@@ -466,6 +500,9 @@ function loadProductionInvoices(file: string): Invoice[] {
       orgNorm: normalizeCompany(raw.organization),
       issueDate: raw.issueDate ? new Date(`${raw.issueDate}T00:00:00.000Z`) : null,
       currency: (raw.currency ?? "RON").toUpperCase(),
+      issuer: normalizeIssuer(raw.issuerName, raw.number),
+      existingFinalClientId: clean(raw.finalClientId),
+      existingFinalClientName: clean(raw.finalClientName),
       amountLocal: base == null ? null : Math.abs(base),
       amountContract: amountContract == null ? null : Math.abs(amountContract),
       exchangeRate,
@@ -499,7 +536,8 @@ type Activity = {
   description: string;
   contractRef: string;
   contractIds: Set<string>;
-  issuer: string;
+  issuer: IssuerCode;
+  finalClient: string;
   year: string;
   total: number | null;
   avans: number | null;
@@ -530,7 +568,7 @@ function loadActivities(file: string): Activity[] {
   }) as string[][];
   const header = rows[0].map(clean);
   const requiredHeaders = [
-    "Societate", "Part Number activitate", "Descriere activitate", "Referinta CTR",
+    "CGV", "Societate", "Part Number activitate", "Descriere activitate", "Referinta CTR",
     "Total activitate", "Avans", "Final", "Data avans", "Data final",
     "Data estimata avans", "Data estimata inchidere", "Facturat avans", "Facturat final",
   ];
@@ -539,6 +577,7 @@ function loadActivities(file: string): Activity[] {
   const col = (name: string) => header.indexOf(name);
   const indices = {
     society: col("Societate"),
+    finalClient: col("CGV"),
     partNumber: col("Part Number activitate"),
     description: col("Descriere activitate"),
     contractRef: col("Referinta CTR"),
@@ -570,7 +609,8 @@ function loadActivities(file: string): Activity[] {
       description: get(row, indices.description),
       contractRef,
       contractIds: contractIds(contractRef),
-      issuer: get(row, indices.issuer),
+      issuer: normalizeIssuer(get(row, indices.issuer)),
+      finalClient: get(row, indices.finalClient),
       year: get(row, indices.year),
       total: parseAmount(get(row, indices.total)),
       avans: parseAmount(get(row, indices.avans)),
@@ -621,6 +661,43 @@ function activitySlots(activity: Activity): BillingSlot[] {
 // ---------------------------------------------------------------------------
 type OrgResolution = { trackerOrg: string | null; match: "exact" | "alias" | "fuzzy" | "none"; similarity: number };
 
+type ConfirmedGroupMapping = {
+  partNumber: string;
+  contractId?: string;
+  effectiveFrom: string;
+  allGroupInvoices?: boolean;
+};
+
+type CompanyGroup = {
+  id: string;
+  members: string[];
+  confirmedMappings: ConfirmedGroupMapping[];
+};
+
+type CompanyGroups = {
+  memberToGroup: Map<string, string>;
+  byId: Map<string, CompanyGroup>;
+};
+
+function loadCompanyGroups(file: string): CompanyGroups {
+  const input = JSON.parse(fs.readFileSync(file, "utf8")) as { groups: CompanyGroup[] };
+  const memberToGroup = new Map<string, string>();
+  const byId = new Map<string, CompanyGroup>();
+  for (const raw of input.groups) {
+    const id = normalizeCompany(raw.id);
+    if (!id) throw new Error(`${file}: company group has an empty id`);
+    const group = { ...raw, id };
+    byId.set(id, group);
+    for (const member of raw.members) {
+      const normalized = normalizeCompany(member);
+      const existing = memberToGroup.get(normalized);
+      if (existing && existing !== id) throw new Error(`${file}: ${member} belongs to both ${existing} and ${id}`);
+      memberToGroup.set(normalized, id);
+    }
+  }
+  return { memberToGroup, byId };
+}
+
 function loadAliases(): Map<string, string> {
   const aliases = new Map<string, string>();
   if (!fs.existsSync(ALIAS_FILE)) return aliases;
@@ -631,10 +708,18 @@ function loadAliases(): Map<string, string> {
   return aliases;
 }
 
-function resolveOrganization(orgNorm: string, trackerOrgs: Set<string>, aliases: Map<string, string>): OrgResolution {
+function resolveOrganization(
+  orgNorm: string,
+  trackerOrgs: Set<string>,
+  aliases: Map<string, string>,
+  companyGroups: CompanyGroups,
+): OrgResolution {
+  const group = companyGroups.memberToGroup.get(orgNorm);
+  if (group && trackerOrgs.has(group)) return { trackerOrg: group, match: "alias", similarity: 1 };
   if (trackerOrgs.has(orgNorm)) return { trackerOrg: orgNorm, match: "exact", similarity: 1 };
   const alias = aliases.get(orgNorm);
-  if (alias && trackerOrgs.has(alias)) return { trackerOrg: alias, match: "alias", similarity: 1 };
+  const groupedAlias = alias ? (companyGroups.memberToGroup.get(alias) ?? alias) : null;
+  if (groupedAlias && trackerOrgs.has(groupedAlias)) return { trackerOrg: groupedAlias, match: "alias", similarity: 1 };
   let best = "";
   let bestScore = 0;
   for (const trackerOrg of trackerOrgs) {
@@ -654,6 +739,7 @@ type RatioPoint = { date: Date; ratio: number };
 
 type CompanyProfile = {
   org: string;
+  issuer: IssuerCode;
   companyType: CompanyType;
   invoiceCount: number;
   activityCount: number;
@@ -705,7 +791,13 @@ function amountTrend(invoices: Invoice[], recurrent: boolean): CompanyProfile["a
   return "STABLE";
 }
 
-function buildProfile(org: string, invoices: Invoice[], activities: Activity[], slots: BillingSlot[]): CompanyProfile {
+function buildProfile(
+  org: string,
+  issuer: IssuerCode,
+  invoices: Invoice[],
+  activities: Activity[],
+  slots: BillingSlot[],
+): CompanyProfile {
   const pnCounts = new Map<string, number>();
   for (const activity of activities) pnCounts.set(activity.partNumber, (pnCounts.get(activity.partNumber) ?? 0) + 1);
   const dominant = [...pnCounts.entries()].sort((a, b) => b[1] - a[1])[0] ?? ["", 0];
@@ -750,6 +842,7 @@ function buildProfile(org: string, invoices: Invoice[], activities: Activity[], 
 
   return {
     org,
+    issuer,
     companyType,
     invoiceCount: invoices.length,
     activityCount: activities.length,
@@ -794,6 +887,24 @@ function scoreEdge(unit: MatchUnit, slot: BillingSlot, profile: CompanyProfile):
   const { invoice, line } = unit;
   const signals: string[] = [];
   let score = 0;
+
+  if (invoice.issuer && slot.activity.issuer && invoice.issuer !== slot.activity.issuer) {
+    return {
+      unit,
+      slot,
+      score: -200,
+      signals: [`issuer-conflict:${invoice.issuer}->${slot.activity.issuer}`],
+      dateGap: invoice.issueDate && slot.expectedDate
+        ? Math.abs(dayDiff(invoice.issueDate, slot.expectedDate) ?? 9999)
+        : null,
+      contractMatch: false,
+      amountDelta: null,
+    };
+  }
+  if (invoice.issuer && invoice.issuer === slot.activity.issuer) {
+    score += 20;
+    signals.push(`issuer:${invoice.issuer}`);
+  }
 
   if (
     (invoice.milestone === "avans" && slot.kind === "final")
@@ -944,6 +1055,7 @@ type MatchMode =
   | "SCORED"
   | "MULTI_LINE"
   | "STORNO_REFERENCE"
+  | "CONFIRMED_GROUP_RULE"
   | "SOURCE_REUSE_ANOMALY"
   | "NONE";
 
@@ -1112,6 +1224,57 @@ function applyHistoricalPatternFallback(
   });
 }
 
+function applyConfirmedGroupMapping(
+  proposal: Proposal,
+  companyGroups: CompanyGroups,
+  activities: Activity[],
+): Proposal {
+  const groupId = companyGroups.memberToGroup.get(proposal.invoice.orgNorm);
+  const group = groupId ? companyGroups.byId.get(groupId) : null;
+  if (!group) return proposal;
+  const rule = group.confirmedMappings.find((mapping) => {
+    const effectiveFrom = parseDate(mapping.effectiveFrom);
+    const contractMatches = mapping.contractId ? proposal.invoice.contractIds.has(mapping.contractId) : false;
+    return (mapping.allGroupInvoices || contractMatches)
+      && (!effectiveFrom || !proposal.invoice.issueDate || proposal.invoice.issueDate >= effectiveFrom);
+  });
+  if (!rule) return proposal;
+  const nearest = activities
+    .filter((activity) =>
+      activity.societyNorm === groupId
+      && activity.partNumber === rule.partNumber
+      && (!proposal.invoice.issuer || activity.issuer === proposal.invoice.issuer)
+      && (!rule.contractId || activity.contractIds.has(rule.contractId)))
+    .flatMap(activitySlots)
+    .filter((slot) => slot.expectedDate && proposal.invoice.issueDate)
+    .sort((a, b) =>
+      Math.abs(dayDiff(proposal.invoice.issueDate, a.expectedDate) ?? 9999)
+      - Math.abs(dayDiff(proposal.invoice.issueDate, b.expectedDate) ?? 9999))[0];
+  const dateGap = nearest?.expectedDate && proposal.invoice.issueDate
+    ? Math.abs(dayDiff(proposal.invoice.issueDate, nearest.expectedDate) ?? 9999)
+    : null;
+  return {
+    ...proposal,
+    mode: "CONFIRMED_GROUP_RULE",
+    confidence: "HIGH",
+    partNumber: rule.partNumber,
+    contractRef: nearest?.activity.contractRef ?? (rule.contractId ? `Contract ${rule.contractId}` : ""),
+    trackerRow: nearest?.activity.rowNumber ?? null,
+    expectedDate: nearest?.expectedDate ?? null,
+    dateGap,
+    score: 100,
+    candidates: [rule.partNumber],
+    lineMatches: proposal.invoice.lines.map((line) => ({
+      line: line.index,
+      service: line.service,
+      partNumber: rule.partNumber,
+      confidence: "HIGH",
+      trackerRow: nearest?.activity.rowNumber ?? null,
+    })),
+    reason: `User-confirmed company-group rule: ${group.id}${rule.contractId ? `, contract ${rule.contractId}` : ""} -> ${rule.partNumber}.`,
+  };
+}
+
 function mapStorno(invoice: Invoice, companyProposals: Proposal[], profile: CompanyProfile, org: OrgResolution): Proposal {
   const prior = companyProposals
     .filter((proposal) => proposal.invoice.milestone !== "storno" && proposal.partNumber && proposal.invoice.issueDate && invoice.issueDate)
@@ -1160,17 +1323,72 @@ function sortByCompanyDate<T extends { invoice: Invoice }>(values: T[]): T[] {
     || a.invoice.number.localeCompare(b.invoice.number));
 }
 
-function renderProposalCsv(proposals: Proposal[], review: boolean, catalogTemplates: string[]): string {
+function sourceFingerprintMatches(current: Invoice, production: Invoice): boolean {
+  if (
+    current.source !== production.source
+    || current.sourceId !== production.sourceId
+    || current.number !== production.number
+    || current.orgNorm !== production.orgNorm
+    || iso(current.issueDate) !== iso(production.issueDate)
+    || current.currency !== production.currency
+    || (current.issuer && production.issuer && current.issuer !== production.issuer)
+  ) return false;
+  const currentAmount = current.source === "valuta" ? current.amountContract : current.amountLocal;
+  const productionAmount = production.source === "valuta" ? production.amountContract : production.amountLocal;
+  if (currentAmount == null || productionAmount == null) return true;
+  const denominator = Math.max(currentAmount, productionAmount, 1);
+  return Math.abs(currentAmount - productionAmount) / denominator <= 0.01;
+}
+
+function normalizeFinalClient(value: string): string {
+  return stripDiacritics(clean(value).toLowerCase())
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function finalClientEvidence(proposal: Proposal, finalClientByTrackerRow: Map<number, string>) {
+  const candidates = [...new Set(
+    [proposal.trackerRow, ...proposal.lineMatches.map((line) => line.trackerRow)]
+      .filter((row): row is number => row != null)
+      .map((row) => finalClientByTrackerRow.get(row) ?? "")
+      .filter(Boolean),
+  )];
+  const proposed = candidates.length === 1 ? candidates[0] : "";
+  const existing = proposal.invoice.existingFinalClientName;
+  const status = candidates.length > 1
+    ? "MULTIPLE_CGV_VALUES"
+    : existing && proposed
+      ? normalizeFinalClient(existing) === normalizeFinalClient(proposed)
+        ? "EXISTING_MATCHES_CGV"
+        : "EXISTING_DIFFERS_FROM_CGV"
+      : existing
+        ? "EXISTING_ONLY"
+        : proposed
+          ? "PROPOSED_FROM_CGV"
+          : "EMPTY";
+  return { candidates, proposed, existing, final: existing || proposed, status };
+}
+
+function renderProposalCsv(
+  proposals: Proposal[],
+  review: boolean,
+  catalogTemplates: string[],
+  finalClientByTrackerRow: Map<number, string>,
+): string {
   const referenceHeaders = [
     "companyType", "companyInvoiceCount", "companyActivityCount", "companyDominantPartNumber",
     "companyDominantShare", "companyCadenceShare", "companyAmountTrend", "recommendedAction", "confidence", "matchMode",
-    "source", "sourceId", "invoiceNumber", "organization", "issueDate", "currency", "amountContract", "amountLocal",
+    "source", "sourceId", "invoiceNumber", "organization", "trackerOrganization", "organizationResolution",
+    "invoiceIssuer", "matcherIssuer",
+    "issueDate", "currency", "amountContract", "amountLocal",
     "milestone", "proposedPartNumber", "partNumberTemplate", "partNumberValues", "catalogStatus",
+    "existingFinalClient", "proposedFinalClient", "finalClientCandidates", "finalClientStatus",
     "partNumberCandidates", "trackerRow", "trackerExpectedDate",
     "dateGapDays", "proposedContractRef", "invoiceServiceText", "lineMatches", "reason",
   ];
   const headers = review
-    ? ["invoiceKey", "import", "partNumberFinal", "notes", ...referenceHeaders]
+    ? ["invoiceKey", "import", "partNumberFinal", "finalClientFinal", "notes", ...referenceHeaders]
     : ["invoiceKey", ...referenceHeaders];
   const lines = [headers.join(",")];
 
@@ -1178,6 +1396,7 @@ function renderProposalCsv(proposals: Proposal[], review: boolean, catalogTempla
     const { invoice, profile } = proposal;
     const concretePartNumber = normalizeConcretePartNumber(proposal.partNumber);
     const catalog = resolveCatalogCode(concretePartNumber, catalogTemplates);
+    const finalClient = finalClientEvidence(proposal, finalClientByTrackerRow);
     const safeCandidate = proposal.confidence === "HIGH"
       && proposal.partNumber
       && catalog.status === "UNIQUE"
@@ -1185,8 +1404,11 @@ function renderProposalCsv(proposals: Proposal[], review: boolean, catalogTempla
       && proposal.mode !== "STORNO_REFERENCE"
       && proposal.mode !== "HISTORICAL_PATTERN"
       && proposal.orgResolution.match !== "fuzzy"
+      && finalClient.status !== "MULTIPLE_CGV_VALUES"
+      && finalClient.status !== "EXISTING_DIFFERS_FROM_CGV"
       && (
-        (proposal.mode === "CONTRACT" && proposal.dateGap != null && proposal.dateGap <= 14)
+        proposal.mode === "CONFIRMED_GROUP_RULE"
+        || (proposal.mode === "CONTRACT" && proposal.dateGap != null && proposal.dateGap <= 14)
         || (proposal.mode === "RECURRENT_DATE" && proposal.dateGap != null && proposal.dateGap <= 7)
       );
     const recommendedAction = safeCandidate
@@ -1209,6 +1431,10 @@ function renderProposalCsv(proposals: Proposal[], review: boolean, catalogTempla
       invoice.sourceId,
       invoice.number,
       invoice.organization,
+      proposal.orgResolution.trackerOrg ?? "",
+      proposal.orgResolution.match,
+      invoice.issuer,
+      profile?.issuer ?? "",
       iso(invoice.issueDate),
       invoice.currency,
       invoice.amountContract?.toFixed(2) ?? "",
@@ -1218,6 +1444,10 @@ function renderProposalCsv(proposals: Proposal[], review: boolean, catalogTempla
       catalog.template,
       Object.keys(catalog.values).length ? JSON.stringify(catalog.values) : "",
       catalog.status,
+      finalClient.existing,
+      finalClient.proposed,
+      finalClient.candidates.join(" | "),
+      finalClient.status,
       proposal.candidates.join(" | "),
       proposal.trackerRow ?? "",
       iso(proposal.expectedDate),
@@ -1230,7 +1460,7 @@ function renderProposalCsv(proposals: Proposal[], review: boolean, catalogTempla
     const row = review
       // Never pre-authorize a DB write. The reviewer explicitly changes this
       // to yes after checking the candidate/company sequence.
-      ? [invoice.dbKey, "no", concretePartNumber, "", ...reference]
+      ? [invoice.dbKey, "no", concretePartNumber, finalClient.final, "", ...reference]
       : [invoice.dbKey, ...reference];
     lines.push(row.map(csv).join(","));
   }
@@ -1258,32 +1488,46 @@ function main() {
     [...sourceNumberGroups.entries()].filter(([, invoices]) => invoices.length > 1).map(([key]) => key),
   );
 
-  // Link each current source row to the actual production row by number +
-  // company + date. Rows not represented in production are real accounting
-  // invoices hidden by the externalRecordId collision and remain evidence for
-  // "already invoiced" schedule reconciliation.
-  const sourceByNumber = new Map<string, Invoice[]>();
+  // Link each current source row to its production row using the fixed
+  // source-qualified id plus a full fingerprint. The previous number-only
+  // importer could not do this safely.
+  const sourceByIdentity = new Map<string, Invoice[]>();
   for (const invoice of currentSourceInvoices) {
-    const list = sourceByNumber.get(invoice.number) ?? [];
+    const key = `${invoice.source}:${invoice.sourceId}`;
+    const list = sourceByIdentity.get(key) ?? [];
     list.push(invoice);
-    sourceByNumber.set(invoice.number, list);
+    sourceByIdentity.set(key, list);
   }
   const representedSourceKeys = new Set<string>();
+  const productionToCurrentSource = new Map<string, string>();
+  const currentSourceToProductionKey = new Map<string, string>();
   for (const production of productionInvoices) {
-    const candidates = sourceByNumber.get(production.number) ?? [];
-    const exact = candidates.find((candidate) =>
-      candidate.orgNorm === production.orgNorm
-      && iso(candidate.issueDate) === iso(production.issueDate));
-    if (exact) representedSourceKeys.add(exact.sourceKey);
+    const candidates = sourceByIdentity.get(`${production.source}:${production.sourceId}`) ?? [];
+    const exact = candidates.find((candidate) => sourceFingerprintMatches(candidate, production));
+    if (exact) {
+      representedSourceKeys.add(exact.sourceKey);
+      productionToCurrentSource.set(production.sourceKey, exact.sourceKey);
+      currentSourceToProductionKey.set(exact.sourceKey, production.dbKey);
+    }
   }
   const missingCurrentInvoices = currentSourceInvoices.filter(
     (invoice) => !representedSourceKeys.has(invoice.sourceKey),
+  );
+  const productionOnlyInvoices = productionInvoices.filter(
+    (invoice) => !productionToCurrentSource.has(invoice.sourceKey),
   );
   // Production is the target. Missing current source rows are added only as
   // accounting evidence so stale Facturat flags cannot create false forecasts.
   const allSourceInvoices = [...productionInvoices, ...missingCurrentInvoices];
 
-  const activities = loadActivities(TRACKER_FILE);
+  const companyGroups = loadCompanyGroups(COMPANY_GROUP_FILE);
+  const activities = loadActivities(TRACKER_FILE).map((activity) => ({
+    ...activity,
+    societyNorm: companyGroups.memberToGroup.get(activity.societyNorm) ?? activity.societyNorm,
+  }));
+  const finalClientByTrackerRow = new Map(
+    activities.map((activity) => [activity.rowNumber, activity.finalClient]),
+  );
   const activitiesByOrg = new Map<string, Activity[]>();
   for (const activity of activities) {
     const list = activitiesByOrg.get(activity.societyNorm) ?? [];
@@ -1295,29 +1539,32 @@ function main() {
 
   const resolutionBySource = new Map<string, OrgResolution>();
   for (const invoice of allSourceInvoices) {
-    resolutionBySource.set(invoice.sourceKey, resolveOrganization(invoice.orgNorm, trackerOrgs, aliases));
+    resolutionBySource.set(invoice.sourceKey, resolveOrganization(invoice.orgNorm, trackerOrgs, aliases, companyGroups));
   }
 
-  // Group the complete accounting history. Matching all 1,669 source invoices
-  // prevents overwritten RON invoices from being mislabeled "not invoiced".
-  const sourceByTrackerOrg = new Map<string, Invoice[]>();
+  // Group the complete accounting history. This also retains production-only
+  // historical invoices that are absent from the newest source exports.
+  const sourceByTrackerOrg = new Map<string, { trackerOrg: string; issuer: IssuerCode; invoices: Invoice[] }>();
   for (const invoice of allSourceInvoices) {
     const trackerOrg = resolutionBySource.get(invoice.sourceKey)?.trackerOrg;
     if (!trackerOrg) continue;
-    const list = sourceByTrackerOrg.get(trackerOrg) ?? [];
-    list.push(invoice);
-    sourceByTrackerOrg.set(trackerOrg, list);
+    const key = `${trackerOrg}\u0000${invoice.issuer || "UNKNOWN"}`;
+    const group = sourceByTrackerOrg.get(key) ?? { trackerOrg, issuer: invoice.issuer, invoices: [] };
+    group.invoices.push(invoice);
+    sourceByTrackerOrg.set(key, group);
   }
 
   const profiles = new Map<string, CompanyProfile>();
   const sourceProposals = new Map<string, Proposal>();
   const matchedSlots = new Map<string, MatchUnit>();
 
-  for (const [trackerOrg, invoices] of sourceByTrackerOrg) {
-    const orgActivities = activitiesByOrg.get(trackerOrg) ?? [];
+  for (const [profileKey, matcherGroup] of sourceByTrackerOrg) {
+    const { trackerOrg, issuer, invoices } = matcherGroup;
+    const orgActivities = (activitiesByOrg.get(trackerOrg) ?? [])
+      .filter((activity) => !issuer || activity.issuer === issuer);
     const slots = orgActivities.flatMap(activitySlots);
-    const profile = buildProfile(trackerOrg, invoices, orgActivities, slots);
-    profiles.set(trackerOrg, profile);
+    const profile = buildProfile(trackerOrg, issuer, invoices, orgActivities, slots);
+    profiles.set(profileKey, profile);
     const { unitMatches, slotMatches } = matchCompany(invoices, orgActivities, profile);
     for (const [slotId, unit] of slotMatches) matchedSlots.set(slotId, unit);
 
@@ -1327,14 +1574,16 @@ function main() {
       initialNonStorno.push(proposal);
     }
     const orgResolution = resolutionBySource.get(invoices[0].sourceKey)!;
-    const nonStorno = applyHistoricalPatternFallback(initialNonStorno, profile, orgResolution);
+    const nonStorno = applyHistoricalPatternFallback(initialNonStorno, profile, orgResolution)
+      .map((proposal) => applyConfirmedGroupMapping(proposal, companyGroups, activities));
     for (const proposal of nonStorno) {
       sourceProposals.set(proposal.invoice.sourceKey, proposal);
     }
     for (const invoice of invoices.filter((value) => value.milestone === "storno")) {
+      const stornoProposal = mapStorno(invoice, nonStorno, profile, resolutionBySource.get(invoice.sourceKey)!);
       sourceProposals.set(
         invoice.sourceKey,
-        mapStorno(invoice, nonStorno, profile, resolutionBySource.get(invoice.sourceKey)!),
+        applyConfirmedGroupMapping(stornoProposal, companyGroups, activities),
       );
     }
   }
@@ -1363,7 +1612,11 @@ function main() {
   // Production review contains exactly the current DB snapshot rows.
   const productionProposals = productionInvoices.map((invoice) => {
     const proposal = sourceProposals.get(invoice.sourceKey)!;
-    if (!reusedSourceNumbers.has(`${invoice.source}:${invoice.number}`)) return proposal;
+    const reusedNumber = reusedSourceNumbers.has(`${invoice.source}:${invoice.number}`);
+    const structuredIdentity = /:(ron|valuta):[^:]+$/.test(invoice.dbKey);
+    // Reused display numbers are safe after the importer keys by import batch,
+    // source and id_iesire. Quarantine only unresolved legacy records.
+    if (!reusedNumber || productionToCurrentSource.has(invoice.sourceKey) || structuredIdentity) return proposal;
     return {
       ...proposal,
       mode: "SOURCE_REUSE_ANOMALY" as MatchMode,
@@ -1376,8 +1629,8 @@ function main() {
       reason: "Quarantined: nr_iesire is reused by multiple organization/date/id_iesire headers inside the same source workbook; production lines may be contaminated.",
     };
   });
-  fs.writeFileSync(REVIEW_OUT, renderProposalCsv(productionProposals, true, catalogTemplates), "utf8");
-  fs.writeFileSync(DETAIL_OUT, renderProposalCsv(productionProposals, false, catalogTemplates), "utf8");
+  fs.writeFileSync(REVIEW_OUT, renderProposalCsv(productionProposals, true, catalogTemplates, finalClientByTrackerRow), "utf8");
+  fs.writeFileSync(DETAIL_OUT, renderProposalCsv(productionProposals, false, catalogTemplates, finalClientByTrackerRow), "utf8");
 
   // Current accounting-export rows absent from production need DB repair before
   // they can be enriched. Keep them separate from the review import.
@@ -1398,8 +1651,26 @@ function main() {
   ];
   fs.writeFileSync(MISSING_RON_OUT, missingRows.join("\n"), "utf8");
 
+  const productionOnlyRows = [
+    ["invoiceKey", "source", "sourceId", "invoiceNumber", "organization", "issueDate", "currency", "amountLocal", "proposedPartNumber", "confidence", "reason"].join(","),
+    ...sortByCompanyDate(productionOnlyInvoices.map((invoice) => sourceProposals.get(invoice.sourceKey)!)).map((proposal) => [
+      proposal.invoice.dbKey,
+      proposal.invoice.source,
+      proposal.invoice.sourceId,
+      proposal.invoice.number,
+      proposal.invoice.organization,
+      iso(proposal.invoice.issueDate),
+      proposal.invoice.currency,
+      proposal.invoice.amountLocal?.toFixed(2) ?? "",
+      proposal.partNumber,
+      proposal.confidence,
+      "Present in production but absent from the two newest accounting exports.",
+    ].map(csv).join(",")),
+  ];
+  fs.writeFileSync(PRODUCTION_ONLY_OUT, productionOnlyRows.join("\n"), "utf8");
+
   const reuseRows = [
-    ["source", "invoiceNumber", "sourceId", "organization", "issueDate", "currency", "serviceText"].join(","),
+    ["source", "invoiceNumber", "sourceId", "organization", "issueDate", "currency", "productionIdentityStatus", "productionInvoiceKey", "serviceText"].join(","),
     ...[...sourceNumberGroups.entries()]
       .filter(([key, invoices]) => reusedSourceNumbers.has(key) && invoices.length > 1)
       .flatMap(([, invoices]) => invoices)
@@ -1411,6 +1682,8 @@ function main() {
         invoice.organization,
         iso(invoice.issueDate),
         invoice.currency,
+        currentSourceToProductionKey.has(invoice.sourceKey) ? "RESOLVED_DISTINCT_IDENTITY" : "NOT_FOUND",
+        currentSourceToProductionKey.get(invoice.sourceKey) ?? "",
         invoice.serviceText.replace(/\s+/g, " "),
       ].map(csv).join(",")),
   ];
@@ -1418,9 +1691,10 @@ function main() {
 
   // Company summary, sorted by company.
   const companyRows = [
-    ["organization", "companyType", "invoiceCountAllAccounting", "trackerActivityCount", "dominantPartNumber", "dominantShare", "monthlyCadenceShare", "modalServiceShare", "amountTrend", "learnedRatioPoints"].join(","),
-    ...[...profiles.values()].sort((a, b) => a.org.localeCompare(b.org)).map((profile) => [
+    ["organization", "issuer", "companyType", "invoiceCountAllAccounting", "trackerActivityCount", "dominantPartNumber", "dominantShare", "monthlyCadenceShare", "modalServiceShare", "amountTrend", "learnedRatioPoints"].join(","),
+    ...[...profiles.values()].sort((a, b) => a.org.localeCompare(b.org) || a.issuer.localeCompare(b.issuer)).map((profile) => [
       profile.org,
+      profile.issuer,
       profile.companyType,
       profile.invoiceCount,
       profile.activityCount,
@@ -1469,6 +1743,9 @@ function main() {
         matched?.invoice.source ?? "",
         iso(matched?.invoice.issueDate ?? null),
         matched ? String(Math.abs(dayDiff(matched.invoice.issueDate, slot.expectedDate) ?? 0)) : "",
+        activity.issuer,
+        matched?.invoice.issuer ?? "",
+        activity.finalClient,
       ]);
     }
   }
@@ -1477,10 +1754,49 @@ function main() {
     "organization", "partNumber", "trackerRow", "milestone", "expectedDate", "dateSource",
     "trackerAmount", "contractRef", "accountingStatus", "trackerFacturatFlag", "flagDiscrepancy",
     "matchedInvoiceNumber", "matchedInvoiceSource", "matchedInvoiceDate", "dateGapDays",
+    "trackerIssuer", "matchedInvoiceIssuer", "proposedFinalClient",
   ];
   fs.writeFileSync(SCHEDULE_OUT, [scheduleHeader, ...scheduleRows].map((row) => row.map(csv).join(",")).join("\n"), "utf8");
   const forecast = scheduleRows.filter((row) => row[8] !== "INVOICED_ACCOUNTING");
   fs.writeFileSync(FORECAST_OUT, [scheduleHeader, ...forecast].map((row) => row.map(csv).join(",")).join("\n"), "utf8");
+
+  const notInvoicedOrUpcoming = scheduleRows
+    .filter((row) => row[9].trim().toLowerCase() === "nu" || row[8] === "UPCOMING")
+    .map((row) => {
+      const status = row[8];
+      const category = status === "INVOICED_ACCOUNTING"
+        ? "TRACKER_NO_BUT_INVOICE_FOUND"
+        : status === "UPCOMING"
+          ? "UPCOMING_EXPECTED"
+          : status === "PAST_UNMATCHED"
+            ? "PAST_DUE_NOT_FOUND"
+            : "NO_DATE_NOT_FOUND";
+      const nextStep = category === "TRACKER_NO_BUT_INVOICE_FOUND"
+        ? "Update tracker: accounting invoice already exists"
+        : category === "UPCOMING_EXPECTED"
+          ? "Keep planned; review near expected date"
+          : category === "PAST_DUE_NOT_FOUND"
+            ? "Confirm overdue/cancelled; invoice or reschedule"
+            : "Add expected date or cancel";
+      return ["", "", category, nextStep, ...row];
+    })
+    .sort((a, b) => {
+      const priority: Record<string, number> = {
+        PAST_DUE_NOT_FOUND: 0,
+        NO_DATE_NOT_FOUND: 1,
+        UPCOMING_EXPECTED: 2,
+        TRACKER_NO_BUT_INVOICE_FOUND: 3,
+      };
+      return (priority[a[2]] ?? 9) - (priority[b[2]] ?? 9)
+        || normalizeCompany(a[4]).localeCompare(normalizeCompany(b[4]))
+        || a[8].localeCompare(b[8]);
+    });
+  const notInvoicedHeader = ["decision", "notes", "reviewCategory", "recommendedNextStep", ...scheduleHeader];
+  fs.writeFileSync(
+    NOT_INVOICED_OUT,
+    [notInvoicedHeader, ...notInvoicedOrUpcoming].map((row) => row.map(csv).join(",")).join("\n"),
+    "utf8",
+  );
 
   fs.writeFileSync(METADATA_OUT, `${JSON.stringify({
     generatedAt: new Date().toISOString(),
@@ -1489,13 +1805,25 @@ function main() {
       lei: { file: LEI_FILE, sha256: sha256(LEI_FILE), invoices: leiInvoices.length },
       valuta: { file: VALUTA_FILE, sha256: sha256(VALUTA_FILE), invoices: valutaInvoices.length },
       production: { file: PRODUCTION_FILE, sha256: sha256(PRODUCTION_FILE), invoices: productionInvoices.length },
-      tracker: { file: TRACKER_FILE, sha256: sha256(TRACKER_FILE), activities: activities.length },
+      tracker: {
+        file: TRACKER_FILE,
+        sha256: sha256(TRACKER_FILE),
+        activities: activities.length,
+        finalClients: new Set(activities.map((activity) => activity.finalClient).filter(Boolean)).size,
+      },
       partNumbers: { file: PART_NUMBER_FILE, sha256: sha256(PART_NUMBER_FILE), templates: catalogTemplates.length },
+      companyGroups: { file: COMPANY_GROUP_FILE, sha256: sha256(COMPANY_GROUP_FILE), groups: companyGroups.byId.size },
     },
     reconciliation: {
       knownAccountingInvoices: allSourceInvoices.length,
+      currentRowsMatchedToProduction: representedSourceKeys.size,
       currentRowsMissingInProduction: missingCurrentInvoices.length,
+      productionRowsAbsentFromCurrentExports: productionOnlyInvoices.length,
       withinFileReusedNumbers: reusedSourceNumbers.size,
+      withinFileReusedNumberRowsResolved: [...sourceNumberGroups.entries()]
+        .filter(([key]) => reusedSourceNumbers.has(key))
+        .flatMap(([, invoices]) => invoices)
+        .filter((invoice) => currentSourceToProductionKey.has(invoice.sourceKey)).length,
       trackerSlots: scheduleRows.length,
     },
   }, null, 2)}\n`, "utf8");
@@ -1514,16 +1842,22 @@ function main() {
     && proposal.partNumber
     && resolveCatalogCode(proposal.partNumber, catalogTemplates).status === "UNIQUE"
     && proposal.orgResolution.match !== "fuzzy"
+    && !["MULTIPLE_CGV_VALUES", "EXISTING_DIFFERS_FROM_CGV"].includes(
+      finalClientEvidence(proposal, finalClientByTrackerRow).status,
+    )
     && (
-      (proposal.mode === "CONTRACT" && proposal.dateGap != null && proposal.dateGap <= 14)
+      proposal.mode === "CONFIRMED_GROUP_RULE"
+      || (proposal.mode === "CONTRACT" && proposal.dateGap != null && proposal.dateGap <= 14)
       || (proposal.mode === "RECURRENT_DATE" && proposal.dateGap != null && proposal.dateGap <= 7)
     )).length;
 
   console.log(`Newest accounting exports:  ${currentSourceInvoices.length} source invoices (RON ${leiInvoices.length} + valuta ${valutaInvoices.length})`);
   console.log(`Production snapshot rows:    ${productionInvoices.length}`);
   console.log(`Known accounting evidence:   ${allSourceInvoices.length} (production + missing current rows)`);
+  console.log(`Current rows matched in DB:  ${representedSourceKeys.size}`);
   console.log(`Current rows missing in DB:  ${missingCurrentInvoices.length}`);
-  console.log(`Within-file reused numbers:  ${reusedSourceNumbers.size} (quarantined)`);
+  console.log(`Production-only rows:        ${productionOnlyInvoices.length}`);
+  console.log(`Within-file reused numbers:  ${reusedSourceNumbers.size} (source-qualified identities checked)`);
   console.log(`Tracker activities / slots: ${activities.length} / ${activities.flatMap(activitySlots).length}`);
   console.log(`As-of date:                 ${AS_OF_RAW}`);
   console.log("\nProduction confidence:");
@@ -1547,7 +1881,9 @@ function main() {
   console.log(`Wrote ${COMPANY_OUT}`);
   console.log(`Wrote ${SCHEDULE_OUT}`);
   console.log(`Wrote ${FORECAST_OUT}`);
+  console.log(`Wrote ${NOT_INVOICED_OUT}`);
   console.log(`Wrote ${MISSING_RON_OUT}`);
+  console.log(`Wrote ${PRODUCTION_ONLY_OUT}`);
   console.log(`Wrote ${NUMBER_REUSE_OUT}`);
   console.log(`Wrote ${METADATA_OUT}`);
 }

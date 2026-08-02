@@ -17,6 +17,8 @@ import {
 import { TrendingDown, TrendingUp } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type {
+  CategoryMonthCell,
+  ClassYearCell,
   ClientYearCell,
   CurrencySummary,
   ForecastBucket,
@@ -40,6 +42,8 @@ export type InsightsData = {
   forecast: ForecastBucket[];
   monthlyMatrix: YearMonthCell[];
   clientYearly: ClientYearCell[];
+  categoryMonthly: CategoryMonthCell[];
+  classYearly: ClassYearCell[];
 };
 
 // Approximate value of one unit of each currency expressed in EUR. Used as the
@@ -374,6 +378,12 @@ export function InvoiceInsightsClient({ data }: { data: InsightsData }) {
       </div>
 
       <HistoryHeatmap matrix={data.monthlyMatrix} convert={convert} reporting={reporting} currentYear={data.currentYear} />
+
+      <CategoryYearMatrix categoryMonthly={data.categoryMonthly} convert={convert} reporting={reporting} currentYear={data.currentYear} />
+
+      <ClassYearMatrix classYearly={data.classYearly} convert={convert} reporting={reporting} currentYear={data.currentYear} />
+
+      <CategoryMonthlyMatrix categoryMonthly={data.categoryMonthly} convert={convert} reporting={reporting} currentYear={data.currentYear} />
 
       <ClientActivityMatrix clients={data.clientYearly} convert={convert} reporting={reporting} />
 
@@ -878,6 +888,333 @@ function ClientActivityMatrix({
             : `Showing top ${LIMIT} of ${sorted.length} clients by the selected metric.`) +
             (inactivityFilter ? ` Filtered to ${INACTIVITY_BUCKETS.find((b) => b.id === inactivityFilter)?.label ?? ""} inactive.` : "")}
         </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+// Distinct tint per service category, reused across the category tables so a
+// category is visually recognisable at a glance.
+const CATEGORY_COLORS: Record<string, string> = {
+  RED: "bg-red-500/15 text-red-700 dark:text-red-300",
+  RD: "bg-rose-500/15 text-rose-700 dark:text-rose-300",
+  PHISH: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
+  ORO: "bg-yellow-500/15 text-yellow-700 dark:text-yellow-300",
+  KS: "bg-lime-500/15 text-lime-700 dark:text-lime-300",
+  CYBEREDU: "bg-sky-500/15 text-sky-700 dark:text-sky-300",
+  CONSULTANCY: "bg-violet-500/15 text-violet-700 dark:text-violet-300",
+  BLUE: "bg-blue-500/15 text-blue-700 dark:text-blue-300",
+};
+
+function categoryClass(category: string): string {
+  return CATEGORY_COLORS[category] ?? "bg-muted text-foreground";
+}
+
+// Table 1 — service category (RED, PHISH, …) totals by year, with per-year and
+// per-category totals. Rows are ordered by lifetime revenue, biggest first.
+function CategoryYearMatrix({
+  categoryMonthly,
+  convert,
+  reporting,
+  currentYear,
+}: {
+  categoryMonthly: CategoryMonthCell[];
+  convert: Convert;
+  reporting: string;
+  currentYear: number;
+}) {
+  const years = React.useMemo(
+    () => Array.from(new Set(categoryMonthly.map((c) => c.year))).sort((a, b) => a - b),
+    [categoryMonthly]
+  );
+
+  const { rows, totalsByYear, grandTotal, maxCell } = React.useMemo(() => {
+    const map = new Map<string, Map<number, number>>();
+    for (const c of categoryMonthly) {
+      const byYear = map.get(c.category) ?? new Map<number, number>();
+      byYear.set(c.year, (byYear.get(c.year) ?? 0) + convert(c.amount, c.currency));
+      map.set(c.category, byYear);
+    }
+    const rows = Array.from(map.entries())
+      .map(([category, byYear]) => ({
+        category,
+        byYear,
+        total: Array.from(byYear.values()).reduce((a, b) => a + b, 0),
+      }))
+      .sort((a, b) => b.total - a.total);
+    const totalsByYear = new Map<number, number>();
+    let grandTotal = 0;
+    let maxCell = 0;
+    for (const r of rows) {
+      for (const y of years) {
+        const v = r.byYear.get(y) ?? 0;
+        totalsByYear.set(y, (totalsByYear.get(y) ?? 0) + v);
+        grandTotal += v;
+        if (v > maxCell) maxCell = v;
+      }
+    }
+    return { rows, totalsByYear, grandTotal, maxCell };
+  }, [categoryMonthly, convert, years]);
+
+  const cell = (v: number) => (v > 0 ? compactMoney(v, reporting) : "·");
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Revenue by category × year</CardTitle>
+      </CardHeader>
+      <CardContent className="overflow-x-auto">
+        <table className="w-full border-separate border-spacing-0 text-right text-xs tabular-nums">
+          <thead>
+            <tr className="text-muted-foreground">
+              <th className="sticky left-0 z-10 bg-card px-2 py-2 text-left">Category</th>
+              {years.map((y) => (
+                <th key={y} className={`px-2 py-2 font-medium ${y === currentYear ? "text-foreground" : ""}`}>{y}</th>
+              ))}
+              <th className="px-2 py-2 font-semibold">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.category}>
+                <td className="sticky left-0 z-10 bg-card px-2 py-1.5 text-left">
+                  <span className={`inline-flex rounded px-1.5 py-0.5 text-[11px] font-medium ${categoryClass(r.category)}`}>{r.category}</span>
+                </td>
+                {years.map((y) => {
+                  const v = r.byYear.get(y) ?? 0;
+                  return (
+                    <td key={y} className="rounded px-2 py-1.5" style={heatStyle(v, maxCell)}>{cell(v)}</td>
+                  );
+                })}
+                <td className="px-2 py-1.5 font-semibold">{compactMoney(r.total, reporting)}</td>
+              </tr>
+            ))}
+            {rows.length === 0 && (
+              <tr><td colSpan={years.length + 2} className="py-8 text-center text-muted-foreground">No categorized invoices yet.</td></tr>
+            )}
+          </tbody>
+          {rows.length > 0 && (
+            <tfoot>
+              <tr className="border-t font-semibold">
+                <td className="sticky left-0 z-10 bg-card px-2 py-2 text-left">Total</td>
+                {years.map((y) => (
+                  <td key={y} className="px-2 py-2">{compactMoney(totalsByYear.get(y) ?? 0, reporting)}</td>
+                ))}
+                <td className="px-2 py-2">{compactMoney(grandTotal, reporting)}</td>
+              </tr>
+            </tfoot>
+          )}
+        </table>
+      </CardContent>
+    </Card>
+  );
+}
+
+// Table 2 — service class breakdown (Clasa servicii / Categorie / Clasa) by
+// year. Rows are grouped by category (biggest category first) and, within a
+// category, by class revenue.
+function ClassYearMatrix({
+  classYearly,
+  convert,
+  reporting,
+  currentYear,
+}: {
+  classYearly: ClassYearCell[];
+  convert: Convert;
+  reporting: string;
+  currentYear: number;
+}) {
+  const years = React.useMemo(
+    () => Array.from(new Set(classYearly.map((c) => c.year))).sort((a, b) => a - b),
+    [classYearly]
+  );
+
+  const { rows, maxCell } = React.useMemo(() => {
+    const map = new Map<string, { category: string; serviceClass: string; byYear: Map<number, number>; total: number }>();
+    const categoryTotals = new Map<string, number>();
+    for (const c of classYearly) {
+      const key = `${c.category}||${c.serviceClass}`;
+      const amount = convert(c.amount, c.currency);
+      const row = map.get(key) ?? { category: c.category, serviceClass: c.serviceClass, byYear: new Map<number, number>(), total: 0 };
+      row.byYear.set(c.year, (row.byYear.get(c.year) ?? 0) + amount);
+      row.total += amount;
+      map.set(key, row);
+      categoryTotals.set(c.category, (categoryTotals.get(c.category) ?? 0) + amount);
+    }
+    let maxCell = 0;
+    for (const r of map.values()) for (const v of r.byYear.values()) if (v > maxCell) maxCell = v;
+    const rows = Array.from(map.values()).sort((a, b) => {
+      const catDelta = (categoryTotals.get(b.category) ?? 0) - (categoryTotals.get(a.category) ?? 0);
+      if (catDelta !== 0) return catDelta;
+      if (a.category !== b.category) return a.category.localeCompare(b.category);
+      return b.total - a.total;
+    });
+    return { rows, maxCell };
+  }, [classYearly, convert]);
+
+  const cell = (v: number) => (v > 0 ? compactMoney(v, reporting) : "·");
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Revenue by service class × year</CardTitle>
+      </CardHeader>
+      <CardContent className="overflow-x-auto">
+        <table className="w-full border-separate border-spacing-0 text-right text-xs tabular-nums">
+          <thead>
+            <tr className="text-muted-foreground">
+              <th className="sticky left-0 z-10 bg-card px-2 py-2 text-left">Clasa servicii</th>
+              <th className="px-2 py-2 text-left font-medium">Categorie</th>
+              <th className="px-2 py-2 text-left font-medium">Clasa</th>
+              {years.map((y) => (
+                <th key={y} className={`px-2 py-2 font-medium ${y === currentYear ? "text-foreground" : ""}`}>{y}</th>
+              ))}
+              <th className="px-2 py-2 font-semibold">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={`${r.category}-${r.serviceClass}`}>
+                <td className="sticky left-0 z-10 bg-card px-2 py-1.5 text-left font-medium">{r.category}-{r.serviceClass}</td>
+                <td className="px-2 py-1.5 text-left">
+                  <span className={`inline-flex rounded px-1.5 py-0.5 text-[11px] font-medium ${categoryClass(r.category)}`}>{r.category}</span>
+                </td>
+                <td className="px-2 py-1.5 text-left text-muted-foreground">{r.serviceClass}</td>
+                {years.map((y) => {
+                  const v = r.byYear.get(y) ?? 0;
+                  return (
+                    <td key={y} className="rounded px-2 py-1.5" style={heatStyle(v, maxCell)}>{cell(v)}</td>
+                  );
+                })}
+                <td className="px-2 py-1.5 font-semibold">{compactMoney(r.total, reporting)}</td>
+              </tr>
+            ))}
+            {rows.length === 0 && (
+              <tr><td colSpan={years.length + 4} className="py-8 text-center text-muted-foreground">No categorized invoices yet.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </CardContent>
+    </Card>
+  );
+}
+
+// Table 3 — for each category, revenue per year broken into months plus the
+// yearly total and monthly average (Medie = total ÷ months with revenue).
+function CategoryMonthlyMatrix({
+  categoryMonthly,
+  convert,
+  reporting,
+  currentYear,
+}: {
+  categoryMonthly: CategoryMonthCell[];
+  convert: Convert;
+  reporting: string;
+  currentYear: number;
+}) {
+  const [selected, setSelected] = React.useState<string>("all");
+
+  // category -> year -> month[12] (converted)
+  const byCategory = React.useMemo(() => {
+    const map = new Map<string, Map<number, number[]>>();
+    for (const c of categoryMonthly) {
+      const byYear = map.get(c.category) ?? new Map<number, number[]>();
+      const arr = byYear.get(c.year) ?? Array(12).fill(0);
+      arr[c.month - 1] += convert(c.amount, c.currency);
+      byYear.set(c.year, arr);
+      map.set(c.category, byYear);
+    }
+    return map;
+  }, [categoryMonthly, convert]);
+
+  const categories = React.useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const [cat, byYear] of byCategory) {
+      let t = 0;
+      for (const arr of byYear.values()) for (const v of arr) t += v;
+      totals.set(cat, t);
+    }
+    return Array.from(totals.entries()).sort((a, b) => b[1] - a[1]).map(([cat]) => cat);
+  }, [byCategory]);
+
+  const shown = selected === "all" ? categories : categories.filter((c) => c === selected);
+
+  const maxCell = React.useMemo(() => {
+    let max = 0;
+    for (const cat of shown) {
+      const byYear = byCategory.get(cat);
+      if (!byYear) continue;
+      for (const arr of byYear.values()) for (const v of arr) if (v > max) max = v;
+    }
+    return max;
+  }, [byCategory, shown]);
+
+  const cell = (v: number) => (v > 0 ? compactMoney(v, reporting) : "·");
+
+  return (
+    <Card>
+      <CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <CardTitle>Category by year & month (with monthly average)</CardTitle>
+        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          Category
+          <select
+            value={selected}
+            onChange={(e) => setSelected(e.target.value)}
+            className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+          >
+            <option value="all">All ({categories.length})</option>
+            {categories.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+        </label>
+      </CardHeader>
+      <CardContent className="overflow-x-auto">
+        <table className="w-full border-separate border-spacing-0 text-right text-xs tabular-nums">
+          <thead>
+            <tr className="text-muted-foreground">
+              <th className="sticky left-0 z-10 bg-card px-2 py-2 text-left">Category</th>
+              <th className="px-2 py-2 text-left font-medium">Year</th>
+              {MONTH_LABELS.map((m) => (
+                <th key={m} className="px-2 py-2 font-medium">{m}</th>
+              ))}
+              <th className="px-2 py-2 font-semibold">Total</th>
+              <th className="px-2 py-2 font-semibold">Avg</th>
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((cat) => {
+              const byYear = byCategory.get(cat);
+              if (!byYear) return null;
+              const catYears = Array.from(byYear.keys()).sort((a, b) => a - b);
+              return catYears.map((y, idx) => {
+                const months = byYear.get(y)!;
+                const total = months.reduce((a, b) => a + b, 0);
+                const activeMonths = months.filter((v) => v > 0).length;
+                const avg = activeMonths > 0 ? total / activeMonths : null;
+                return (
+                  <tr key={`${cat}-${y}`} className={y === currentYear ? "font-medium" : ""}>
+                    {idx === 0 && (
+                      <td rowSpan={catYears.length} className="sticky left-0 z-10 bg-card px-2 py-1.5 align-top text-left">
+                        <span className={`inline-flex rounded px-1.5 py-0.5 text-[11px] font-medium ${categoryClass(cat)}`}>{cat}</span>
+                      </td>
+                    )}
+                    <td className="px-2 py-1.5 text-left font-medium">{y}</td>
+                    {months.map((v, i) => (
+                      <td key={i} className="rounded px-2 py-1.5" style={heatStyle(v, maxCell)}>{cell(v)}</td>
+                    ))}
+                    <td className="px-2 py-1.5 font-semibold">{compactMoney(total, reporting)}</td>
+                    <td className="px-2 py-1.5 text-muted-foreground">{avg == null ? "—" : compactMoney(avg, reporting)}</td>
+                  </tr>
+                );
+              });
+            })}
+            {shown.length === 0 && (
+              <tr><td colSpan={16} className="py-8 text-center text-muted-foreground">No categorized invoices yet.</td></tr>
+            )}
+          </tbody>
+        </table>
+        <p className="mt-3 text-xs text-muted-foreground">Avg (Medie) = yearly total ÷ number of months with revenue.</p>
       </CardContent>
     </Card>
   );

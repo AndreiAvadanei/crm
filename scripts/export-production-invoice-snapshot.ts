@@ -27,11 +27,16 @@ SELECT JSON_OBJECT(
   'organization', o.sourceName,
   'issueDate', DATE_FORMAT(i.issueDate, '%Y-%m-%d'),
   'currency', i.currency,
+  'issuerName', i.issuerName,
+  'finalClientId', i.finalClientId,
+  'finalClientName', fc.name,
   'totalAmount', CAST(i.totalAmount AS CHAR),
   'totalBaseAmount', CAST(i.totalBaseAmount AS CHAR),
   'servicesDescription', i.servicesDescription,
   'contractRef', i.contractRef,
+  'partNumberId', i.partNumberId,
   'partNumberCode', i.partNumberCode,
+  'partNumberValues', i.partNumberValues,
   'originalValues', i.originalValues,
   'lineId', l.id,
   'lineServiceDescription', l.serviceDescription,
@@ -42,6 +47,7 @@ SELECT JSON_OBJECT(
 )
 FROM Invoice i
 JOIN Organization o ON o.id = i.organizationId
+LEFT JOIN FinalClient fc ON fc.id = i.finalClientId
 LEFT JOIN InvoiceLine l ON l.invoiceId = i.id
 ORDER BY o.sourceName, i.issueDate, i.number, l.id;
 `.trim();
@@ -50,7 +56,7 @@ const encoded = Buffer.from(sql, "utf8").toString("base64");
 const remote = [
   `printf %s '${encoded}'`,
   "base64 -d",
-  "docker exec -i crm-mysql-1 sh -lc 'mysql -u\"$MYSQL_USER\" -p\"$MYSQL_PASSWORD\" \"$MYSQL_DATABASE\" --batch --raw --skip-column-names'",
+  "docker exec -i crm-mysql-1 sh -lc 'mysql --default-character-set=utf8mb4 -u\"$MYSQL_USER\" -p\"$MYSQL_PASSWORD\" \"$MYSQL_DATABASE\" --batch --raw --skip-column-names'",
 ].join(" | ");
 
 const result = spawnSync("ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", HOST, remote], {
@@ -77,11 +83,16 @@ const byInvoice = new Map<string, {
   organization: unknown;
   issueDate: unknown;
   currency: unknown;
+  issuerName: unknown;
+  finalClientId: unknown;
+  finalClientName: unknown;
   totalAmount: unknown;
   totalBaseAmount: unknown;
   servicesDescription: unknown;
   contractRef: unknown;
+  partNumberId: unknown;
   partNumberCode: unknown;
+  partNumberValues: unknown;
   originalValues: unknown;
   lines: Array<{
     id: unknown;
@@ -105,11 +116,16 @@ for (const row of rows) {
       organization: row.organization,
       issueDate: row.issueDate,
       currency: row.currency,
+      issuerName: row.issuerName,
+      finalClientId: row.finalClientId,
+      finalClientName: row.finalClientName,
       totalAmount: row.totalAmount,
       totalBaseAmount: row.totalBaseAmount,
       servicesDescription: row.servicesDescription,
       contractRef: row.contractRef,
+      partNumberId: row.partNumberId,
       partNumberCode: row.partNumberCode,
+      partNumberValues: row.partNumberValues,
       originalValues: row.originalValues,
       lines: [],
     };

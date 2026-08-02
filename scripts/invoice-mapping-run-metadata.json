@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-02T07:56:49.959Z",
+  "generatedAt": "2026-08-02T09:05:32.573Z",
   "asOf": "2026-08-02",
   "inputs": {
     "lei": {
@@ -14,24 +14,33 @@
     },
     "production": {
       "file": "data-init/production-invoices-snapshot.json",
-      "sha256": "7b894261eb8c6985a5140c2d4f8f0679468f47cc56f3f505d1d2716973556ed5",
-      "invoices": 1442
+      "sha256": "ab1893c8b4aee1707f33b9b9ee4d48d3350129d25955487afcf746026068eb13",
+      "invoices": 1729
     },
     "tracker": {
       "file": "data-init/Internal Affairs - 2023_2024_2025_2026 - Proiecte.csv",
       "sha256": "ce976a188ac7f95cb5d95b48ab247f182810a9f7fee18df480f6fa607b625ffa",
-      "activities": 1571
+      "activities": 1571,
+      "finalClients": 189
     },
     "partNumbers": {
       "file": "data-init/part-numbers.xlsx",
       "sha256": "872b8aa6c3b21a98684e0f710a27fafd0d455d9d3daef799a009e8e2df52e821",
       "templates": 71
+    },
+    "companyGroups": {
+      "file": "scripts/tracker-company-groups.json",
+      "sha256": "0d3223e705c114074d6bda535667af30bd6d2512f2fe9ce9618cbaf358110814",
+      "groups": 3
     }
   },
   "reconciliation": {
-    "knownAccountingInvoices": 1721,
-    "currentRowsMissingInProduction": 279,
+    "knownAccountingInvoices": 1729,
+    "currentRowsMatchedToProduction": 1690,
+    "currentRowsMissingInProduction": 0,
+    "productionRowsAbsentFromCurrentExports": 39,
     "withinFileReusedNumbers": 21,
+    "withinFileReusedNumberRowsResolved": 42,
     "trackerSlots": 1733
   }
 }
