@@ -64,6 +64,25 @@ function formatMoney(value: number, currency: string): string {
   }
 }
 
+/** Shift a UTC date by N months, keeping the day-of-month (clamped to month length). Mirrors the server. */
+function addMonthsKeepDayUTC(base: Date, months: number): Date {
+  const d = new Date(base);
+  const day = d.getUTCDate();
+  d.setUTCDate(1);
+  d.setUTCMonth(d.getUTCMonth() + months);
+  const daysInMonth = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  d.setUTCDate(Math.min(day, daysInMonth));
+  return d;
+}
+
+const fmtScheduleDate = (d: Date): string =>
+  d.toLocaleDateString("en-US", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+
+const clampInt = (n: number, min: number, max: number): number => {
+  if (!Number.isFinite(n)) return min;
+  return Math.min(max, Math.max(min, Math.round(n)));
+};
+
 export type InvoiceData = {
   id: string;
   organizationId: string;
@@ -87,6 +106,8 @@ export type InvoiceData = {
   contractRef: string | null;
   fileUrls: string | null;
   paid: boolean;
+  /** Flags a not-yet-emitted invoice that needs manual monthly personalization. */
+  needsPersonalization: boolean;
   /** Locked VAT % for this invoice; omitted on create (defaults from org). */
   vatPercent?: number;
   lines?: InvoiceLineData[];
@@ -100,6 +121,10 @@ type InvoiceLineData = {
   unitPrice: string;
   value: string;
   total: string;
+  /** When true, this article uses its own part number instead of the invoice default. */
+  partNumberOverride: boolean;
+  partNumberId: string;
+  partNumberValues: Record<string, string>;
 };
 
 type DealOption = { salesId: string; title: string };
@@ -112,6 +137,9 @@ const blankLine = (): InvoiceLineData => ({
   unitPrice: "",
   value: "",
   total: "",
+  partNumberOverride: false,
+  partNumberId: "",
+  partNumberValues: {},
 });
 
 /** Validation errors for a single article (empty object = valid). */
@@ -131,6 +159,9 @@ function lineErrors(line: InvoiceLineData): { serviceDescription?: string; unitO
 export function InvoiceFormDialog({
   trigger,
   invoice,
+  duplicate = false,
+  autoOpen = false,
+  onClose,
   organizations,
   deals,
   issuers,
@@ -140,8 +171,14 @@ export function InvoiceFormDialog({
   defaultSalesId,
   defaultOrganizationId,
 }: {
-  trigger: React.ReactNode;
+  trigger?: React.ReactNode;
   invoice?: InvoiceData;
+  /** Seed the form from `invoice` but create a brand-new record instead of editing it. */
+  duplicate?: boolean;
+  /** Open immediately on mount (used by the duplicate flow, which has no trigger). */
+  autoOpen?: boolean;
+  /** Called whenever the dialog closes; lets a parent unmount/reset it. */
+  onClose?: () => void;
   /** Billable organizations; `defaultVatPercent` is the country-based default. */
   organizations: { id: string; name: string; defaultVatPercent?: number; configuredTvaPercent?: number }[];
   deals: DealOption[];
@@ -161,8 +198,16 @@ export function InvoiceFormDialog({
   const router = useRouter();
   const { toast } = useToast();
   const formRef = React.useRef<HTMLFormElement>(null);
-  const [open, setOpen] = React.useState(false);
+  const [open, setOpen] = React.useState(autoOpen);
   const [busy, setBusy] = React.useState(false);
+
+  const handleOpenChange = React.useCallback(
+    (next: boolean) => {
+      setOpen(next);
+      if (!next) onClose?.();
+    },
+    [onClose]
+  );
   const [organizationId, setOrganizationId] = React.useState(invoice?.organizationId ?? defaultOrganizationId ?? "");
   const [salesId, setSalesId] = React.useState(invoice?.salesId ?? defaultSalesId ?? "");
   const [finalClientId, setFinalClientId] = React.useState(invoice?.finalClientId ?? "");
@@ -171,9 +216,15 @@ export function InvoiceFormDialog({
     invoice?.finalClientId && invoice.finalClientName ? [{ id: invoice.finalClientId, name: invoice.finalClientName }] : []
   );
   const [paid, setPaid] = React.useState(invoice?.paid ?? false);
+  const [needsPersonalization, setNeedsPersonalization] = React.useState(invoice?.needsPersonalization ?? false);
+  const [expectedInvoiceDate, setExpectedInvoiceDate] = React.useState(invoice?.expectedInvoiceDate ?? "");
   const [recurrent, setRecurrent] = React.useState(false);
+  const [repetitions, setRepetitions] = React.useState(12);
+  const [intervalMonths, setIntervalMonths] = React.useState(1);
   const [currency, setCurrency] = React.useState(invoice?.currency ?? DEFAULT_INVOICE_CURRENCY);
-  const [lines, setLines] = React.useState<InvoiceLineData[]>(invoice?.lines?.length ? invoice.lines : [blankLine()]);
+  const [lines, setLines] = React.useState<InvoiceLineData[]>(
+    invoice?.lines?.length ? invoice.lines.map((l) => ({ ...blankLine(), ...l })) : [blankLine()]
+  );
   const [partNumberId, setPartNumberId] = React.useState(invoice?.partNumberId ?? "");
   const [partNumberValues, setPartNumberValues] = React.useState<Record<string, string>>(invoice?.partNumberValues ?? {});
   const [relatedInvoiceId, setRelatedInvoiceId] = React.useState(invoice?.relatedInvoiceId ?? "");
@@ -181,7 +232,8 @@ export function InvoiceFormDialog({
   const [inheritsPartNumber, setInheritsPartNumber] = React.useState(!!invoice?.relatedInvoiceId);
   const [selfIssued, setSelfIssued] = React.useState(invoice?.selfIssued ?? false);
   const [seriesId, setSeriesId] = React.useState(invoice?.seriesId ?? "");
-  const editing = !!invoice;
+  // Duplicating seeds the form from an existing invoice but still creates a new record.
+  const editing = !!invoice && !duplicate;
 
   const defaultVatPercent = React.useMemo(() => {
     const org = organizations.find((o) => o.id === organizationId);
@@ -198,13 +250,25 @@ export function InvoiceFormDialog({
   );
 
   React.useEffect(() => {
-    if (editing) return;
+    // Keep the copied VAT % when duplicating; only auto-derive for a blank new invoice.
+    if (editing || duplicate) return;
     setVatPercent(defaultVatPercent);
-  }, [defaultVatPercent, editing]);
+  }, [defaultVatPercent, editing, duplicate]);
 
   const invoiceTotals = React.useMemo(() => computeInvoiceTotals(lines, vatPercent), [lines, vatPercent]);
   const lineErrorList = React.useMemo(() => lines.map(lineErrors), [lines]);
   const hasLineErrors = lineErrorList.some((e) => Object.keys(e).length > 0);
+
+  // Preview of the dates each recurrent copy would target (mirrors createInvoiceAction).
+  const recurrenceSchedule = React.useMemo(() => {
+    if (!expectedInvoiceDate) return null;
+    const base = new Date(`${expectedInvoiceDate}T00:00:00.000Z`);
+    if (Number.isNaN(base.getTime())) return null;
+    const reps = clampInt(repetitions, 1, 60);
+    const step = clampInt(intervalMonths, 1, 24);
+    const dates = Array.from({ length: reps }, (_, k) => addMonthsKeepDayUTC(base, k * step));
+    return { dates, first: dates[0], last: dates[dates.length - 1], count: dates.length };
+  }, [expectedInvoiceDate, repetitions, intervalMonths]);
 
   React.useEffect(() => {
     setLines((prev) =>
@@ -256,8 +320,16 @@ export function InvoiceFormDialog({
     fd.set("salesId", salesId);
     fd.set("finalClientId", finalClientId);
     fd.set("paid", paid ? "1" : "");
+    fd.set("needsPersonalization", needsPersonalization ? "1" : "");
     fd.set("recurrent", !editing && recurrent ? "1" : "");
-    fd.set("linesJson", JSON.stringify(lines));
+    // Only send a per-line part number when the article explicitly overrides the
+    // invoice default; otherwise the line inherits it at export time.
+    const linesPayload = lines.map((line) => ({
+      ...line,
+      partNumberId: line.partNumberOverride ? line.partNumberId : "",
+      partNumberValues: line.partNumberOverride ? line.partNumberValues : {},
+    }));
+    fd.set("linesJson", JSON.stringify(linesPayload));
     const selectedIssuer = issuerOptions.find((o) => o.value === issuerValue);
     fd.set("issuerId", usingConfigured ? issuerValue : "");
     fd.set("issuerName", selectedIssuer?.name ?? "");
@@ -273,7 +345,7 @@ export function InvoiceFormDialog({
     setBusy(false);
     if (res.error) return toast({ title: res.error, variant: "error" });
     toast({ title: editing ? "Invoice updated" : "Invoice created", variant: "success" });
-    setOpen(false);
+    handleOpenChange(false);
     router.refresh();
   }
 
@@ -300,13 +372,30 @@ export function InvoiceFormDialog({
     setLines((prev) => (prev.length > 1 ? prev.filter((_, i) => i !== index) : [blankLine()]));
   }
 
+  function setLinePartNumber(
+    index: number,
+    patch: Partial<Pick<InvoiceLineData, "partNumberOverride" | "partNumberId" | "partNumberValues">>
+  ) {
+    setLines((prev) => prev.map((line, i) => (i === index ? { ...line, ...patch } : line)));
+  }
+
+  // Resolved invoice-default code, shown as the inherited value on each article.
+  const defaultPartNumberCode = React.useMemo(() => {
+    const p = partNumbers.find((x) => x.id === partNumberId);
+    return p ? resolvePartNumberCode(p.code, partNumberValues) : "";
+  }, [partNumbers, partNumberId, partNumberValues]);
+
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogOpenTrigger trigger={trigger} onOpen={() => setOpen(true)} />
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      {trigger != null && <DialogOpenTrigger trigger={trigger} onOpen={() => setOpen(true)} />}
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{editing ? "Edit invoice" : "New invoice"}</DialogTitle>
-          <DialogDescription>Bill a deal to one of the client&apos;s legal entities.</DialogDescription>
+          <DialogTitle>{editing ? "Edit invoice" : duplicate ? "New invoice (copy)" : "New invoice"}</DialogTitle>
+          <DialogDescription>
+            {duplicate
+              ? "Copied from an existing invoice. Review the settings and articles, then create the new invoice."
+              : "Bill a deal to one of the client's legal entities."}
+          </DialogDescription>
         </DialogHeader>
         <form ref={formRef} onSubmit={onSubmit} className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
@@ -375,7 +464,8 @@ export function InvoiceFormDialog({
                 id="expectedInvoiceDate"
                 name="expectedInvoiceDate"
                 type="date"
-                defaultValue={invoice?.expectedInvoiceDate ?? ""}
+                value={expectedInvoiceDate}
+                onChange={(e) => setExpectedInvoiceDate(e.target.value)}
               />
             </div>
             <div className="space-y-2">
@@ -474,7 +564,10 @@ export function InvoiceFormDialog({
               </p>
             </div>
             <div className="space-y-2 sm:col-span-2">
-              <Label>Part number</Label>
+              <Label>Default part number</Label>
+              <p className="text-xs text-muted-foreground">
+                Applies to every article unless an article overrides it below.
+              </p>
               {partNumbers.length > 0 ? (
                 <PartNumberPicker
                   partNumbers={partNumbers}
@@ -584,6 +677,43 @@ export function InvoiceFormDialog({
                           className="bg-muted/50 text-muted-foreground"
                         />
                       </div>
+                      <div className="space-y-2 border-t pt-3 sm:col-span-6">
+                        <div className="flex items-start gap-2">
+                          <Checkbox
+                            id={`line-pn-${index}`}
+                            checked={line.partNumberOverride}
+                            disabled={partNumbers.length === 0}
+                            onCheckedChange={(v) => setLinePartNumber(index, { partNumberOverride: v === true })}
+                          />
+                          <div className="space-y-0.5">
+                            <Label htmlFor={`line-pn-${index}`} className="cursor-pointer">
+                              Different part number for this article
+                            </Label>
+                            {!line.partNumberOverride && (
+                              <p className="text-xs text-muted-foreground">
+                                {defaultPartNumberCode ? (
+                                  <>Uses the invoice default: <span className="font-mono">{defaultPartNumberCode}</span></>
+                                ) : (
+                                  "Uses the invoice default part number."
+                                )}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        {line.partNumberOverride &&
+                          (partNumbers.length > 0 ? (
+                            <PartNumberPicker
+                              partNumbers={partNumbers}
+                              value={line.partNumberId}
+                              values={line.partNumberValues}
+                              onChange={({ id, values }) => setLinePartNumber(index, { partNumberId: id, partNumberValues: values })}
+                            />
+                          ) : (
+                            <p className="text-xs text-muted-foreground">
+                              No part numbers configured yet. Add them in Settings → Part numbers.
+                            </p>
+                          ))}
+                      </div>
                     </div>
                   </div>
                   );
@@ -637,6 +767,22 @@ export function InvoiceFormDialog({
               <Checkbox id="paid" checked={paid} onCheckedChange={(v) => setPaid(v === true)} />
               <Label htmlFor="paid" className="cursor-pointer">Paid</Label>
             </div>
+            <div className="space-y-2 rounded-md border border-violet-500/40 bg-violet-500/5 p-3 sm:col-span-2">
+              <div className="flex items-start gap-2">
+                <Checkbox
+                  id="needsPersonalization"
+                  checked={needsPersonalization}
+                  onCheckedChange={(v) => setNeedsPersonalization(v === true)}
+                />
+                <div className="space-y-1">
+                  <Label htmlFor="needsPersonalization" className="cursor-pointer">Needs monthly personalization</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Mark not-yet-emitted invoices that must be reviewed and adjusted each month before issuing.
+                    Flagged invoices are highlighted in the &ldquo;To invoice&rdquo; list so they aren&apos;t issued as-is.
+                  </p>
+                </div>
+              </div>
+            </div>
           </div>
 
           {!editing && (
@@ -650,17 +796,74 @@ export function InvoiceFormDialog({
                   <div className="grid gap-4 sm:grid-cols-2">
                     <div className="space-y-2">
                       <Label htmlFor="repetitions">Repetitions</Label>
-                      <Input id="repetitions" name="repetitions" type="number" min={1} max={60} defaultValue={12} />
+                      <Input
+                        id="repetitions"
+                        name="repetitions"
+                        type="number"
+                        min={1}
+                        max={60}
+                        value={repetitions}
+                        onChange={(e) => setRepetitions(e.target.value === "" ? 1 : Number(e.target.value))}
+                      />
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="intervalMonths">Every (months)</Label>
-                      <Input id="intervalMonths" name="intervalMonths" type="number" min={1} max={24} defaultValue={1} />
+                      <Input
+                        id="intervalMonths"
+                        name="intervalMonths"
+                        type="number"
+                        min={1}
+                        max={24}
+                        value={intervalMonths}
+                        onChange={(e) => setIntervalMonths(e.target.value === "" ? 1 : Number(e.target.value))}
+                      />
                     </div>
                   </div>
                   <p className="text-xs text-muted-foreground">
                     Creates one invoice per repetition, keeping the same day-of-month and shifting the expected
                     invoice date. Requires an expected invoice date.
                   </p>
+                  {recurrenceSchedule ? (
+                    <div className="space-y-2 rounded-md border bg-background/60 p-3 text-sm">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-medium">
+                          {recurrenceSchedule.count} {recurrenceSchedule.count === 1 ? "invoice" : "invoices"} will be created
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          every {clampInt(intervalMonths, 1, 24)} {clampInt(intervalMonths, 1, 24) === 1 ? "month" : "months"}
+                        </span>
+                      </div>
+                      <div className="grid gap-1 sm:grid-cols-2">
+                        <div className="flex items-baseline justify-between gap-2 rounded bg-muted/40 px-2 py-1">
+                          <span className="text-muted-foreground">Start</span>
+                          <span className="font-medium tabular-nums">{fmtScheduleDate(recurrenceSchedule.first)}</span>
+                        </div>
+                        <div className="flex items-baseline justify-between gap-2 rounded bg-muted/40 px-2 py-1">
+                          <span className="text-muted-foreground">Last</span>
+                          <span className="font-medium tabular-nums">{fmtScheduleDate(recurrenceSchedule.last)}</span>
+                        </div>
+                      </div>
+                      {recurrenceSchedule.count > 2 && (
+                        <details className="text-xs text-muted-foreground">
+                          <summary className="cursor-pointer select-none hover:text-foreground">
+                            Show all {recurrenceSchedule.count} dates
+                          </summary>
+                          <ol className="mt-2 grid gap-1 sm:grid-cols-2">
+                            {recurrenceSchedule.dates.map((d, idx) => (
+                              <li key={idx} className="flex items-baseline gap-2 tabular-nums">
+                                <span className="w-6 shrink-0 text-right text-muted-foreground">{idx + 1}.</span>
+                                <span>{fmtScheduleDate(d)}</span>
+                              </li>
+                            ))}
+                          </ol>
+                        </details>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+                      Set an expected invoice date above to preview the schedule. Without it, only a single invoice is created.
+                    </p>
+                  )}
                 </>
               )}
             </div>

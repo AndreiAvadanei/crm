@@ -131,7 +131,8 @@ function buildLines(
   contractCurrency: string
 ): SagaLine[] {
   const converted = rate !== 1;
-  const codArticol = invoice.partNumberCode || undefined;
+  // Invoice-level part number is the default; each line may override it.
+  const defaultCodArticol = invoice.partNumberCode || undefined;
 
   const source = invoice.lines.length
     ? invoice.lines.map((line) => {
@@ -145,6 +146,7 @@ function buildLines(
           unitPrice,
           value,
           textSupplement: line.textSupplement || "",
+          codArticol: line.partNumberCode || defaultCodArticol,
         };
       })
     : [
@@ -155,6 +157,7 @@ function buildLines(
           unitPrice: dec(invoice.totalAmount) || parseAmountText(invoice.amountRaw),
           value: dec(invoice.totalAmount) || parseAmountText(invoice.amountRaw),
           textSupplement: "",
+          codArticol: defaultCodArticol,
         },
       ];
 
@@ -169,7 +172,7 @@ function buildLines(
     }
     return {
       descriere: line.descriere,
-      codArticolClient: codArticol,
+      codArticolClient: line.codArticol,
       um: line.um,
       cantitate: line.quantity,
       pret,

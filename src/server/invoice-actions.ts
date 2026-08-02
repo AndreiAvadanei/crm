@@ -12,6 +12,8 @@ import { buildInvoiceSagaXml } from "@/lib/invoice-saga";
 import { assignInvoiceNumber } from "@/lib/invoice-numbering";
 import { computeInvoiceTotals, lineNetValue, round2, type LineAmountInput } from "@/lib/invoice-totals";
 import { resolveOrgVatPercent, resolveInvoiceVatPercent, parseVatPercentInput, inferVatPercentFromAmounts } from "@/lib/invoice-vat";
+import { resolvePartNumberCode } from "@/lib/part-numbers";
+import type { InvoiceData } from "@/components/invoices/invoice-form-dialog";
 import {
   DEFAULT_INVOICE_CURRENCY,
   DEFAULT_INVOICE_ISSUER,
@@ -30,6 +32,10 @@ type InvoiceLineInput = {
   unitPrice?: string | null;
   value?: string | null;
   total?: string | null;
+  // Per-line part number override. When absent, the line inherits the invoice's
+  // default part number at export time.
+  partNumberId?: string | null;
+  partNumberValues?: Record<string, string> | null;
 };
 
 const BILLING_EMAIL_FROM = "billing@bit-sentinel.com";
@@ -137,6 +143,14 @@ function parseDecimal(v: string | null | undefined): string | null {
   return n.toFixed(4).replace(/\.?0+$/, "");
 }
 
+/** Coerce arbitrary JSON into a flat string map (placeholder -> value), or null. */
+function asStringMap(value: unknown): Record<string, string> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = v == null ? "" : String(v);
+  return Object.keys(out).length ? out : null;
+}
+
 function parseInvoiceLines(formData: FormData): InvoiceLineInput[] {
   const raw = str(formData, "linesJson");
   if (!raw) return [];
@@ -152,13 +166,50 @@ function parseInvoiceLines(formData: FormData): InvoiceLineInput[] {
         unitPrice: parseDecimal(line.unitPrice),
         value: parseDecimal(line.value),
         total: parseDecimal(line.total),
+        partNumberId: (typeof line.partNumberId === "string" && line.partNumberId.trim()) || null,
+        partNumberValues: asStringMap(line.partNumberValues),
       }))
       .filter((line) =>
-        Boolean(line.serviceDescription || line.textSupplement || line.unitOfMeasure || line.quantity || line.unitPrice || line.value || line.total)
+        Boolean(
+          line.serviceDescription ||
+            line.textSupplement ||
+            line.unitOfMeasure ||
+            line.quantity ||
+            line.unitPrice ||
+            line.value ||
+            line.total ||
+            line.partNumberId
+        )
       );
   } catch {
     return [];
   }
+}
+
+/**
+ * Resolve per-line part numbers against the catalog: keep only valid ids and
+ * compute the resolved code by filling the template placeholders with the line's
+ * values. Returns a per-index map so line writes stay aligned with the input.
+ */
+async function resolveLinePartNumbers(
+  lines: InvoiceLineInput[]
+): Promise<Array<{ partNumberId: string | null; partNumberCode: string | null; partNumberValues: Prisma.InputJsonValue | typeof Prisma.DbNull }>> {
+  const ids = Array.from(new Set(lines.map((l) => l.partNumberId).filter((id): id is string => !!id)));
+  const templates = ids.length
+    ? await prisma.partNumber.findMany({ where: { id: { in: ids } }, select: { id: true, code: true } })
+    : [];
+  const codeById = new Map(templates.map((t) => [t.id, t.code]));
+  return lines.map((line) => {
+    const id = line.partNumberId && codeById.has(line.partNumberId) ? line.partNumberId : null;
+    if (!id) return { partNumberId: null, partNumberCode: null, partNumberValues: Prisma.DbNull };
+    const values = line.partNumberValues ?? null;
+    const resolved = resolvePartNumberCode(codeById.get(id)!, values);
+    return {
+      partNumberId: id,
+      partNumberCode: resolved,
+      partNumberValues: (values as Prisma.InputJsonObject) ?? Prisma.DbNull,
+    };
+  });
 }
 
 /** Net value (before VAT) of a parsed line, defaulting quantity to 1. */
@@ -242,8 +293,13 @@ async function writeInvoiceLines(
 ) {
   await prisma.invoiceLine.deleteMany({ where: { invoiceId } });
   if (lines.length === 0) return;
+  // Per-line part numbers are validated against the catalog and re-resolved
+  // server-side (client-sent codes are never trusted). Amounts may be preserved
+  // when unchanged, but the part number always reflects the incoming line.
+  const partNumbers = await resolveLinePartNumbers(lines);
   await prisma.invoiceLine.createMany({
     data: lines.map((line, index) => {
+      const pn = partNumbers[index];
       const preserved = preserveFrom?.[index];
       if (
         preserved &&
@@ -259,6 +315,9 @@ async function writeInvoiceLines(
           unitPrice: preserved.unitPrice == null ? null : (preserved.unitPrice as Prisma.Decimal | string | number),
           value: preserved.value == null ? null : (preserved.value as Prisma.Decimal | string | number),
           total: preserved.total == null ? null : (preserved.total as Prisma.Decimal | string | number),
+          partNumberId: pn.partNumberId,
+          partNumberCode: pn.partNumberCode,
+          partNumberValues: pn.partNumberValues,
         };
       }
       const net = lineNet(line);
@@ -273,6 +332,9 @@ async function writeInvoiceLines(
         unitPrice: line.unitPrice ?? null,
         value: hasAmount ? round2(net) : line.value ?? null,
         total: hasAmount ? round2(net * (1 + vatPercent / 100)) : null,
+        partNumberId: pn.partNumberId,
+        partNumberCode: pn.partNumberCode,
+        partNumberValues: pn.partNumberValues,
       };
     }),
   });
@@ -336,6 +398,7 @@ async function invoiceData(formData: FormData, selfId?: string) {
       selfIssued,
       seriesId,
       paid: parseBool(str(formData, "paid")),
+      needsPersonalization: parseBool(str(formData, "needsPersonalization")),
     },
     lines,
     saleMissing: sale.missing,
@@ -412,6 +475,74 @@ export async function createInvoiceAction(formData: FormData): Promise<Result> {
   if (org.clientId) revalidatePath(`/clients/${org.clientId}`);
   if (fields.salesIdSnapshot) revalidatePath(`/deals/${fields.salesIdSnapshot}`);
   return { ok: true, id: firstId };
+}
+
+/**
+ * Load an existing invoice's settings as a pre-filled template for creating a copy.
+ * Every setting and article is preserved, but identity/issuance fields (number,
+ * issue date, document links) and payment/workflow state are reset so the copy
+ * starts as a fresh, unpaid, pending invoice the user can adjust before saving.
+ */
+export async function getInvoiceForDuplicateAction(
+  invoiceId: string
+): Promise<{ invoice?: InvoiceData; error?: string }> {
+  const user = await requireUser();
+  const invoice = await prisma.invoice.findUnique({
+    where: { id: invoiceId },
+    include: {
+      organization: { select: { clientId: true, country: true, tvaPercent: true } },
+      finalClient: { select: { id: true, name: true } },
+      deal: { select: { salesId: true } },
+      lines: { orderBy: { createdAt: "asc" } },
+    },
+  });
+  if (!invoice) return { error: "Invoice not found." };
+  if (!(await canEditOrgInvoices(user, invoice.clientId ?? invoice.organization.clientId))) {
+    return { error: "Not allowed." };
+  }
+
+  const vatPercent = resolveInvoiceVatPercent(invoice, invoice.organization);
+  const template: InvoiceData = {
+    id: "",
+    organizationId: invoice.organizationId,
+    salesId: invoice.deal?.salesId ?? invoice.salesIdSnapshot ?? null,
+    finalClientId: invoice.finalClientId,
+    finalClientName: invoice.finalClient?.name ?? null,
+    number: null,
+    status: DEFAULT_INVOICE_STATUS,
+    currency: invoice.currency,
+    totalAmount: null,
+    paymentTermDays: invoice.paymentTermDays,
+    issueDate: null,
+    expectedInvoiceDate: invoice.expectedInvoiceDate
+      ? invoice.expectedInvoiceDate.toISOString().slice(0, 10)
+      : null,
+    issuerName: invoice.issuerName,
+    issuerId: invoice.issuerId,
+    partNumberId: invoice.partNumberId,
+    partNumberValues: asStringMap(invoice.partNumberValues),
+    relatedInvoiceId: invoice.relatedInvoiceId,
+    selfIssued: invoice.selfIssued,
+    seriesId: invoice.seriesId,
+    contractRef: invoice.contractRef,
+    fileUrls: null,
+    paid: false,
+    needsPersonalization: invoice.needsPersonalization,
+    vatPercent,
+    lines: invoice.lines.map((line) => ({
+      serviceDescription: line.serviceDescription ?? "",
+      textSupplement: line.textSupplement ?? "",
+      unitOfMeasure: line.unitOfMeasure ?? "",
+      quantity: line.quantity == null ? "" : String(line.quantity),
+      unitPrice: line.unitPrice == null ? "" : String(line.unitPrice),
+      value: line.value == null ? "" : String(line.value),
+      total: line.total == null ? "" : String(line.total),
+      partNumberOverride: !!line.partNumberId,
+      partNumberId: line.partNumberId ?? "",
+      partNumberValues: asStringMap(line.partNumberValues) ?? {},
+    })),
+  };
+  return { invoice: template };
 }
 
 export async function updateInvoiceAction(invoiceId: string, formData: FormData): Promise<Result> {
@@ -523,6 +654,34 @@ export async function setInvoicePaidAction(invoiceId: string, paid: boolean): Pr
     entity: "Invoice",
     entityId: invoiceId,
     meta: { number: inv.number, paid },
+  });
+  revalidatePath("/invoices");
+  revalidatePath(`/invoices/${invoiceId}`);
+  if (inv.clientId) revalidatePath(`/clients/${inv.clientId}`);
+  if (inv.salesIdSnapshot) revalidatePath(`/deals/${inv.salesIdSnapshot}`);
+  return { ok: true };
+}
+
+/** Inline toggle of the "needs monthly personalization" flag from the table. */
+export async function setInvoiceNeedsPersonalizationAction(
+  invoiceId: string,
+  needsPersonalization: boolean
+): Promise<Result> {
+  const user = await requireUser();
+  const inv = await prisma.invoice.findUnique({
+    where: { id: invoiceId },
+    select: { id: true, number: true, clientId: true, salesIdSnapshot: true, organization: { select: { clientId: true } } },
+  });
+  if (!inv) return { error: "Not found." };
+  if (!(await canEditOrgInvoices(user, inv.clientId ?? inv.organization.clientId))) return { error: "Not allowed." };
+
+  await prisma.invoice.update({ where: { id: invoiceId }, data: { needsPersonalization } });
+  await logActivity({
+    actorId: user.id,
+    action: "invoice_updated",
+    entity: "Invoice",
+    entityId: invoiceId,
+    meta: { number: inv.number, needsPersonalization },
   });
   revalidatePath("/invoices");
   revalidatePath(`/invoices/${invoiceId}`);
@@ -673,6 +832,7 @@ type EmailArticle = {
   unitPrice: number | null;
   value: number;
   total: number;
+  partNumber: string | null;
 };
 
 function fmtMoney(value: number, currency: string | null): string {
@@ -710,14 +870,22 @@ function renderBillingInvoiceEmail(input: {
     ? `<tr><td>Facturile despre care e vorba</td><td>${esc(input.number)}</td></tr>`
     : "";
 
+  // Only show the "Cod articol" column when at least one article has one.
+  const hasPartNumbers = input.articles.some((a) => (a.partNumber ?? "").trim().length > 0);
+  const partNumberHeader = hasPartNumbers ? `\n                <th>Cod articol</th>` : "";
+  const totalsColspan = hasPartNumbers ? 6 : 5;
+
   const articleRows = input.articles.length
     ? input.articles
         .map((a) => {
           const desc = a.textSupplement
             ? `${esc(a.description)}<br><span style="color:#888;font-size:12px;">${esc(a.textSupplement)}</span>`
             : esc(a.description);
+          const partNumberCell = hasPartNumbers
+            ? `\n                <td style="font-family:monospace;font-size:12px;">${esc(a.partNumber ?? "")}</td>`
+            : "";
           return `            <tr>
-                <td>${desc}</td>
+                <td>${desc}</td>${partNumberCell}
                 <td>${esc(a.um)}</td>
                 <td style="text-align:right;">${esc(a.quantity)}</td>
                 <td style="text-align:right;">${a.unitPrice == null ? "" : esc(fmtMoney(a.unitPrice, input.currency))}</td>
@@ -726,12 +894,12 @@ function renderBillingInvoiceEmail(input: {
             </tr>`;
         })
         .join("\n")
-    : `            <tr><td colspan="6" style="color:#888;">Fără articole</td></tr>`;
+    : `            <tr><td colspan="${totalsColspan + 1}" style="color:#888;">Fără articole</td></tr>`;
 
   const articlesTable = `        <h2 style="font-size:16px;margin-top:24px;">Articole</h2>
         <table>
             <tr>
-                <th>Descriere</th>
+                <th>Descriere</th>${partNumberHeader}
                 <th>UM</th>
                 <th style="text-align:right;">Cant.</th>
                 <th style="text-align:right;">Preț unitar</th>
@@ -740,15 +908,15 @@ function renderBillingInvoiceEmail(input: {
             </tr>
 ${articleRows}
             <tr>
-                <td colspan="5" style="text-align:right;"><strong>Total fără TVA</strong></td>
+                <td colspan="${totalsColspan}" style="text-align:right;"><strong>Total fără TVA</strong></td>
                 <td style="text-align:right;">${esc(fmtMoney(input.totals.base, input.currency))}</td>
             </tr>
             <tr>
-                <td colspan="5" style="text-align:right;"><strong>TVA (${esc(input.vatPercent)}%)</strong></td>
+                <td colspan="${totalsColspan}" style="text-align:right;"><strong>TVA (${esc(input.vatPercent)}%)</strong></td>
                 <td style="text-align:right;">${esc(fmtMoney(input.totals.vat, input.currency))}</td>
             </tr>
             <tr>
-                <td colspan="5" style="text-align:right;"><strong>Total de plată (cu TVA)</strong></td>
+                <td colspan="${totalsColspan}" style="text-align:right;"><strong>Total de plată (cu TVA)</strong></td>
                 <td style="text-align:right;"><strong>${esc(fmtMoney(input.totals.total, input.currency))}</strong></td>
             </tr>
         </table>`;
@@ -912,6 +1080,8 @@ export async function prepareGenerateInvoiceAction(invoiceId: string): Promise<R
       unitPrice,
       value: round2(value),
       total: round2(value * (1 + vatPercent / 100)),
+      // Fall back to the invoice's default part number when the line has none.
+      partNumber: line.partNumberCode || inv.partNumberCode || null,
     };
   });
   const emailTotals = computeInvoiceTotals(

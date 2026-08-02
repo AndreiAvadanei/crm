@@ -44,6 +44,7 @@ export default async function InvoiceInsightsPage({
     clientYearly: insights.clientYearly,
     categoryMonthly: insights.categoryMonthly,
     classYearly: insights.classYearly,
+    dueInvoices: insights.dueInvoices,
   };
 
   return (

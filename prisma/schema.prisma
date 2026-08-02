@@ -414,6 +414,7 @@ model PartNumber {
   order          Int       @default(0)
   active         Boolean   @default(true)
   invoices       Invoice[]
+  invoiceLines   InvoiceLine[]
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -476,6 +477,10 @@ model Invoice {
   expectedInvoiceDate DateTime?
   // Whether the invoice has been paid by the client.
   paid           Boolean       @default(false)
+  // Flags a not-yet-emitted invoice that needs manual monthly personalization
+  // (e.g. amounts/description tweaked each month before it can be issued).
+  // Highlighted in the "To invoice" list so it's not issued as-is by mistake.
+  needsPersonalization Boolean  @default(false)
   // Parsed numeric total of the invoice.
   totalAmount    Decimal?      @db.Decimal(14, 2)
   // Accounting export subtotal before VAT ("baza_tva").
@@ -563,12 +568,21 @@ model InvoiceLine {
   unitPrice           Decimal? @db.Decimal(14, 4)
   value               Decimal? @db.Decimal(14, 2)
   total               Decimal? @db.Decimal(14, 2)
+  // Per-line billable part number. When null, the line inherits the invoice's
+  // default part number (Invoice.partNumber*). Set to override just this article.
+  partNumberId        String?
+  partNumber          PartNumber? @relation(fields: [partNumberId], references: [id], onDelete: SetNull)
+  // Resolved code with the dynamic limits filled in, e.g. "RED-PEN-B-I-BP-50".
+  partNumberCode      String?
+  // Placeholder -> value map for the chosen part number, e.g. { "limit": "50" }.
+  partNumberValues    Json?
   originalValues      Json?
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
   @@unique([invoiceId, sourceLineKey])
   @@index([invoiceId])
+  @@index([partNumberId])
 }
 
 // Issued invoice documents (PDFs) returned by accounting and stored locally.

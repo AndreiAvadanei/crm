@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
-import { ArrowDown, ArrowUp, Check, ChevronsUpDown, Copy, Download, ExternalLink, Loader2, Mail, Pencil, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronsUpDown, Copy, Download, ExternalLink, Loader2, Mail, Pencil, Sparkles, X } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,12 +13,15 @@ import { useToast } from "@/components/ui/toast";
 import { DeleteButton } from "@/components/shared/delete-button";
 import { ClientCombobox } from "@/components/shared/client-combobox";
 import { GenerateInvoiceDialog } from "@/components/invoices/generate-invoice-dialog";
+import { DuplicateInvoiceButton } from "@/components/invoices/duplicate-invoice-button";
 import { saveXmlFile } from "@/components/invoices/saga-xml-button";
+import type { PartNumberOption } from "@/lib/part-numbers";
 import {
   deleteInvoiceAction,
   setInvoiceDealAction,
   setInvoiceExpectedDateAction,
   setInvoiceFinalClientAction,
+  setInvoiceNeedsPersonalizationAction,
   setInvoicePaidAction,
   setInvoiceTextFieldAction,
 } from "@/server/invoice-actions";
@@ -111,6 +114,14 @@ function CopyButton({ value, label }: { value: string | null; label?: string }) 
 }
 
 type DealOption = { salesId: string; title: string };
+
+/** Reference data needed to open the "duplicate to new invoice" form. */
+type InvoiceFormOptions = {
+  organizations: { id: string; name: string; defaultVatPercent?: number; configuredTvaPercent?: number }[];
+  issuers: { id: string; name: string }[];
+  series: { id: string; prefix: string; nextNumber: number }[];
+  partNumbers: PartNumberOption[];
+};
 
 /** Read-only deal link that turns into a searchable picker on click. */
 function DealCell({ invoice, canManage, deals }: { invoice: InvoiceRow; canManage: boolean; deals: DealOption[] }) {
@@ -284,6 +295,47 @@ function PaidCell({ invoice, canManage }: { invoice: InvoiceRow; canManage: bool
     return <span className="text-muted-foreground">{invoice.paid ? "Yes" : "—"}</span>;
   }
   return <Checkbox checked={checked} disabled={busy} onCheckedChange={(v) => onChange(v === true)} />;
+}
+
+/** Icon toggle flagging an invoice as needing manual monthly personalization. */
+function PersonalizationToggle({ invoice }: { invoice: InvoiceRow }) {
+  const router = useRouter();
+  const { toast } = useToast();
+  const [on, setOn] = React.useState(invoice.needsPersonalization);
+  const [busy, setBusy] = React.useState(false);
+
+  React.useEffect(() => {
+    setOn(invoice.needsPersonalization);
+  }, [invoice.needsPersonalization]);
+
+  async function toggle() {
+    const next = !on;
+    setOn(next);
+    setBusy(true);
+    const res = await setInvoiceNeedsPersonalizationAction(invoice.id, next);
+    setBusy(false);
+    if (res.error) {
+      setOn(!next);
+      return toast({ title: res.error, variant: "error" });
+    }
+    router.refresh();
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      disabled={busy}
+      aria-pressed={on}
+      title={on ? "Marked for monthly personalization — click to unmark" : "Mark as needing monthly personalization"}
+      aria-label="Toggle monthly personalization"
+      className={`shrink-0 rounded p-1 transition hover:bg-muted ${
+        on ? "text-violet-600 dark:text-violet-400" : "text-muted-foreground opacity-0 focus:opacity-100 group-hover:opacity-100"
+      }`}
+    >
+      <Sparkles className="h-4 w-4" />
+    </button>
+  );
 }
 
 function toDateInput(d: Date | null): string {
@@ -570,6 +622,7 @@ function InvoiceTableRow({
   canManage,
   deals,
   finalClients,
+  formOptions,
   selected,
   toggleOne,
   hideOrganization,
@@ -578,6 +631,7 @@ function InvoiceTableRow({
   canManage: boolean;
   deals: DealOption[];
   finalClients: FinalClientOption[];
+  formOptions: InvoiceFormOptions;
   selected: Set<string>;
   toggleOne: (id: string) => void;
   hideOrganization?: boolean;
@@ -594,9 +648,11 @@ function InvoiceTableRow({
       className={`group data-[selected=true]:bg-primary/5 ${
         isNegative
           ? "bg-destructive/10 hover:bg-destructive/15 [&>td:first-child]:border-l-2 [&>td:first-child]:border-l-destructive"
-          : toIssue
-            ? "bg-amber-500/10 hover:bg-amber-500/15 [&>td:first-child]:border-l-2 [&>td:first-child]:border-l-amber-500"
-            : ""
+          : i.needsPersonalization
+            ? "bg-violet-500/10 hover:bg-violet-500/15 [&>td:first-child]:border-l-2 [&>td:first-child]:border-l-violet-500"
+            : toIssue
+              ? "bg-amber-500/10 hover:bg-amber-500/15 [&>td:first-child]:border-l-2 [&>td:first-child]:border-l-amber-500"
+              : ""
       }`}
     >
       {canManage && (
@@ -650,6 +706,11 @@ function InvoiceTableRow({
           <Badge variant={invoiceStatusVariant(i.status)}>{INVOICE_STATUS_LABELS[i.status]}</Badge>
           {toIssue && (
             <Badge className="border-transparent bg-amber-500/15 text-amber-600 dark:text-amber-400">To issue</Badge>
+          )}
+          {i.needsPersonalization && (
+            <Badge className="gap-1 border-transparent bg-violet-500/15 text-violet-600 dark:text-violet-400">
+              <Sparkles className="h-3 w-3" /> Personalize
+            </Badge>
           )}
         </div>
       </TableCell>
@@ -710,6 +771,16 @@ function InvoiceTableRow({
       {canManage && (
         <TableCell className="text-right">
           <div className="flex items-center justify-end gap-1">
+            <PersonalizationToggle invoice={i} />
+            <DuplicateInvoiceButton
+              invoiceId={i.id}
+              organizations={formOptions.organizations}
+              deals={deals}
+              issuers={formOptions.issuers}
+              series={formOptions.series}
+              partNumbers={formOptions.partNumbers}
+              finalClients={finalClients}
+            />
             {i.status === "IN_ASTEPTARE" && <GenerateInvoiceDialog invoice={i} />}
             <DeleteButton
               iconOnly
@@ -800,14 +871,26 @@ export function InvoicesTable({
   canManage,
   deals = [],
   finalClients = [],
+  organizations = [],
+  issuers = [],
+  series = [],
+  partNumbers = [],
   groupByOrganization = false,
 }: {
   invoices: InvoiceRow[];
   canManage: boolean;
   deals?: DealOption[];
   finalClients?: FinalClientOption[];
+  organizations?: InvoiceFormOptions["organizations"];
+  issuers?: InvoiceFormOptions["issuers"];
+  series?: InvoiceFormOptions["series"];
+  partNumbers?: InvoiceFormOptions["partNumbers"];
   groupByOrganization?: boolean;
 }) {
+  const formOptions = React.useMemo<InvoiceFormOptions>(
+    () => ({ organizations, issuers, series, partNumbers }),
+    [organizations, issuers, series, partNumbers]
+  );
   const router = useRouter();
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
   const colSpan = (canManage ? 19 : 17) - (groupByOrganization ? 1 : 0);
@@ -881,6 +964,7 @@ export function InvoicesTable({
                       canManage={canManage}
                       deals={deals}
                       finalClients={finalClients}
+                      formOptions={formOptions}
                       selected={selected}
                       toggleOne={toggleOne}
                       hideOrganization
@@ -895,6 +979,7 @@ export function InvoicesTable({
                   canManage={canManage}
                   deals={deals}
                   finalClients={finalClients}
+                  formOptions={formOptions}
                   selected={selected}
                   toggleOne={toggleOne}
                 />

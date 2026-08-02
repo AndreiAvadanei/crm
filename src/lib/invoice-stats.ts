@@ -110,6 +110,8 @@ export interface InvoiceRow {
   issueDate: Date | null;
   expectedInvoiceDate: Date | null;
   paid: boolean;
+  /** Flags a not-yet-emitted invoice that needs manual monthly personalization. */
+  needsPersonalization: boolean;
   createdAt: Date;
   servicesDescription: string | null;
   /** Comma-joined article descriptions (source of truth for the services column). */
@@ -339,6 +341,7 @@ export async function getPaginatedInvoices(user: User, opts: InvoiceListOpts): P
       issueDate: i.issueDate,
       expectedInvoiceDate: i.expectedInvoiceDate,
       paid: i.paid,
+      needsPersonalization: i.needsPersonalization,
       createdAt: i.createdAt,
       servicesDescription: i.servicesDescription,
       articlesSummary,

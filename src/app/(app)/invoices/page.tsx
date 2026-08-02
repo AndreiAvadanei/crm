@@ -147,7 +147,17 @@ export default async function InvoicesPage({
           <InvoiceFilters currencies={currencies} issuers={issuerNames} appliedOrgName={appliedOrgName} tab={tabOpt} />
         </div>
         <IssuerTotals totals={issuerTotals} />
-        <InvoicesTable invoices={invoicePage.invoices} canManage deals={deals} finalClients={finalClients} groupByOrganization={groupByOrganization} />
+        <InvoicesTable
+          invoices={invoicePage.invoices}
+          canManage
+          deals={deals}
+          finalClients={finalClients}
+          organizations={orgOptions}
+          issuers={issuerList}
+          series={seriesList}
+          partNumbers={partNumbers}
+          groupByOrganization={groupByOrganization}
+        />
         {total > CLIENTS_PAGE_SIZE && (
           <Pagination
             pathname="/invoices"

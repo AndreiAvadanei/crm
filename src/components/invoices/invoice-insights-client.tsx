@@ -14,13 +14,16 @@ import {
   Legend,
   Cell,
 } from "recharts";
-import { TrendingDown, TrendingUp } from "lucide-react";
+import Link from "next/link";
+import { ChevronRight, ExternalLink, TrendingDown, TrendingUp } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { INVOICE_STATUS_LABELS } from "@/lib/invoice-constants";
 import type {
   CategoryMonthCell,
   ClassYearCell,
   ClientYearCell,
   CurrencySummary,
+  DueInvoice,
   ForecastBucket,
   MonthComparison,
   PeriodBucket,
@@ -44,6 +47,7 @@ export type InsightsData = {
   clientYearly: ClientYearCell[];
   categoryMonthly: CategoryMonthCell[];
   classYearly: ClassYearCell[];
+  dueInvoices: DueInvoice[];
 };
 
 // Approximate value of one unit of each currency expressed in EUR. Used as the
@@ -427,6 +431,8 @@ export function InvoiceInsightsClient({ data }: { data: InsightsData }) {
           </table>
         </CardContent>
       </Card>
+
+      <PaymentsDueTable dueInvoices={data.dueInvoices} convert={convert} reporting={reporting} />
     </div>
   );
 }
@@ -1215,6 +1221,202 @@ function CategoryMonthlyMatrix({
           </tbody>
         </table>
         <p className="mt-3 text-xs text-muted-foreground">Avg (Medie) = yearly total ÷ number of months with revenue.</p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function statusLabel(status: string): string {
+  return (INVOICE_STATUS_LABELS as Record<string, string>)[status] ?? status;
+}
+
+// ISO timestamp -> "YYYY-MM-DD" (deterministic, SSR-safe).
+function fmtDay(iso: string): string {
+  return iso.slice(0, 10);
+}
+
+// Final table — companies with unpaid, already-issued invoices. The age filter
+// controls how old (by issue date) an invoice must be to count. Rows roll up
+// per company and expand to the individual due invoices, each linking to the
+// invoice page.
+function PaymentsDueTable({
+  dueInvoices,
+  convert,
+  reporting,
+}: {
+  dueInvoices: DueInvoice[];
+  convert: Convert;
+  reporting: string;
+}) {
+  const [minAge, setMinAge] = React.useState(30);
+  const [expanded, setExpanded] = React.useState<Set<string>>(new Set());
+
+  const companies = React.useMemo(() => {
+    type Company = {
+      id: string;
+      name: string;
+      total: number;
+      count: number;
+      oldestAge: number;
+      newestAge: number;
+      firstDue: string;
+      lastDue: string;
+      invoices: DueInvoice[];
+    };
+    const map = new Map<string, Company>();
+    for (const inv of dueInvoices) {
+      if (inv.ageDays <= minAge) continue;
+      const c = map.get(inv.clientId) ?? {
+        id: inv.clientId,
+        name: inv.clientName,
+        total: 0,
+        count: 0,
+        oldestAge: inv.ageDays,
+        newestAge: inv.ageDays,
+        firstDue: inv.issueDate,
+        lastDue: inv.issueDate,
+        invoices: [],
+      };
+      c.total += convert(inv.amount, inv.currency);
+      c.count += 1;
+      if (inv.ageDays > c.oldestAge) {
+        c.oldestAge = inv.ageDays;
+        c.firstDue = inv.issueDate;
+      }
+      if (inv.ageDays < c.newestAge) {
+        c.newestAge = inv.ageDays;
+        c.lastDue = inv.issueDate;
+      }
+      c.invoices.push(inv);
+      map.set(inv.clientId, c);
+    }
+    const list = Array.from(map.values()).sort((a, b) => b.total - a.total);
+    for (const c of list) c.invoices.sort((a, b) => b.ageDays - a.ageDays);
+    return list;
+  }, [dueInvoices, minAge, convert]);
+
+  const grandTotal = React.useMemo(() => companies.reduce((sum, c) => sum + c.total, 0), [companies]);
+  const invoiceCount = React.useMemo(() => companies.reduce((sum, c) => sum + c.count, 0), [companies]);
+
+  function toggle(id: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  return (
+    <Card>
+      <CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <CardTitle>Payments due by company</CardTitle>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {companies.length} companies · {invoiceCount} invoices · {money(grandTotal, reporting)} outstanding (converted to {reporting}). Per-invoice amounts are the outstanding balance in the invoice currency.
+          </p>
+        </div>
+        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          Invoices older than
+          <input
+            type="number"
+            min={0}
+            step={1}
+            value={minAge}
+            onChange={(e) => setMinAge(Math.max(0, Math.floor(Number(e.target.value) || 0)))}
+            className="h-8 w-20 rounded-md border border-input bg-background px-2 text-sm tabular-nums"
+          />
+          days
+        </label>
+      </CardHeader>
+      <CardContent className="overflow-x-auto">
+        <table className="w-full border-separate border-spacing-0 text-xs tabular-nums">
+          <thead>
+            <tr className="text-muted-foreground">
+              <th className="sticky left-0 z-10 bg-card px-2 py-2 text-left">Company</th>
+              <th className="px-2 py-2 text-right font-medium">Invoices</th>
+              <th className="px-2 py-2 text-right font-medium">First due</th>
+              <th className="px-2 py-2 text-right font-medium">Last due</th>
+              <th className="px-2 py-2 text-right font-semibold">Total due</th>
+            </tr>
+          </thead>
+          <tbody>
+            {companies.map((c) => {
+              const isOpen = expanded.has(c.id);
+              return (
+                <React.Fragment key={c.id}>
+                  <tr className="cursor-pointer border-b hover:bg-accent/50" onClick={() => toggle(c.id)}>
+                    <td className="sticky left-0 z-10 max-w-[280px] truncate bg-card px-2 py-1.5 text-left font-medium" title={c.name}>
+                      <span className="inline-flex items-center gap-1">
+                        <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${isOpen ? "rotate-90" : ""}`} />
+                        {c.name}
+                      </span>
+                    </td>
+                    <td className="px-2 py-1.5 text-right">{c.count}</td>
+                    <td className="px-2 py-1.5 text-right">
+                      {fmtDay(c.firstDue)} <span className="text-muted-foreground">({c.oldestAge}d)</span>
+                    </td>
+                    <td className="px-2 py-1.5 text-right">
+                      {fmtDay(c.lastDue)} <span className="text-muted-foreground">({c.newestAge}d)</span>
+                    </td>
+                    <td className="px-2 py-1.5 text-right font-semibold">{money(c.total, reporting)}</td>
+                  </tr>
+                  {isOpen && (
+                    <tr className="border-b bg-muted/30">
+                      <td colSpan={5} className="px-2 py-2">
+                        <table className="w-full text-xs tabular-nums">
+                          <thead>
+                            <tr className="text-muted-foreground">
+                              <th className="px-2 py-1 text-left font-medium">Invoice</th>
+                              <th className="px-2 py-1 text-left font-medium">Issued</th>
+                              <th className="px-2 py-1 text-right font-medium">Age</th>
+                              <th className="px-2 py-1 text-left font-medium">What</th>
+                              <th className="px-2 py-1 text-left font-medium">Status</th>
+                              <th className="px-2 py-1 text-right font-medium">Amount</th>
+                              <th className="px-2 py-1 text-right font-medium">Open</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {c.invoices.map((inv) => {
+                              const what = inv.partNumberCode || inv.services || "—";
+                              return (
+                                <tr key={inv.id} className="border-t border-border/50">
+                                  <td className="px-2 py-1 text-left font-medium">
+                                    <Link href={`/invoices/${inv.id}`} className="hover:underline" onClick={(e) => e.stopPropagation()}>
+                                      {inv.number || "(no number)"}
+                                    </Link>
+                                  </td>
+                                  <td className="px-2 py-1 text-left">{fmtDay(inv.issueDate)}</td>
+                                  <td className="px-2 py-1 text-right">{inv.ageDays}d</td>
+                                  <td className="max-w-[320px] truncate px-2 py-1 text-left" title={inv.services || inv.partNumberCode || undefined}>{what}</td>
+                                  <td className="px-2 py-1 text-left text-muted-foreground">{statusLabel(inv.status)}</td>
+                                  <td className="px-2 py-1 text-right">{money(inv.amount, inv.currency)}</td>
+                                  <td className="px-2 py-1 text-right">
+                                    <Link
+                                      href={`/invoices/${inv.id}`}
+                                      className="inline-flex items-center justify-end text-muted-foreground hover:text-foreground"
+                                      title="Open invoice"
+                                      onClick={(e) => e.stopPropagation()}
+                                    >
+                                      <ExternalLink className="h-3.5 w-3.5" />
+                                    </Link>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              );
+            })}
+            {companies.length === 0 && (
+              <tr><td colSpan={5} className="py-8 text-center text-muted-foreground">No companies with unpaid invoices older than {minAge} days.</td></tr>
+            )}
+          </tbody>
+        </table>
       </CardContent>
     </Card>
   );

@@ -85,6 +85,22 @@ export type ClassYearCell = {
   amount: number;
 };
 
+// An unpaid, already-issued invoice, with enough context for the payments-due
+// table to group by company, filter by age, and link back to the invoice.
+export type DueInvoice = {
+  id: string;
+  number: string | null;
+  clientId: string;
+  clientName: string;
+  issueDate: string;
+  ageDays: number;
+  currency: string;
+  amount: number;
+  status: string;
+  partNumberCode: string | null;
+  services: string | null;
+};
+
 export type InvoiceInsights = {
   generatedAt: Date;
   currentYear: number;
@@ -101,9 +117,12 @@ export type InvoiceInsights = {
   clientYearly: ClientYearCell[];
   categoryMonthly: CategoryMonthCell[];
   classYearly: ClassYearCell[];
+  dueInvoices: DueInvoice[];
 };
 
 type InvoiceInsightInput = {
+  id: string;
+  number: string | null;
   currency: string;
   status: string;
   paid: boolean;
@@ -116,6 +135,11 @@ type InvoiceInsightInput = {
   organizationId: string;
   organizationName: string;
   partNumberCode: string | null;
+  servicesDescription: string | null;
+  // Per-line part numbers + net values, used to split invoice revenue across
+  // service categories when articles carry different part numbers. A line's code
+  // falls back to the invoice-level part number when it doesn't override it.
+  lines: Array<{ partNumberCode: string | null; value: unknown }>;
 };
 
 // Label used when an invoice has no resolved part-number code, so category
@@ -132,6 +156,37 @@ function parseServiceCode(code: string | null): { category: string; serviceClass
   const category = parts[0]?.toUpperCase() || UNCATEGORIZED;
   const serviceClass = parts[1]?.toUpperCase() || "—";
   return { category, serviceClass };
+}
+
+// Attribute an invoice's net revenue to one or more service category/class
+// segments. When articles carry different part numbers, the revenue is split
+// proportionally by each line's net value (a line inherits the invoice-level
+// part number unless it overrides it). Invoices without usable line values fall
+// back to a single segment from the invoice-level part number. The returned
+// amounts always sum to the invoice's net, so category totals still reconcile.
+function categorySegments(
+  invoice: InvoiceInsightInput
+): Array<{ category: string; serviceClass: string; amount: number }> {
+  const net = netAmount(invoice);
+  const weighted = invoice.lines
+    .map((line) => ({ code: line.partNumberCode || invoice.partNumberCode, weight: Math.abs(n(line.value) ?? 0) }))
+    .filter((line) => line.weight > 0);
+
+  if (weighted.length === 0) {
+    const { category, serviceClass } = parseServiceCode(invoice.partNumberCode);
+    return [{ category, serviceClass, amount: net }];
+  }
+
+  const totalWeight = weighted.reduce((sum, line) => sum + line.weight, 0);
+  const map = new Map<string, { category: string; serviceClass: string; amount: number }>();
+  for (const line of weighted) {
+    const { category, serviceClass } = parseServiceCode(line.code);
+    const key = `${category}||${serviceClass}`;
+    const seg = map.get(key) ?? { category, serviceClass, amount: 0 };
+    seg.amount += net * (line.weight / totalWeight);
+    map.set(key, seg);
+  }
+  return Array.from(map.values());
 }
 
 const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -243,6 +298,8 @@ export async function getInvoiceInsights(user: User, opts: { currency?: string |
   const rowsRaw = await prisma.invoice.findMany({
     where,
     select: {
+      id: true,
+      number: true,
       currency: true,
       status: true,
       paid: true,
@@ -254,7 +311,9 @@ export async function getInvoiceInsights(user: User, opts: { currency?: string |
       unpaidAmount: true,
       organizationId: true,
       partNumberCode: true,
+      servicesDescription: true,
       organization: { select: { legalName: true, sourceName: true } },
+      lines: { select: { partNumberCode: true, value: true } },
     },
   });
 
@@ -265,6 +324,8 @@ export async function getInvoiceInsights(user: User, opts: { currency?: string |
     organizationId: row.organizationId,
     organizationName: row.organization?.legalName || row.organization?.sourceName || "—",
     partNumberCode: row.partNumberCode ?? null,
+    servicesDescription: row.servicesDescription ?? null,
+    lines: row.lines.map((line) => ({ partNumberCode: line.partNumberCode ?? null, value: line.value })),
   }));
   const currencies = Array.from(new Set(allRows.map((row) => row.currency))).sort();
   const selectedCurrency = opts.currency && currencies.includes(opts.currency) ? opts.currency : null;
@@ -379,19 +440,53 @@ export async function getInvoiceInsights(user: User, opts: { currency?: string |
     cCell.amount += amount;
     clientMap.set(cKey, cCell);
 
-    const { category, serviceClass } = parseServiceCode(row.partNumberCode);
+    // Split the invoice across category/class segments per its article part
+    // numbers (proportional to line values). The segment amounts sum to `amount`.
+    for (const seg of categorySegments(row)) {
+      const catKey = `${seg.category}-${y}-${m}-${row.currency}`;
+      const catCell = categoryMap.get(catKey) ?? { category: seg.category, year: y, month: m, currency: row.currency, amount: 0, count: 0 };
+      catCell.amount += seg.amount;
+      catCell.count += 1;
+      categoryMap.set(catKey, catCell);
 
-    const catKey = `${category}-${y}-${m}-${row.currency}`;
-    const catCell = categoryMap.get(catKey) ?? { category, year: y, month: m, currency: row.currency, amount: 0, count: 0 };
-    catCell.amount += amount;
-    catCell.count += 1;
-    categoryMap.set(catKey, catCell);
-
-    const clsKey = `${category}-${serviceClass}-${y}-${row.currency}`;
-    const clsCell = classMap.get(clsKey) ?? { category, serviceClass, year: y, currency: row.currency, amount: 0 };
-    clsCell.amount += amount;
-    classMap.set(clsKey, clsCell);
+      const clsKey = `${seg.category}-${seg.serviceClass}-${y}-${row.currency}`;
+      const clsCell = classMap.get(clsKey) ?? { category: seg.category, serviceClass: seg.serviceClass, year: y, currency: row.currency, amount: 0 };
+      clsCell.amount += seg.amount;
+      classMap.set(clsKey, clsCell);
+    }
   }
+
+  // Unpaid, already-issued invoices with a positive outstanding balance. The
+  // client filters these by age and rolls them up per company. Amount is the
+  // accounting outstanding balance ("neachitat") when known, else the full
+  // invoiced total (both gross / as invoiced).
+  const dueInvoices: DueInvoice[] = allRows
+    .filter((row) => !row.paid && !!row.issueDate)
+    .map((row) => {
+      const amount = n(row.unpaidAmount) ?? n(row.totalAmount) ?? netAmount(row);
+      const ageDays = Math.max(0, Math.floor((now.getTime() - row.issueDate!.getTime()) / 86_400_000));
+      const services = row.servicesDescription?.replace(/\s+/g, " ").trim() || null;
+      // Show every distinct part number on the invoice (each line inherits the
+      // invoice-level default unless it overrides it), else the invoice default.
+      const lineCodes = Array.from(
+        new Set(row.lines.map((line) => line.partNumberCode || row.partNumberCode).filter((c): c is string => !!c))
+      );
+      const partNumberCode = lineCodes.length ? lineCodes.join(", ") : row.partNumberCode;
+      return {
+        id: row.id,
+        number: row.number,
+        clientId: row.organizationId,
+        clientName: row.organizationName,
+        issueDate: row.issueDate!.toISOString(),
+        ageDays,
+        currency: row.currency,
+        amount,
+        status: row.status,
+        partNumberCode,
+        services: services ? services.slice(0, 160) : null,
+      };
+    })
+    .filter((d) => d.amount > 0);
 
   return {
     generatedAt: now,
@@ -409,5 +504,6 @@ export async function getInvoiceInsights(user: User, opts: { currency?: string |
     clientYearly: Array.from(clientMap.values()),
     categoryMonthly: Array.from(categoryMap.values()),
     classYearly: Array.from(classMap.values()),
+    dueInvoices,
   };
 }

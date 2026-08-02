@@ -127,6 +127,8 @@ export default async function InvoiceDetailPage({ params }: Props) {
     invoice.lines.map((l) => l.serviceDescription).filter((s): s is string => !!s && s.trim().length > 0).join(", ") || null;
   const issueDateInput = invoice.issueDate ? invoice.issueDate.toISOString().slice(0, 10) : null;
   const original = asOriginalValues(invoice.originalValues);
+  // Invoice-level default part number, shown on articles that don't override it.
+  const invoiceDefaultPartNumberCode = invoice.partNumberCode || invoice.partNumber?.code || "";
 
   const [orgs, deals, issuers, partNumbers, seriesList, finalClients] = canManage
     ? await Promise.all([
@@ -172,6 +174,7 @@ export default async function InvoiceDetailPage({ params }: Props) {
     contractRef: invoice.contractRef,
     fileUrls: invoice.fileUrls,
     paid: invoice.paid,
+    needsPersonalization: invoice.needsPersonalization,
     vatPercent,
     lines: invoice.lines.map((line) => ({
       serviceDescription: line.serviceDescription ?? "",
@@ -181,6 +184,9 @@ export default async function InvoiceDetailPage({ params }: Props) {
       unitPrice: line.unitPrice == null ? "" : String(line.unitPrice),
       value: line.value == null ? "" : String(line.value),
       total: line.total == null ? "" : String(line.total),
+      partNumberOverride: !!line.partNumberId,
+      partNumberId: line.partNumberId ?? "",
+      partNumberValues: asStringMap(line.partNumberValues),
     })),
   };
 
@@ -396,6 +402,7 @@ export default async function InvoiceDetailPage({ params }: Props) {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Service</TableHead>
+                      <TableHead>Part number</TableHead>
                       <TableHead>UM</TableHead>
                       <TableHead className="text-right">Qty</TableHead>
                       <TableHead className="text-right">Unit price</TableHead>
@@ -418,6 +425,17 @@ export default async function InvoiceDetailPage({ params }: Props) {
                               </div>
                               <OriginalInfo values={lineOriginal} keys={["denumire1", "text_supl"]} />
                             </div>
+                          </TableCell>
+                          <TableCell>
+                            {line.partNumberCode ? (
+                              <span className="font-mono text-xs">{line.partNumberCode}</span>
+                            ) : invoiceDefaultPartNumberCode ? (
+                              <span className="font-mono text-xs text-muted-foreground" title="Invoice default part number">
+                                {invoiceDefaultPartNumberCode}
+                              </span>
+                            ) : (
+                              "—"
+                            )}
                           </TableCell>
                           <TableCell>
                             <span className="inline-flex items-center gap-1">
