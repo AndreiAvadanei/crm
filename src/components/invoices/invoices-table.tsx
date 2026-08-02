@@ -814,12 +814,16 @@ function AmountCell({ value, predicted, currency }: { value: number | null; pred
 function BulkBar({
   ids,
   blockedLabels,
+  blockedIds,
   onClear,
+  onDeselectBlocked,
   onRefresh,
 }: {
   ids: string[];
   blockedLabels: string[];
+  blockedIds: string[];
   onClear: () => void;
+  onDeselectBlocked: () => void;
   onRefresh: () => void;
 }) {
   const { toast } = useToast();
@@ -870,9 +874,22 @@ function BulkBar({
         <X className="h-4 w-4" /> Clear
       </Button>
       {blocked && (
-        <span className="text-xs text-violet-600 dark:text-violet-400">
-          {blockedLabels.length} need personalization
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-violet-600 dark:text-violet-400">
+            {blockedLabels.length} need personalization
+          </span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2 text-xs text-violet-600 hover:text-violet-700 dark:text-violet-400"
+            onClick={onDeselectBlocked}
+            disabled={downloading || emailing || blockedIds.length === 0}
+            title="Unselect all invoices that need personalization"
+          >
+            <X className="h-3.5 w-3.5" /> Unselect these
+          </Button>
+        </div>
       )}
     </div>
   );
@@ -938,7 +955,17 @@ export function InvoicesTable({
           blockedLabels={invoices
             .filter((i) => selected.has(i.id) && i.needsPersonalization)
             .map((i) => i.number || i.organizationName || i.id)}
+          blockedIds={invoices
+            .filter((i) => selected.has(i.id) && i.needsPersonalization)
+            .map((i) => i.id)}
           onClear={() => setSelected(new Set())}
+          onDeselectBlocked={() =>
+            setSelected((prev) => {
+              const next = new Set(prev);
+              for (const i of invoices) if (i.needsPersonalization) next.delete(i.id);
+              return next;
+            })
+          }
           onRefresh={() => router.refresh()}
         />
       )}

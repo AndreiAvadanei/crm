@@ -114,6 +114,7 @@ export default async function UsersAdminPage() {
                         user={{
                           id: u.id,
                           name: u.name,
+                          email: u.email,
                           role: u.role,
                           visibleFrom: u.visibleFrom ? u.visibleFrom.toISOString() : null,
                           invoiceVisibleFrom: u.invoiceVisibleFrom ? u.invoiceVisibleFrom.toISOString() : null,

@@ -77,16 +77,31 @@ export async function createUserAction(formData: FormData): Promise<Result> {
 export async function updateUserAction(userId: string, formData: FormData): Promise<Result> {
   const admin = await ensureAdmin();
   const before = await prisma.user.findUnique({ where: { id: userId } });
+  if (!before) return { error: "User not found." };
   const newName = str(formData, "name");
   const newRole = str(formData, "role") as "ADMIN" | "SALES" | undefined;
   const newVisibleFrom = str(formData, "visibleFrom") ? new Date(str(formData, "visibleFrom")!) : null;
   const newInvoiceVisibleFrom = str(formData, "invoiceVisibleFrom") ? new Date(str(formData, "invoiceVisibleFrom")!) : null;
+
+  const rawEmail = str(formData, "email")?.toLowerCase();
+  const newEmail = rawEmail ?? before.email;
+  const emailChanged = newEmail !== before.email;
+  if (emailChanged) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) return { error: "Enter a valid email address." };
+    const clash = await prisma.user.findUnique({ where: { email: newEmail } });
+    if (clash && clash.id !== userId) return { error: "A user with this email already exists." };
+  }
+
   await prisma.user.update({
     where: { id: userId },
-    data: { name: newName, role: newRole, visibleFrom: newVisibleFrom, invoiceVisibleFrom: newInvoiceVisibleFrom },
+    data: { email: newEmail, name: newName, role: newRole, visibleFrom: newVisibleFrom, invoiceVisibleFrom: newInvoiceVisibleFrom },
   });
+  // Changing the login identifier invalidates existing sessions so the user
+  // must sign in again with the new address.
+  if (emailChanged) await prisma.session.deleteMany({ where: { userId } });
   const changes = before
     ? changeList(
+        diffText("email", "Email", before.email, newEmail),
         diffText("name", "Name", before.name, newName ?? before.name),
         diffPlain("role", "Role", before.role, newRole ?? before.role),
         diffDate("visibleFrom", "Visible from", before.visibleFrom, newVisibleFrom),

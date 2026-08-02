@@ -18,7 +18,7 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/toast";
 import { createUserAction, updateUserAction } from "@/server/admin-actions";
 
-type UserData = { id: string; name: string; role: string; visibleFrom: string | null; invoiceVisibleFrom: string | null };
+type UserData = { id: string; name: string; email: string; role: string; visibleFrom: string | null; invoiceVisibleFrom: string | null };
 
 export function UserFormDialog({ trigger, user }: { trigger: React.ReactNode; user?: UserData }) {
   const router = useRouter();
@@ -89,12 +89,15 @@ export function UserFormDialog({ trigger, user }: { trigger: React.ReactNode; us
               <Label htmlFor="name">Full name</Label>
               <Input id="name" name="name" defaultValue={user?.name ?? ""} required />
             </div>
-            {!editing && (
-              <div className="space-y-2">
-                <Label htmlFor="email">Email</Label>
-                <Input id="email" name="email" type="email" required />
-              </div>
-            )}
+            <div className="space-y-2">
+              <Label htmlFor="email">Email</Label>
+              <Input id="email" name="email" type="email" defaultValue={user?.email ?? ""} required />
+              {editing && (
+                <p className="text-xs text-muted-foreground">
+                  Changing the email updates the login address and signs the user out of active sessions.
+                </p>
+              )}
+            </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="role">Role</Label>
