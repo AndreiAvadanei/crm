@@ -273,12 +273,16 @@ function FinalClientCell({
   );
 }
 
-/** Inline paid toggle that persists immediately. */
+/** Inline paid toggle that persists immediately, rendered as a color-coded status pill. */
 function PaidCell({ invoice, canManage }: { invoice: InvoiceRow; canManage: boolean }) {
   const router = useRouter();
   const { toast } = useToast();
   const [checked, setChecked] = React.useState(invoice.paid);
   const [busy, setBusy] = React.useState(false);
+
+  React.useEffect(() => {
+    setChecked(invoice.paid);
+  }, [invoice.paid]);
 
   async function onChange(next: boolean) {
     setChecked(next);
@@ -292,10 +296,49 @@ function PaidCell({ invoice, canManage }: { invoice: InvoiceRow; canManage: bool
     router.refresh();
   }
 
+  // An invoice is only meaningfully "unpaid" once it has actually been issued.
+  const issued = !!invoice.issueDate;
+
+  const pill = checked
+    ? "border-transparent bg-[var(--success)]/15 text-[var(--success)]"
+    : issued
+      ? "border-transparent bg-rose-500/15 text-rose-600 dark:text-rose-400"
+      : "border-dashed border-border text-muted-foreground";
+
+  const content = checked ? (
+    <>
+      <Check className="h-3.5 w-3.5" /> Paid
+    </>
+  ) : issued ? (
+    <>
+      <X className="h-3.5 w-3.5" /> Unpaid
+    </>
+  ) : (
+    <span className="text-muted-foreground">—</span>
+  );
+
   if (!canManage) {
-    return <span className="text-muted-foreground">{invoice.paid ? "Yes" : "—"}</span>;
+    return (
+      <span
+        className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-medium ${pill}`}
+      >
+        {content}
+      </span>
+    );
   }
-  return <Checkbox checked={checked} disabled={busy} onCheckedChange={(v) => onChange(v === true)} />;
+
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!checked)}
+      disabled={busy}
+      title={checked ? "Paid — click to mark as unpaid" : "Mark as paid"}
+      aria-pressed={checked}
+      className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-medium transition hover:opacity-80 disabled:opacity-50 ${pill}`}
+    >
+      {content}
+    </button>
+  );
 }
 
 /** Icon toggle flagging an invoice as needing manual monthly personalization. */
@@ -642,6 +685,8 @@ function InvoiceTableRow({
     const t = invoiceTotal(i);
     return t != null && t < 0;
   })();
+  // Issued but not yet paid — the row that most likely needs chasing.
+  const unpaidIssued = !!i.issueDate && !i.paid;
 
   return (
     <TableRow
@@ -653,7 +698,11 @@ function InvoiceTableRow({
             ? "bg-violet-500/10 hover:bg-violet-500/15 [&>td:first-child]:border-l-2 [&>td:first-child]:border-l-violet-500"
             : toIssue
               ? "bg-amber-500/10 hover:bg-amber-500/15 [&>td:first-child]:border-l-2 [&>td:first-child]:border-l-amber-500"
-              : ""
+              : unpaidIssued
+                ? "bg-rose-500/[0.06] hover:bg-rose-500/10 [&>td:first-child]:border-l-2 [&>td:first-child]:border-l-rose-500/70"
+                : i.paid
+                  ? "[&>td:first-child]:border-l-2 [&>td:first-child]:border-l-[var(--success)]/50"
+                  : ""
       }`}
     >
       {canManage && (

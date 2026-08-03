@@ -560,20 +560,32 @@ function CardDueDate({
   onDueDateChange: (dealId: string, dueDate: string | null) => void;
 }) {
   const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const value = dueDate ? dueDate.slice(0, 10) : "";
 
   useEffect(() => {
     if (!editing) return;
+    setDraft(value);
     inputRef.current?.focus();
     try {
       (inputRef.current as unknown as { showPicker?: () => void })?.showPicker?.();
     } catch {
       /* showPicker unsupported — focus is enough */
     }
+    // Only re-run when entering edit mode, not on every `value` change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing]);
 
   const stop = (e: SyntheticEvent) => e.stopPropagation();
+
+  // Commit the pending draft (if changed) and leave edit mode. Called on blur
+  // so the user can pick a date and still change their mind before clicking
+  // away — the value is only persisted once focus leaves the input.
+  const commit = () => {
+    setEditing(false);
+    if (draft !== value) onDueDateChange(dealId, draft || null);
+  };
 
   if (editing) {
     return (
@@ -581,13 +593,18 @@ function CardDueDate({
         <input
           ref={inputRef}
           type="date"
-          defaultValue={value}
-          onChange={(e) => {
-            const next = e.target.value;
-            setEditing(false);
-            if (next !== value) onDueDateChange(dealId, next || null);
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              commit();
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              setEditing(false);
+            }
           }}
-          onBlur={() => setEditing(false)}
           title="Change due date"
           className="form-control h-6 px-1 text-[11px]"
         />
