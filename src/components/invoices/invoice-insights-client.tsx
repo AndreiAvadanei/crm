@@ -545,6 +545,7 @@ export function InvoiceInsightsClient({ data }: { data: InsightsData }) {
         convert={convert}
         reporting={reporting}
         currentYear={data.currentYear}
+        includeScheduled={includeScheduled}
       />
 
       <CategoryMonthlyMatrix categoryMonthly={data.categoryMonthly} convert={convert} reporting={reporting} currentYear={data.currentYear} includeScheduled={includeScheduled} />
@@ -1549,6 +1550,7 @@ function GrowthMaturitySection({
   convert,
   reporting,
   currentYear,
+  includeScheduled,
 }: {
   growthClients: GrowthClientYearFact[];
   growthChurn: GrowthChurnYear[];
@@ -1556,15 +1558,16 @@ function GrowthMaturitySection({
   convert: Convert;
   reporting: string;
   currentYear: number;
+  includeScheduled: boolean;
 }) {
   const [selectedYear, setSelectedYear] = React.useState<number>(currentYear);
   const [view, setView] = React.useState<"category" | "class">("category");
 
   const years = React.useMemo(() => {
     const set = new Set<number>();
-    for (const c of growthClients) if (c.amount > 0) set.add(c.year);
+    for (const c of growthClients) if (c.amount > 0 || (includeScheduled && c.scheduled > 0)) set.add(c.year);
     return Array.from(set).sort((a, b) => a - b);
-  }, [growthClients]);
+  }, [growthClients, includeScheduled]);
 
   React.useEffect(() => {
     if (years.length && !years.includes(selectedYear)) {
@@ -1580,12 +1583,16 @@ function GrowthMaturitySection({
       year: number;
       amount: number;
       priorYearAmount: number;
+      actualAmount: number;
+      actualPriorYearAmount: number;
       status: GrowthClientYearFact["status"];
       services: Array<{
         category: string;
         serviceClass: string;
         amount: number;
         priorYearAmount: number;
+        actualAmount: number;
+        actualPriorYearAmount: number;
         hadCategoryBefore: boolean;
       }>;
     };
@@ -1598,11 +1605,19 @@ function GrowthMaturitySection({
         year: fact.year,
         amount: 0,
         priorYearAmount: 0,
+        actualAmount: 0,
+        actualPriorYearAmount: 0,
         status: fact.status,
         services: [],
       };
       agg.amount += convert(fact.amount, fact.currency);
       agg.priorYearAmount += convert(fact.priorYearAmount, fact.currency);
+      agg.actualAmount += convert(fact.amount, fact.currency);
+      agg.actualPriorYearAmount += convert(fact.priorYearAmount, fact.currency);
+      if (includeScheduled) {
+        agg.amount += convert(fact.scheduled, fact.currency);
+        agg.priorYearAmount += convert(fact.priorYearScheduled, fact.currency);
+      }
       // Prefer "existing" if any currency row says so (shouldn't diverge).
       if (fact.status === "existing") agg.status = "existing";
       else if (fact.status === "reactivated" && agg.status === "new") agg.status = "reactivated";
@@ -1614,13 +1629,21 @@ function GrowthMaturitySection({
         if (prev) {
           prev.amount += convert(s.amount, fact.currency);
           prev.priorYearAmount += convert(s.priorYearAmount, fact.currency);
+          prev.actualAmount += convert(s.amount, fact.currency);
+          prev.actualPriorYearAmount += convert(s.priorYearAmount, fact.currency);
+          if (includeScheduled) {
+            prev.amount += convert(s.scheduled, fact.currency);
+            prev.priorYearAmount += convert(s.priorYearScheduled, fact.currency);
+          }
           prev.hadCategoryBefore = prev.hadCategoryBefore || s.hadCategoryBefore;
         } else {
           svcMap.set(sk, {
             category: s.category,
             serviceClass: s.serviceClass,
-            amount: convert(s.amount, fact.currency),
-            priorYearAmount: convert(s.priorYearAmount, fact.currency),
+            amount: convert(s.amount + (includeScheduled ? s.scheduled : 0), fact.currency),
+            priorYearAmount: convert(s.priorYearAmount + (includeScheduled ? s.priorYearScheduled : 0), fact.currency),
+            actualAmount: convert(s.amount, fact.currency),
+            actualPriorYearAmount: convert(s.priorYearAmount, fact.currency),
             hadCategoryBefore: s.hadCategoryBefore,
           });
         }
@@ -1629,12 +1652,13 @@ function GrowthMaturitySection({
       map.set(key, agg);
     }
     return map;
-  }, [growthClients, convert]);
+  }, [growthClients, convert, includeScheduled]);
 
   const yearSummaries = React.useMemo(() => {
     const churnMap = new Map(growthChurn.map((c) => [c.year, c]));
     return years.map((y) => {
       const mix = emptyMix();
+      const actualMix = emptyMix();
       const clientIds = new Set<string>();
       let newClients = 0;
       let reactivatedClients = 0;
@@ -1665,6 +1689,7 @@ function GrowthMaturitySection({
 
         for (const s of c.services) {
           addMix(mix, attributeServiceMix(c.status, s.amount, s.priorYearAmount, s.hadCategoryBefore));
+          addMix(actualMix, attributeServiceMix(c.status, s.actualAmount, s.actualPriorYearAmount, s.hadCategoryBefore));
         }
       }
 
@@ -1677,15 +1702,19 @@ function GrowthMaturitySection({
       return {
         year: y,
         mix,
+        actualMix,
         acquisition,
         activeClients,
         newClients,
         reactivatedClients,
         existingClients,
         expandingClients,
-        churned: churn?.churned ?? 0,
+        churned: Math.max(0, (churn?.churned ?? 0) - (includeScheduled ? churn?.scheduledRetained ?? 0 : 0)),
         enteringBase: churn?.enteringBase ?? 0,
-        churnRate: churn && churn.enteringBase > 0 ? (churn.churned / churn.enteringBase) * 100 : null,
+        churnRate:
+          churn && churn.enteringBase > 0
+            ? (Math.max(0, churn.churned - (includeScheduled ? churn.scheduledRetained : 0)) / churn.enteringBase) * 100
+            : null,
         avgRevenuePerClient: activeClients > 0 ? mix.totalAmount / activeClients : 0,
         top10ConcentrationPct: mix.totalAmount > 0 ? (top10 / mix.totalAmount) * 100 : null,
         grossRetentionPct: priorYearFromReturning > 0 ? (retainedFromReturning / priorYearFromReturning) * 100 : null,
@@ -1695,7 +1724,7 @@ function GrowthMaturitySection({
         expansionPct: mixPct(mix.expansionAmount, mix.totalAmount),
       };
     });
-  }, [years, clientsByYear, growthChurn]);
+  }, [years, clientsByYear, growthChurn, includeScheduled]);
 
   const selectedSummary = yearSummaries.find((s) => s.year === selectedYear) ?? yearSummaries[yearSummaries.length - 1];
 
@@ -1708,26 +1737,28 @@ function GrowthMaturitySection({
       newClients: number;
       existingClients: number;
       expandingClients: number;
+      predicted: boolean;
     };
 
     if (view === "category") {
       // Roll up to category using category totals so recurrent/expansion aren't
       // distorted by splitting prior-year spend across service classes.
-      const catClient = new Map<string, Array<{ status: GrowthClientYearFact["status"]; amount: number; prior: number; hadBefore: boolean; clientId: string }>>();
+      const catClient = new Map<string, Array<{ status: GrowthClientYearFact["status"]; amount: number; prior: number; hadBefore: boolean; clientId: string; predicted: boolean }>>();
       for (const [, c] of clientsByYear) {
         if (c.year !== selectedYear) continue;
-        const byCat = new Map<string, { amount: number; prior: number; hadBefore: boolean }>();
+        const byCat = new Map<string, { amount: number; prior: number; hadBefore: boolean; predicted: boolean }>();
         for (const s of c.services) {
-          const prev = byCat.get(s.category) ?? { amount: 0, prior: 0, hadBefore: false };
+          const prev = byCat.get(s.category) ?? { amount: 0, prior: 0, hadBefore: false, predicted: false };
           prev.amount += s.amount;
           prev.prior += s.priorYearAmount;
           prev.hadBefore = prev.hadBefore || s.hadCategoryBefore;
+          prev.predicted = prev.predicted || s.amount > s.actualAmount;
           byCat.set(s.category, prev);
         }
         for (const [cat, v] of byCat) {
           if (v.amount <= 0) continue;
           const list = catClient.get(cat) ?? [];
-          list.push({ status: c.status, amount: v.amount, prior: v.prior, hadBefore: v.hadBefore, clientId: c.clientId });
+          list.push({ status: c.status, amount: v.amount, prior: v.prior, hadBefore: v.hadBefore, clientId: c.clientId, predicted: v.predicted });
           catClient.set(cat, list);
         }
       }
@@ -1756,6 +1787,7 @@ function GrowthMaturitySection({
           newClients: newSet.size,
           existingClients: existingSet.size,
           expandingClients: expandingSet.size,
+          predicted: list.some((item) => item.predicted),
         });
       }
       return rows.filter((r) => r.totalAmount > 0).sort((a, b) => b.totalAmount - a.totalAmount);
@@ -1776,12 +1808,14 @@ function GrowthMaturitySection({
           newClients: 0,
           existingClients: 0,
           expandingClients: 0,
+          predicted: false,
           clients: new Set<string>(),
           newSet: new Set<string>(),
           existingSet: new Set<string>(),
           expandingSet: new Set<string>(),
         };
         addMix(row, attributeServiceMix(c.status, s.amount, s.priorYearAmount, s.hadCategoryBefore));
+        row.predicted = row.predicted || s.amount > s.actualAmount;
         row.clients.add(c.clientId);
         if (c.status === "new" || c.status === "reactivated") row.newSet.add(c.clientId);
         else {
@@ -1807,6 +1841,7 @@ function GrowthMaturitySection({
         newClients: r.newSet.size,
         existingClients: r.existingSet.size,
         expandingClients: r.expandingSet.size,
+        predicted: r.predicted,
       }))
       .filter((r) => r.totalAmount > 0)
       .sort((a, b) => b.totalAmount - a.totalAmount);
@@ -1814,10 +1849,14 @@ function GrowthMaturitySection({
 
   const chartData = yearSummaries.map((s) => ({
     label: String(s.year),
-    New: Math.round(s.mix.newAmount),
-    Reactivated: Math.round(s.mix.reactivatedAmount),
-    Recurrent: Math.round(s.mix.recurrentAmount),
-    Expansion: Math.round(s.mix.expansionAmount),
+    "New · invoiced": Math.round(s.actualMix.newAmount),
+    "New · predicted": Math.max(0, Math.round(s.mix.newAmount - s.actualMix.newAmount)),
+    "Reactivated · invoiced": Math.round(s.actualMix.reactivatedAmount),
+    "Reactivated · predicted": Math.max(0, Math.round(s.mix.reactivatedAmount - s.actualMix.reactivatedAmount)),
+    "Recurrent · invoiced": Math.round(s.actualMix.recurrentAmount),
+    "Recurrent · predicted": Math.max(0, Math.round(s.mix.recurrentAmount - s.actualMix.recurrentAmount)),
+    "Expansion · invoiced": Math.round(s.actualMix.expansionAmount),
+    "Expansion · predicted": Math.max(0, Math.round(s.mix.expansionAmount - s.actualMix.expansionAmount)),
     total: Math.round(s.mix.totalAmount),
   }));
 
@@ -1877,9 +1916,13 @@ function GrowthMaturitySection({
       <Card>
         <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="space-y-1">
-            <CardTitle>Growth maturity · new / recurrent / expansion</CardTitle>
+            <div className="flex flex-wrap items-center gap-3">
+              <CardTitle>Growth maturity · new / recurrent / expansion</CardTitle>
+              {includeScheduled && <PredictedLegend active />}
+            </div>
             <p className="max-w-3xl text-xs text-muted-foreground">
-              Issued invoices only. A client is <span className="font-medium text-foreground">active</span> if they were invoiced in the{" "}
+              {includeScheduled ? "Issued and predicted scheduled revenue." : "Issued invoices only."} A client is{" "}
+              <span className="font-medium text-foreground">active</span> if they were invoiced in the{" "}
               <span className="font-medium text-foreground">{activeMonths} months</span> before their first invoice in the year.
               New = first-time clients · Reactivated = returned after a gap · Recurrent = existing clients up to prior-year spend ·
               Expansion = spend above prior year (cross-sell when the service category is new to them). Use this mix as the baseline for sales targets.
@@ -1914,7 +1957,11 @@ function GrowthMaturitySection({
         <CardContent className="space-y-6">
           {selectedSummary && (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
-              <GrowthKpi label="Total invoiced" value={money(selectedSummary.mix.totalAmount, reporting)} hint={`${selectedSummary.activeClients} clients`} />
+              <GrowthKpi
+                label={includeScheduled ? "Total · invoiced + predicted" : "Total invoiced"}
+                value={money(selectedSummary.mix.totalAmount, reporting)}
+                hint={`${selectedSummary.activeClients} clients`}
+              />
               <GrowthKpi
                 label="Acquisition"
                 value={money(selectedSummary.acquisition, reporting)}
@@ -1962,15 +2009,20 @@ function GrowthMaturitySection({
               <div className="mb-2 text-sm font-medium">Revenue mix by year</div>
               <ResponsiveContainer width="100%" height={280}>
                 <BarChart data={chartData} margin={{ left: 4, right: 8 }}>
+                  <ChartDefs />
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
                   <XAxis dataKey="label" tick={{ fontSize: 11, fill: "var(--muted-foreground)" }} />
                   <YAxis tickFormatter={(v) => compactMoney(Number(v), reporting)} width={64} tick={{ fontSize: 11, fill: "var(--muted-foreground)" }} />
                   <Tooltip content={(p) => <ChartTooltip {...p} currency={reporting} />} cursor={{ fill: "var(--accent)" }} />
                   <Legend wrapperStyle={{ fontSize: 12 }} />
-                  <Bar dataKey="New" stackId="mix" fill="var(--chart-2)" radius={[0, 0, 0, 0]} />
-                  <Bar dataKey="Reactivated" stackId="mix" fill="var(--chart-4)" />
-                  <Bar dataKey="Recurrent" stackId="mix" fill="var(--chart-1)" />
-                  <Bar dataKey="Expansion" stackId="mix" fill="var(--chart-3)" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="New · invoiced" name="New" stackId="mix" fill="var(--chart-2)" />
+                  {includeScheduled && <Bar dataKey="New · predicted" name="New predicted" legendType="none" stackId="mix" fill="url(#predicted-hatch)" stroke="var(--chart-2)" strokeDasharray="3 2" />}
+                  <Bar dataKey="Reactivated · invoiced" name="Reactivated" stackId="mix" fill="var(--chart-4)" />
+                  {includeScheduled && <Bar dataKey="Reactivated · predicted" name="Reactivated predicted" legendType="none" stackId="mix" fill="url(#predicted-hatch)" stroke="var(--chart-4)" strokeDasharray="3 2" />}
+                  <Bar dataKey="Recurrent · invoiced" name="Recurrent" stackId="mix" fill="var(--chart-1)" />
+                  {includeScheduled && <Bar dataKey="Recurrent · predicted" name="Recurrent predicted" legendType="none" stackId="mix" fill="url(#predicted-hatch)" stroke="var(--chart-1)" strokeDasharray="3 2" />}
+                  <Bar dataKey="Expansion · invoiced" name="Expansion" stackId="mix" fill="var(--chart-3)" radius={includeScheduled ? undefined : [4, 4, 0, 0]} />
+                  {includeScheduled && <Bar dataKey="Expansion · predicted" name="Expansion predicted" legendType="none" stackId="mix" fill="url(#predicted-hatch)" stroke="var(--chart-3)" strokeDasharray="3 2" radius={[4, 4, 0, 0]} />}
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -2087,7 +2139,13 @@ function GrowthMaturitySection({
                     {view === "class" && (
                       <td className="px-2 py-1.5 text-left text-muted-foreground">{r.serviceClass}</td>
                     )}
-                    <td className="px-2 py-1.5 font-semibold">{compactMoney(r.totalAmount, reporting)}</td>
+                    <td
+                      className="rounded px-2 py-1.5 font-semibold"
+                      style={r.predicted ? { outline: "1px dashed var(--chart-4)", outlineOffset: "-1px" } : undefined}
+                      title={r.predicted ? "Includes predicted scheduled revenue" : undefined}
+                    >
+                      {compactMoney(r.totalAmount, reporting)}
+                    </td>
                     <td className="px-2 py-1.5">{compactMoney(acq, reporting)}</td>
                     <td className="px-2 py-1.5 text-muted-foreground">{fmtPct(mixPct(acq, r.totalAmount), 0)}</td>
                     <td className="px-2 py-1.5">{compactMoney(r.recurrentAmount, reporting)}</td>

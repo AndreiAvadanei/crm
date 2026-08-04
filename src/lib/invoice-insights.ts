@@ -127,13 +127,15 @@ export type DueInvoice = {
  */
 export type GrowthClientStatus = "new" | "reactivated" | "existing";
 
-/** Per-service revenue for one client × year × currency (issued only). */
+/** Per-service issued and scheduled revenue for one client × year × currency. */
 export type GrowthClientServiceFact = {
   category: string;
   serviceClass: string;
   amount: number;
+  scheduled: number;
   /** Same category+class revenue in the prior calendar year (same currency). */
   priorYearAmount: number;
+  priorYearScheduled: number;
   /** True if this client had any prior-year revenue in this category. */
   hadCategoryBefore: boolean;
 };
@@ -148,9 +150,11 @@ export type GrowthClientYearFact = {
   year: number;
   currency: string;
   amount: number;
+  scheduled: number;
   status: GrowthClientStatus;
   /** Total revenue (all services) for this client in the prior calendar year. */
   priorYearAmount: number;
+  priorYearScheduled: number;
   services: GrowthClientServiceFact[];
 };
 
@@ -161,6 +165,8 @@ export type GrowthChurnYear = {
   enteringBase: number;
   /** Entering-base clients with zero issued invoices during the year. */
   churned: number;
+  /** Churned clients that do have a scheduled invoice during the year. */
+  scheduledRetained: number;
 };
 
 export type InvoiceInsights = {
@@ -321,7 +327,7 @@ function addMonthsUtc(date: Date, months: number): Date {
 }
 
 /**
- * Build growth-mix facts from issued invoices only.
+ * Build growth-mix facts from issued and scheduled invoices.
  *
  * For each client × calendar year, status is measured from that client's first
  * invoice date in the year against the prior 18 months:
@@ -340,6 +346,9 @@ function buildGrowthFacts(rows: InvoiceInsightInput[]): {
   const issued = rows
     .filter((row): row is Issued => !!row.issueDate)
     .sort((a, b) => a.issueDate.getTime() - b.issueDate.getTime());
+  const dated = rows
+    .filter((row) => effectiveDate(row))
+    .sort((a, b) => effectiveDate(a)!.getTime() - effectiveDate(b)!.getTime());
 
   // clientId -> sorted unique issue timestamps (ms)
   const issueTimesByClient = new Map<string, number[]>();
@@ -352,36 +361,46 @@ function buildGrowthFacts(rows: InvoiceInsightInput[]): {
     issueTimesByClient.set(row.organizationId, list);
   }
 
-  // client|year|currency|category|class -> amount
+  for (const row of dated) nameByClient.set(row.organizationId, row.organizationName);
+
+  // client|year|currency|category|class -> issued/scheduled amount
   const serviceAmount = new Map<string, number>();
-  // client|year|currency -> total
+  const serviceScheduled = new Map<string, number>();
+  // client|year|currency -> issued/scheduled total
   const yearAmount = new Map<string, number>();
-  // client|year -> earliest issue date in that year
+  const yearScheduled = new Map<string, number>();
+  // client|year -> earliest issued or expected date in that year
   const firstInYear = new Map<string, Date>();
   // client|currency|category -> sorted years with revenue (for cross-sell checks)
   const categoryYears = new Map<string, number[]>();
 
-  for (const row of issued) {
-    const y = year(row.issueDate);
+  for (const row of dated) {
+    const d = effectiveDate(row)!;
+    const y = year(d);
+    const scheduled = isScheduled(row);
     const cyKey = `${row.organizationId}|${y}`;
     const prev = firstInYear.get(cyKey);
-    if (!prev || row.issueDate < prev) firstInYear.set(cyKey, row.issueDate);
+    if (!prev || d < prev) firstInYear.set(cyKey, d);
 
     const totalKey = `${row.organizationId}|${y}|${row.currency}`;
-    yearAmount.set(totalKey, (yearAmount.get(totalKey) ?? 0) + netAmount(row));
+    const totalMap = scheduled ? yearScheduled : yearAmount;
+    totalMap.set(totalKey, (totalMap.get(totalKey) ?? 0) + netAmount(row));
 
     for (const seg of categorySegments(row)) {
       const sKey = `${row.organizationId}|${y}|${row.currency}|${seg.category}|${seg.serviceClass}`;
-      serviceAmount.set(sKey, (serviceAmount.get(sKey) ?? 0) + seg.amount);
+      const serviceMap = scheduled ? serviceScheduled : serviceAmount;
+      serviceMap.set(sKey, (serviceMap.get(sKey) ?? 0) + seg.amount);
 
-      const catKey = `${row.organizationId}|${row.currency}|${seg.category}`;
-      const yearsList = categoryYears.get(catKey) ?? [];
-      if (yearsList[yearsList.length - 1] !== y) {
-        // Insert sorted unique year.
-        let i = yearsList.length - 1;
-        while (i >= 0 && yearsList[i] > y) i--;
-        if (i < 0 || yearsList[i] !== y) yearsList.splice(i + 1, 0, y);
-        categoryYears.set(catKey, yearsList);
+      // Only issued revenue establishes that a category has actually been bought.
+      if (!scheduled) {
+        const catKey = `${row.organizationId}|${row.currency}|${seg.category}`;
+        const yearsList = categoryYears.get(catKey) ?? [];
+        if (yearsList[yearsList.length - 1] !== y) {
+          let i = yearsList.length - 1;
+          while (i >= 0 && yearsList[i] > y) i--;
+          if (i < 0 || yearsList[i] !== y) yearsList.splice(i + 1, 0, y);
+          categoryYears.set(catKey, yearsList);
+        }
       }
     }
   }
@@ -406,31 +425,42 @@ function buildGrowthFacts(rows: InvoiceInsightInput[]): {
   }
 
   const growthClients: GrowthClientYearFact[] = [];
-  for (const [totalKey, amount] of yearAmount) {
-    if (amount <= 0) continue;
+  const totalKeys = new Set([...yearAmount.keys(), ...yearScheduled.keys()]);
+  for (const totalKey of totalKeys) {
+    const amount = yearAmount.get(totalKey) ?? 0;
+    const scheduled = yearScheduled.get(totalKey) ?? 0;
+    if (amount <= 0 && scheduled <= 0) continue;
     const [clientId, yearStr, currency] = totalKey.split("|");
     const y = Number(yearStr);
     const firstDate = firstInYear.get(`${clientId}|${y}`);
     if (!firstDate) continue;
     const status = classify(clientId, firstDate);
     const priorYearAmount = yearAmount.get(`${clientId}|${y - 1}|${currency}`) ?? 0;
+    const priorYearScheduled = yearScheduled.get(`${clientId}|${y - 1}|${currency}`) ?? 0;
 
     const services: GrowthClientServiceFact[] = [];
     const prefix = `${clientId}|${y}|${currency}|`;
-    for (const [sKey, amt] of serviceAmount) {
-      if (!sKey.startsWith(prefix) || amt <= 0) continue;
+    const serviceKeys = new Set([...serviceAmount.keys(), ...serviceScheduled.keys()]);
+    for (const sKey of serviceKeys) {
+      if (!sKey.startsWith(prefix)) continue;
+      const amt = serviceAmount.get(sKey) ?? 0;
+      const sched = serviceScheduled.get(sKey) ?? 0;
+      if (amt <= 0 && sched <= 0) continue;
       const rest = sKey.slice(prefix.length);
       const sep = rest.indexOf("|");
       const category = rest.slice(0, sep);
       const serviceClass = rest.slice(sep + 1);
       const priorYearService = serviceAmount.get(`${clientId}|${y - 1}|${currency}|${category}|${serviceClass}`) ?? 0;
+      const priorYearServiceScheduled = serviceScheduled.get(`${clientId}|${y - 1}|${currency}|${category}|${serviceClass}`) ?? 0;
       const catYears = categoryYears.get(`${clientId}|${currency}|${category}`) ?? [];
       const hadCategoryBefore = catYears.some((py) => py < y);
       services.push({
         category,
         serviceClass,
         amount: amt,
+        scheduled: sched,
         priorYearAmount: priorYearService,
+        priorYearScheduled: priorYearServiceScheduled,
         hadCategoryBefore,
       });
     }
@@ -441,8 +471,10 @@ function buildGrowthFacts(rows: InvoiceInsightInput[]): {
       year: y,
       currency,
       amount,
+      scheduled,
       status,
       priorYearAmount,
+      priorYearScheduled,
       services,
     });
   }
@@ -459,6 +491,7 @@ function buildGrowthFacts(rows: InvoiceInsightInput[]): {
     const endMs = yearEnd.getTime();
     let enteringBase = 0;
     let churned = 0;
+    let scheduledRetained = 0;
     for (const clientId of allClientIds) {
       const times = issueTimesByClient.get(clientId)!;
       let inEntering = false;
@@ -470,9 +503,19 @@ function buildGrowthFacts(rows: InvoiceInsightInput[]): {
       }
       if (!inEntering) continue;
       enteringBase += 1;
-      if (!invoicedInYear) churned += 1;
+      if (!invoicedInYear) {
+        churned += 1;
+        const hasScheduled = dated.some(
+          (row) =>
+            row.organizationId === clientId &&
+            isScheduled(row) &&
+            effectiveDate(row)!.getTime() >= startMs &&
+            effectiveDate(row)!.getTime() < endMs
+        );
+        if (hasScheduled) scheduledRetained += 1;
+      }
     }
-    growthChurn.push({ year: y, enteringBase, churned });
+    growthChurn.push({ year: y, enteringBase, churned, scheduledRetained });
   }
 
   return { growthClients, growthChurn };
