@@ -118,6 +118,51 @@ export type DueInvoice = {
   services: string | null;
 };
 
+/**
+ * Client status for a calendar year, based on the 18-month activity window
+ * measured from that client's first invoice date in the year:
+ * - new: never invoiced before
+ * - reactivated: had history, but nothing in the prior 18 months
+ * - existing: invoiced within the prior 18 months (active client)
+ */
+export type GrowthClientStatus = "new" | "reactivated" | "existing";
+
+/** Per-service revenue for one client × year × currency (issued only). */
+export type GrowthClientServiceFact = {
+  category: string;
+  serviceClass: string;
+  amount: number;
+  /** Same category+class revenue in the prior calendar year (same currency). */
+  priorYearAmount: number;
+  /** True if this client had any prior-year revenue in this category. */
+  hadCategoryBefore: boolean;
+};
+
+/**
+ * One client × year × currency fact for growth-mix analysis. The client rolls
+ * these up (with FX conversion) into year summaries and service×year tables.
+ */
+export type GrowthClientYearFact = {
+  clientId: string;
+  clientName: string;
+  year: number;
+  currency: string;
+  amount: number;
+  status: GrowthClientStatus;
+  /** Total revenue (all services) for this client in the prior calendar year. */
+  priorYearAmount: number;
+  services: GrowthClientServiceFact[];
+};
+
+/** Churn / base size for a calendar year (currency-agnostic client counts). */
+export type GrowthChurnYear = {
+  year: number;
+  /** Clients with ≥1 issued invoice in the 18 months ending at year-start. */
+  enteringBase: number;
+  /** Entering-base clients with zero issued invoices during the year. */
+  churned: number;
+};
+
 export type InvoiceInsights = {
   generatedAt: Date;
   currentYear: number;
@@ -135,6 +180,10 @@ export type InvoiceInsights = {
   categoryMonthly: CategoryMonthCell[];
   classYearly: ClassYearCell[];
   dueInvoices: DueInvoice[];
+  growthClients: GrowthClientYearFact[];
+  growthChurn: GrowthChurnYear[];
+  /** Lookback window (months) used to decide whether a client is "active". */
+  growthActiveMonths: number;
 };
 
 type InvoiceInsightInput = {
@@ -260,6 +309,173 @@ function semester(date: Date): number {
 
 function pct(delta: number, base: number): number | null {
   return base === 0 ? null : (delta / base) * 100;
+}
+
+/** Months used to decide whether a client is still "active" at an invoice date. */
+const GROWTH_ACTIVE_MONTHS = 18;
+
+function addMonthsUtc(date: Date, months: number): Date {
+  const d = new Date(date.getTime());
+  d.setUTCMonth(d.getUTCMonth() + months);
+  return d;
+}
+
+/**
+ * Build growth-mix facts from issued invoices only.
+ *
+ * For each client × calendar year, status is measured from that client's first
+ * invoice date in the year against the prior 18 months:
+ * - new / reactivated → all of that year's revenue is acquisition
+ * - existing → per service, min(current, prior-year) is recurrent and the rest
+ *   is expansion (cross-sell when the category is new to the client)
+ *
+ * Churn counts clients who were active entering the year (invoice in the prior
+ * 18 months) but received no invoice during the year.
+ */
+function buildGrowthFacts(rows: InvoiceInsightInput[]): {
+  growthClients: GrowthClientYearFact[];
+  growthChurn: GrowthChurnYear[];
+} {
+  type Issued = InvoiceInsightInput & { issueDate: Date };
+  const issued = rows
+    .filter((row): row is Issued => !!row.issueDate)
+    .sort((a, b) => a.issueDate.getTime() - b.issueDate.getTime());
+
+  // clientId -> sorted unique issue timestamps (ms)
+  const issueTimesByClient = new Map<string, number[]>();
+  const nameByClient = new Map<string, string>();
+  for (const row of issued) {
+    nameByClient.set(row.organizationId, row.organizationName);
+    const list = issueTimesByClient.get(row.organizationId) ?? [];
+    const t = row.issueDate.getTime();
+    if (list.length === 0 || list[list.length - 1] !== t) list.push(t);
+    issueTimesByClient.set(row.organizationId, list);
+  }
+
+  // client|year|currency|category|class -> amount
+  const serviceAmount = new Map<string, number>();
+  // client|year|currency -> total
+  const yearAmount = new Map<string, number>();
+  // client|year -> earliest issue date in that year
+  const firstInYear = new Map<string, Date>();
+  // client|currency|category -> sorted years with revenue (for cross-sell checks)
+  const categoryYears = new Map<string, number[]>();
+
+  for (const row of issued) {
+    const y = year(row.issueDate);
+    const cyKey = `${row.organizationId}|${y}`;
+    const prev = firstInYear.get(cyKey);
+    if (!prev || row.issueDate < prev) firstInYear.set(cyKey, row.issueDate);
+
+    const totalKey = `${row.organizationId}|${y}|${row.currency}`;
+    yearAmount.set(totalKey, (yearAmount.get(totalKey) ?? 0) + netAmount(row));
+
+    for (const seg of categorySegments(row)) {
+      const sKey = `${row.organizationId}|${y}|${row.currency}|${seg.category}|${seg.serviceClass}`;
+      serviceAmount.set(sKey, (serviceAmount.get(sKey) ?? 0) + seg.amount);
+
+      const catKey = `${row.organizationId}|${row.currency}|${seg.category}`;
+      const yearsList = categoryYears.get(catKey) ?? [];
+      if (yearsList[yearsList.length - 1] !== y) {
+        // Insert sorted unique year.
+        let i = yearsList.length - 1;
+        while (i >= 0 && yearsList[i] > y) i--;
+        if (i < 0 || yearsList[i] !== y) yearsList.splice(i + 1, 0, y);
+        categoryYears.set(catKey, yearsList);
+      }
+    }
+  }
+
+  function classify(clientId: string, firstDate: Date): GrowthClientStatus {
+    const times = issueTimesByClient.get(clientId) ?? [];
+    const t0 = firstDate.getTime();
+    const windowStart = addMonthsUtc(firstDate, -GROWTH_ACTIVE_MONTHS).getTime();
+    let hadAnyPrior = false;
+    let hadInWindow = false;
+    for (const t of times) {
+      if (t >= t0) break;
+      hadAnyPrior = true;
+      if (t >= windowStart) {
+        hadInWindow = true;
+        break;
+      }
+    }
+    if (!hadAnyPrior) return "new";
+    if (!hadInWindow) return "reactivated";
+    return "existing";
+  }
+
+  const growthClients: GrowthClientYearFact[] = [];
+  for (const [totalKey, amount] of yearAmount) {
+    if (amount <= 0) continue;
+    const [clientId, yearStr, currency] = totalKey.split("|");
+    const y = Number(yearStr);
+    const firstDate = firstInYear.get(`${clientId}|${y}`);
+    if (!firstDate) continue;
+    const status = classify(clientId, firstDate);
+    const priorYearAmount = yearAmount.get(`${clientId}|${y - 1}|${currency}`) ?? 0;
+
+    const services: GrowthClientServiceFact[] = [];
+    const prefix = `${clientId}|${y}|${currency}|`;
+    for (const [sKey, amt] of serviceAmount) {
+      if (!sKey.startsWith(prefix) || amt <= 0) continue;
+      const rest = sKey.slice(prefix.length);
+      const sep = rest.indexOf("|");
+      const category = rest.slice(0, sep);
+      const serviceClass = rest.slice(sep + 1);
+      const priorYearService = serviceAmount.get(`${clientId}|${y - 1}|${currency}|${category}|${serviceClass}`) ?? 0;
+      const catYears = categoryYears.get(`${clientId}|${currency}|${category}`) ?? [];
+      const hadCategoryBefore = catYears.some((py) => py < y);
+      services.push({
+        category,
+        serviceClass,
+        amount: amt,
+        priorYearAmount: priorYearService,
+        hadCategoryBefore,
+      });
+    }
+
+    growthClients.push({
+      clientId,
+      clientName: nameByClient.get(clientId) ?? "—",
+      year: y,
+      currency,
+      amount,
+      status,
+      priorYearAmount,
+      services,
+    });
+  }
+
+  // Churn: active entering year (invoice in prior 18 months) but silent all year.
+  const years = Array.from(new Set(Array.from(firstInYear.keys()).map((k) => Number(k.split("|")[1])))).sort((a, b) => a - b);
+  const allClientIds = Array.from(issueTimesByClient.keys());
+  const growthChurn: GrowthChurnYear[] = [];
+  for (const y of years) {
+    const yearStart = new Date(Date.UTC(y, 0, 1));
+    const yearEnd = new Date(Date.UTC(y + 1, 0, 1));
+    const windowStart = addMonthsUtc(yearStart, -GROWTH_ACTIVE_MONTHS).getTime();
+    const startMs = yearStart.getTime();
+    const endMs = yearEnd.getTime();
+    let enteringBase = 0;
+    let churned = 0;
+    for (const clientId of allClientIds) {
+      const times = issueTimesByClient.get(clientId)!;
+      let inEntering = false;
+      let invoicedInYear = false;
+      for (const t of times) {
+        if (t >= windowStart && t < startMs) inEntering = true;
+        if (t >= startMs && t < endMs) invoicedInYear = true;
+        if (t >= endMs) break;
+      }
+      if (!inEntering) continue;
+      enteringBase += 1;
+      if (!invoicedInYear) churned += 1;
+    }
+    growthChurn.push({ year: y, enteringBase, churned });
+  }
+
+  return { growthClients, growthChurn };
 }
 
 // A scheduled invoice has no issue date yet but a planned/expected one. Its
@@ -544,6 +760,8 @@ export async function getInvoiceInsights(user: User, opts: { currency?: string |
     })
     .filter((d) => d.amount > 0);
 
+  const { growthClients, growthChurn } = buildGrowthFacts(allRows);
+
   return {
     generatedAt: now,
     currentYear,
@@ -561,5 +779,8 @@ export async function getInvoiceInsights(user: User, opts: { currency?: string |
     categoryMonthly: Array.from(categoryMap.values()),
     classYearly: Array.from(classMap.values()),
     dueInvoices,
+    growthClients,
+    growthChurn,
+    growthActiveMonths: GROWTH_ACTIVE_MONTHS,
   };
 }

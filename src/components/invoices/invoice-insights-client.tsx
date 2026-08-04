@@ -26,6 +26,8 @@ import type {
   CurrencySummary,
   DueInvoice,
   ForecastBucket,
+  GrowthChurnYear,
+  GrowthClientYearFact,
   MonthComparison,
   PeriodBucket,
   YearMonthCell,
@@ -49,6 +51,9 @@ export type InsightsData = {
   categoryMonthly: CategoryMonthCell[];
   classYearly: ClassYearCell[];
   dueInvoices: DueInvoice[];
+  growthClients: GrowthClientYearFact[];
+  growthChurn: GrowthChurnYear[];
+  growthActiveMonths: number;
 };
 
 // Approximate value of one unit of each currency expressed in EUR. Used as the
@@ -532,6 +537,15 @@ export function InvoiceInsightsClient({ data }: { data: InsightsData }) {
       <CategoryYearMatrix categoryMonthly={data.categoryMonthly} convert={convert} reporting={reporting} currentYear={data.currentYear} includeScheduled={includeScheduled} />
 
       <ClassYearMatrix classYearly={data.classYearly} convert={convert} reporting={reporting} currentYear={data.currentYear} includeScheduled={includeScheduled} />
+
+      <GrowthMaturitySection
+        growthClients={data.growthClients}
+        growthChurn={data.growthChurn}
+        activeMonths={data.growthActiveMonths}
+        convert={convert}
+        reporting={reporting}
+        currentYear={data.currentYear}
+      />
 
       <CategoryMonthlyMatrix categoryMonthly={data.categoryMonthly} convert={convert} reporting={reporting} currentYear={data.currentYear} includeScheduled={includeScheduled} />
 
@@ -1465,6 +1479,685 @@ function ClassYearMatrix({
         </table>
       </CardContent>
     </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Growth maturity — new / recurrent / expansion mix for sales-target baselining.
+// Issued invoices only. A client is "active" if invoiced in the prior N months
+// measured from their first invoice date in the year under review.
+// ---------------------------------------------------------------------------
+
+type MixAmounts = {
+  newAmount: number;
+  reactivatedAmount: number;
+  recurrentAmount: number;
+  expansionAmount: number;
+  crossSellAmount: number;
+  totalAmount: number;
+};
+
+function emptyMix(): MixAmounts {
+  return { newAmount: 0, reactivatedAmount: 0, recurrentAmount: 0, expansionAmount: 0, crossSellAmount: 0, totalAmount: 0 };
+}
+
+function addMix(target: MixAmounts, add: MixAmounts) {
+  target.newAmount += add.newAmount;
+  target.reactivatedAmount += add.reactivatedAmount;
+  target.recurrentAmount += add.recurrentAmount;
+  target.expansionAmount += add.expansionAmount;
+  target.crossSellAmount += add.crossSellAmount;
+  target.totalAmount += add.totalAmount;
+}
+
+/** Attribute one service line's revenue into the growth-mix buckets. */
+function attributeServiceMix(
+  status: GrowthClientYearFact["status"],
+  amount: number,
+  priorYearAmount: number,
+  hadCategoryBefore: boolean
+): MixAmounts {
+  const mix = emptyMix();
+  mix.totalAmount = amount;
+  if (status === "new") {
+    mix.newAmount = amount;
+  } else if (status === "reactivated") {
+    mix.reactivatedAmount = amount;
+  } else {
+    const recurrent = Math.min(amount, priorYearAmount);
+    const expansion = Math.max(0, amount - priorYearAmount);
+    mix.recurrentAmount = recurrent;
+    mix.expansionAmount = expansion;
+    if (!hadCategoryBefore) mix.crossSellAmount = amount;
+  }
+  return mix;
+}
+
+function mixPct(part: number, total: number): number | null {
+  return total <= 0 ? null : (part / total) * 100;
+}
+
+function fmtPct(value: number | null, digits = 0): string {
+  if (value == null) return "—";
+  return `${value.toFixed(digits)}%`;
+}
+
+function GrowthMaturitySection({
+  growthClients,
+  growthChurn,
+  activeMonths,
+  convert,
+  reporting,
+  currentYear,
+}: {
+  growthClients: GrowthClientYearFact[];
+  growthChurn: GrowthChurnYear[];
+  activeMonths: number;
+  convert: Convert;
+  reporting: string;
+  currentYear: number;
+}) {
+  const [selectedYear, setSelectedYear] = React.useState<number>(currentYear);
+  const [view, setView] = React.useState<"category" | "class">("category");
+
+  const years = React.useMemo(() => {
+    const set = new Set<number>();
+    for (const c of growthClients) if (c.amount > 0) set.add(c.year);
+    return Array.from(set).sort((a, b) => a - b);
+  }, [growthClients]);
+
+  React.useEffect(() => {
+    if (years.length && !years.includes(selectedYear)) {
+      setSelectedYear(years.includes(currentYear) ? currentYear : years[years.length - 1]);
+    }
+  }, [years, selectedYear, currentYear]);
+
+  // Merge multi-currency rows per client×year (converted), keeping one status.
+  const clientsByYear = React.useMemo(() => {
+    type ClientAgg = {
+      clientId: string;
+      clientName: string;
+      year: number;
+      amount: number;
+      priorYearAmount: number;
+      status: GrowthClientYearFact["status"];
+      services: Array<{
+        category: string;
+        serviceClass: string;
+        amount: number;
+        priorYearAmount: number;
+        hadCategoryBefore: boolean;
+      }>;
+    };
+    const map = new Map<string, ClientAgg>();
+    for (const fact of growthClients) {
+      const key = `${fact.clientId}|${fact.year}`;
+      const agg = map.get(key) ?? {
+        clientId: fact.clientId,
+        clientName: fact.clientName,
+        year: fact.year,
+        amount: 0,
+        priorYearAmount: 0,
+        status: fact.status,
+        services: [],
+      };
+      agg.amount += convert(fact.amount, fact.currency);
+      agg.priorYearAmount += convert(fact.priorYearAmount, fact.currency);
+      // Prefer "existing" if any currency row says so (shouldn't diverge).
+      if (fact.status === "existing") agg.status = "existing";
+      else if (fact.status === "reactivated" && agg.status === "new") agg.status = "reactivated";
+
+      const svcMap = new Map(agg.services.map((s) => [`${s.category}|${s.serviceClass}`, s]));
+      for (const s of fact.services) {
+        const sk = `${s.category}|${s.serviceClass}`;
+        const prev = svcMap.get(sk);
+        if (prev) {
+          prev.amount += convert(s.amount, fact.currency);
+          prev.priorYearAmount += convert(s.priorYearAmount, fact.currency);
+          prev.hadCategoryBefore = prev.hadCategoryBefore || s.hadCategoryBefore;
+        } else {
+          svcMap.set(sk, {
+            category: s.category,
+            serviceClass: s.serviceClass,
+            amount: convert(s.amount, fact.currency),
+            priorYearAmount: convert(s.priorYearAmount, fact.currency),
+            hadCategoryBefore: s.hadCategoryBefore,
+          });
+        }
+      }
+      agg.services = Array.from(svcMap.values());
+      map.set(key, agg);
+    }
+    return map;
+  }, [growthClients, convert]);
+
+  const yearSummaries = React.useMemo(() => {
+    const churnMap = new Map(growthChurn.map((c) => [c.year, c]));
+    return years.map((y) => {
+      const mix = emptyMix();
+      const clientIds = new Set<string>();
+      let newClients = 0;
+      let reactivatedClients = 0;
+      let existingClients = 0;
+      let expandingClients = 0;
+      let priorYearFromReturning = 0;
+      let retainedFromReturning = 0;
+      let currentFromReturning = 0;
+      const revenues: number[] = [];
+
+      for (const [, c] of clientsByYear) {
+        if (c.year !== y || c.amount <= 0) continue;
+        clientIds.add(c.clientId);
+        revenues.push(c.amount);
+        if (c.status === "new") newClients += 1;
+        else if (c.status === "reactivated") reactivatedClients += 1;
+        else existingClients += 1;
+
+        if (c.status === "existing" || c.status === "reactivated") {
+          // Reactivated: prior calendar year is usually 0; still attribute via services.
+        }
+        if (c.status === "existing") {
+          priorYearFromReturning += c.priorYearAmount;
+          retainedFromReturning += Math.min(c.amount, c.priorYearAmount);
+          currentFromReturning += c.amount;
+          if (c.amount > c.priorYearAmount) expandingClients += 1;
+        }
+
+        for (const s of c.services) {
+          addMix(mix, attributeServiceMix(c.status, s.amount, s.priorYearAmount, s.hadCategoryBefore));
+        }
+      }
+
+      revenues.sort((a, b) => b - a);
+      const top10 = revenues.slice(0, 10).reduce((a, b) => a + b, 0);
+      const churn = churnMap.get(y);
+      const activeClients = clientIds.size;
+      const acquisition = mix.newAmount + mix.reactivatedAmount;
+
+      return {
+        year: y,
+        mix,
+        acquisition,
+        activeClients,
+        newClients,
+        reactivatedClients,
+        existingClients,
+        expandingClients,
+        churned: churn?.churned ?? 0,
+        enteringBase: churn?.enteringBase ?? 0,
+        churnRate: churn && churn.enteringBase > 0 ? (churn.churned / churn.enteringBase) * 100 : null,
+        avgRevenuePerClient: activeClients > 0 ? mix.totalAmount / activeClients : 0,
+        top10ConcentrationPct: mix.totalAmount > 0 ? (top10 / mix.totalAmount) * 100 : null,
+        grossRetentionPct: priorYearFromReturning > 0 ? (retainedFromReturning / priorYearFromReturning) * 100 : null,
+        netRetentionPct: priorYearFromReturning > 0 ? (currentFromReturning / priorYearFromReturning) * 100 : null,
+        newPct: mixPct(mix.newAmount + mix.reactivatedAmount, mix.totalAmount),
+        recurrentPct: mixPct(mix.recurrentAmount, mix.totalAmount),
+        expansionPct: mixPct(mix.expansionAmount, mix.totalAmount),
+      };
+    });
+  }, [years, clientsByYear, growthChurn]);
+
+  const selectedSummary = yearSummaries.find((s) => s.year === selectedYear) ?? yearSummaries[yearSummaries.length - 1];
+
+  const serviceRows = React.useMemo(() => {
+    type Row = MixAmounts & {
+      key: string;
+      category: string;
+      serviceClass: string | null;
+      clientCount: number;
+      newClients: number;
+      existingClients: number;
+      expandingClients: number;
+    };
+
+    if (view === "category") {
+      // Roll up to category using category totals so recurrent/expansion aren't
+      // distorted by splitting prior-year spend across service classes.
+      const catClient = new Map<string, Array<{ status: GrowthClientYearFact["status"]; amount: number; prior: number; hadBefore: boolean; clientId: string }>>();
+      for (const [, c] of clientsByYear) {
+        if (c.year !== selectedYear) continue;
+        const byCat = new Map<string, { amount: number; prior: number; hadBefore: boolean }>();
+        for (const s of c.services) {
+          const prev = byCat.get(s.category) ?? { amount: 0, prior: 0, hadBefore: false };
+          prev.amount += s.amount;
+          prev.prior += s.priorYearAmount;
+          prev.hadBefore = prev.hadBefore || s.hadCategoryBefore;
+          byCat.set(s.category, prev);
+        }
+        for (const [cat, v] of byCat) {
+          if (v.amount <= 0) continue;
+          const list = catClient.get(cat) ?? [];
+          list.push({ status: c.status, amount: v.amount, prior: v.prior, hadBefore: v.hadBefore, clientId: c.clientId });
+          catClient.set(cat, list);
+        }
+      }
+      const rows: Row[] = [];
+      for (const [cat, list] of catClient) {
+        const mix = emptyMix();
+        const clients = new Set<string>();
+        const newSet = new Set<string>();
+        const existingSet = new Set<string>();
+        const expandingSet = new Set<string>();
+        for (const item of list) {
+          addMix(mix, attributeServiceMix(item.status, item.amount, item.prior, item.hadBefore));
+          clients.add(item.clientId);
+          if (item.status === "new" || item.status === "reactivated") newSet.add(item.clientId);
+          else {
+            existingSet.add(item.clientId);
+            if (item.amount > item.prior) expandingSet.add(item.clientId);
+          }
+        }
+        rows.push({
+          key: cat,
+          category: cat,
+          serviceClass: null,
+          ...mix,
+          clientCount: clients.size,
+          newClients: newSet.size,
+          existingClients: existingSet.size,
+          expandingClients: expandingSet.size,
+        });
+      }
+      return rows.filter((r) => r.totalAmount > 0).sort((a, b) => b.totalAmount - a.totalAmount);
+    }
+
+    const map = new Map<string, Row & { clients: Set<string>; newSet: Set<string>; existingSet: Set<string>; expandingSet: Set<string> }>();
+    for (const [, c] of clientsByYear) {
+      if (c.year !== selectedYear) continue;
+      for (const s of c.services) {
+        if (s.amount <= 0) continue;
+        const key = `${s.category}|${s.serviceClass}`;
+        const row = map.get(key) ?? {
+          key,
+          category: s.category,
+          serviceClass: s.serviceClass,
+          ...emptyMix(),
+          clientCount: 0,
+          newClients: 0,
+          existingClients: 0,
+          expandingClients: 0,
+          clients: new Set<string>(),
+          newSet: new Set<string>(),
+          existingSet: new Set<string>(),
+          expandingSet: new Set<string>(),
+        };
+        addMix(row, attributeServiceMix(c.status, s.amount, s.priorYearAmount, s.hadCategoryBefore));
+        row.clients.add(c.clientId);
+        if (c.status === "new" || c.status === "reactivated") row.newSet.add(c.clientId);
+        else {
+          row.existingSet.add(c.clientId);
+          if (s.amount > s.priorYearAmount) row.expandingSet.add(c.clientId);
+        }
+        map.set(key, row);
+      }
+    }
+
+    return Array.from(map.values())
+      .map((r) => ({
+        key: r.key,
+        category: r.category,
+        serviceClass: r.serviceClass,
+        newAmount: r.newAmount,
+        reactivatedAmount: r.reactivatedAmount,
+        recurrentAmount: r.recurrentAmount,
+        expansionAmount: r.expansionAmount,
+        crossSellAmount: r.crossSellAmount,
+        totalAmount: r.totalAmount,
+        clientCount: r.clients.size,
+        newClients: r.newSet.size,
+        existingClients: r.existingSet.size,
+        expandingClients: r.expandingSet.size,
+      }))
+      .filter((r) => r.totalAmount > 0)
+      .sort((a, b) => b.totalAmount - a.totalAmount);
+  }, [clientsByYear, selectedYear, view]);
+
+  const chartData = yearSummaries.map((s) => ({
+    label: String(s.year),
+    New: Math.round(s.mix.newAmount),
+    Reactivated: Math.round(s.mix.reactivatedAmount),
+    Recurrent: Math.round(s.mix.recurrentAmount),
+    Expansion: Math.round(s.mix.expansionAmount),
+    total: Math.round(s.mix.totalAmount),
+  }));
+
+  const csvServiceRows = serviceRows.map((r) => {
+    const acq = r.newAmount + r.reactivatedAmount;
+    return [
+      r.category,
+      r.serviceClass ?? "",
+      selectedYear,
+      csvAmount(r.totalAmount),
+      csvAmount(acq),
+      mixPct(acq, r.totalAmount)?.toFixed(1) ?? "",
+      csvAmount(r.newAmount),
+      csvAmount(r.reactivatedAmount),
+      csvAmount(r.recurrentAmount),
+      mixPct(r.recurrentAmount, r.totalAmount)?.toFixed(1) ?? "",
+      csvAmount(r.expansionAmount),
+      mixPct(r.expansionAmount, r.totalAmount)?.toFixed(1) ?? "",
+      csvAmount(r.crossSellAmount),
+      r.clientCount,
+      r.newClients,
+      r.existingClients,
+      r.expandingClients,
+    ];
+  });
+
+  const csvYearRows = yearSummaries.map((s) => [
+    s.year,
+    csvAmount(s.mix.totalAmount),
+    csvAmount(s.mix.newAmount),
+    csvAmount(s.mix.reactivatedAmount),
+    csvAmount(s.acquisition),
+    s.newPct?.toFixed(1) ?? "",
+    csvAmount(s.mix.recurrentAmount),
+    s.recurrentPct?.toFixed(1) ?? "",
+    csvAmount(s.mix.expansionAmount),
+    s.expansionPct?.toFixed(1) ?? "",
+    csvAmount(s.mix.crossSellAmount),
+    s.activeClients,
+    s.newClients,
+    s.reactivatedClients,
+    s.existingClients,
+    s.expandingClients,
+    s.enteringBase,
+    s.churned,
+    s.churnRate?.toFixed(1) ?? "",
+    csvAmount(s.avgRevenuePerClient),
+    s.top10ConcentrationPct?.toFixed(1) ?? "",
+    s.grossRetentionPct?.toFixed(1) ?? "",
+    s.netRetentionPct?.toFixed(1) ?? "",
+  ]);
+
+  if (years.length === 0) return null;
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader className="gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="space-y-1">
+            <CardTitle>Growth maturity · new / recurrent / expansion</CardTitle>
+            <p className="max-w-3xl text-xs text-muted-foreground">
+              Issued invoices only. A client is <span className="font-medium text-foreground">active</span> if they were invoiced in the{" "}
+              <span className="font-medium text-foreground">{activeMonths} months</span> before their first invoice in the year.
+              New = first-time clients · Reactivated = returned after a gap · Recurrent = existing clients up to prior-year spend ·
+              Expansion = spend above prior year (cross-sell when the service category is new to them). Use this mix as the baseline for sales targets.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              Year
+              <select
+                value={selectedYear}
+                onChange={(e) => setSelectedYear(Number(e.target.value))}
+                className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+              >
+                {years.map((y) => (
+                  <option key={y} value={y}>{y}</option>
+                ))}
+              </select>
+            </label>
+            <CsvDownloadButton
+              filename={`growth-maturity-years-${reporting}`}
+              headers={[
+                "Year", "Total", "New", "Reactivated", "Acquisition", "Acquisition %",
+                "Recurrent", "Recurrent %", "Expansion", "Expansion %", "Cross-sell",
+                "Active clients", "New clients", "Reactivated clients", "Existing clients", "Expanding clients",
+                "Entering base", "Churned", "Churn %", "Avg revenue / client", "Top-10 concentration %",
+                "Gross retention %", "Net retention %",
+              ]}
+              rows={csvYearRows}
+            />
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          {selectedSummary && (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
+              <GrowthKpi label="Total invoiced" value={money(selectedSummary.mix.totalAmount, reporting)} hint={`${selectedSummary.activeClients} clients`} />
+              <GrowthKpi
+                label="Acquisition"
+                value={money(selectedSummary.acquisition, reporting)}
+                hint={`${fmtPct(selectedSummary.newPct, 0)} · ${selectedSummary.newClients + selectedSummary.reactivatedClients} clients`}
+                tone="new"
+              />
+              <GrowthKpi
+                label="Recurrent"
+                value={money(selectedSummary.mix.recurrentAmount, reporting)}
+                hint={fmtPct(selectedSummary.recurrentPct, 0)}
+                tone="recurrent"
+              />
+              <GrowthKpi
+                label="Expansion"
+                value={money(selectedSummary.mix.expansionAmount, reporting)}
+                hint={`${fmtPct(selectedSummary.expansionPct, 0)} · ${selectedSummary.expandingClients} expanding`}
+                tone="expansion"
+              />
+              <GrowthKpi
+                label="Gross retention"
+                value={fmtPct(selectedSummary.grossRetentionPct, 0)}
+                hint="Kept of prior-year $ from existing"
+              />
+              <GrowthKpi
+                label="Net retention"
+                value={fmtPct(selectedSummary.netRetentionPct, 0)}
+                hint="Existing clients YoY (incl. expansion)"
+              />
+              <GrowthKpi
+                label="Churned clients"
+                value={String(selectedSummary.churned)}
+                hint={selectedSummary.enteringBase > 0 ? `${fmtPct(selectedSummary.churnRate, 0)} of ${selectedSummary.enteringBase} base` : "No entering base"}
+                tone="warn"
+              />
+              <GrowthKpi
+                label="Avg / client"
+                value={money(selectedSummary.avgRevenuePerClient, reporting)}
+                hint={selectedSummary.top10ConcentrationPct != null ? `Top-10: ${fmtPct(selectedSummary.top10ConcentrationPct, 0)}` : undefined}
+              />
+            </div>
+          )}
+
+          <div className="grid gap-6 xl:grid-cols-2">
+            <div>
+              <div className="mb-2 text-sm font-medium">Revenue mix by year</div>
+              <ResponsiveContainer width="100%" height={280}>
+                <BarChart data={chartData} margin={{ left: 4, right: 8 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                  <XAxis dataKey="label" tick={{ fontSize: 11, fill: "var(--muted-foreground)" }} />
+                  <YAxis tickFormatter={(v) => compactMoney(Number(v), reporting)} width={64} tick={{ fontSize: 11, fill: "var(--muted-foreground)" }} />
+                  <Tooltip content={(p) => <ChartTooltip {...p} currency={reporting} />} cursor={{ fill: "var(--accent)" }} />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  <Bar dataKey="New" stackId="mix" fill="var(--chart-2)" radius={[0, 0, 0, 0]} />
+                  <Bar dataKey="Reactivated" stackId="mix" fill="var(--chart-4)" />
+                  <Bar dataKey="Recurrent" stackId="mix" fill="var(--chart-1)" />
+                  <Bar dataKey="Expansion" stackId="mix" fill="var(--chart-3)" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+
+            <div className="overflow-x-auto">
+              <div className="mb-2 text-sm font-medium">Year-by-year mix & client base</div>
+              <table className="w-full border-separate border-spacing-0 text-right text-xs tabular-nums">
+                <thead>
+                  <tr className="text-muted-foreground">
+                    <th className="px-2 py-2 text-left">Year</th>
+                    <th className="px-2 py-2">Total</th>
+                    <th className="px-2 py-2">Acq %</th>
+                    <th className="px-2 py-2">Rec %</th>
+                    <th className="px-2 py-2">Exp %</th>
+                    <th className="px-2 py-2">Clients</th>
+                    <th className="px-2 py-2">New</th>
+                    <th className="px-2 py-2">Churn</th>
+                    <th className="px-2 py-2">GRR</th>
+                    <th className="px-2 py-2">NRR</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {yearSummaries.map((s) => (
+                    <tr
+                      key={s.year}
+                      className={`cursor-pointer border-b hover:bg-accent/40 ${s.year === selectedYear ? "bg-accent/50 font-medium" : ""}`}
+                      onClick={() => setSelectedYear(s.year)}
+                    >
+                      <td className="px-2 py-1.5 text-left font-medium">{s.year}</td>
+                      <td className="px-2 py-1.5">{compactMoney(s.mix.totalAmount, reporting)}</td>
+                      <td className="px-2 py-1.5">{fmtPct(s.newPct, 0)}</td>
+                      <td className="px-2 py-1.5">{fmtPct(s.recurrentPct, 0)}</td>
+                      <td className="px-2 py-1.5">{fmtPct(s.expansionPct, 0)}</td>
+                      <td className="px-2 py-1.5">{s.activeClients}</td>
+                      <td className="px-2 py-1.5">{s.newClients + s.reactivatedClients}</td>
+                      <td className="px-2 py-1.5">{s.churned}</td>
+                      <td className="px-2 py-1.5">{fmtPct(s.grossRetentionPct, 0)}</td>
+                      <td className="px-2 py-1.5">{fmtPct(s.netRetentionPct, 0)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <CardTitle>
+              Service mix · {selectedYear}
+            </CardTitle>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Acquisition = new + reactivated. Cross-sell is expansion on a category the client had never bought before.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex rounded-md border border-input p-0.5 text-xs">
+              <button
+                type="button"
+                onClick={() => setView("category")}
+                className={`rounded px-2.5 py-1 ${view === "category" ? "bg-accent font-medium" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                Category
+              </button>
+              <button
+                type="button"
+                onClick={() => setView("class")}
+                className={`rounded px-2.5 py-1 ${view === "class" ? "bg-accent font-medium" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                Service class
+              </button>
+            </div>
+            <CsvDownloadButton
+              filename={`growth-maturity-services-${selectedYear}-${reporting}`}
+              headers={[
+                "Category", "Service class", "Year", "Total",
+                "Acquisition", "Acquisition %", "New", "Reactivated",
+                "Recurrent", "Recurrent %", "Expansion", "Expansion %", "Cross-sell",
+                "Clients", "New/reactivated clients", "Existing clients", "Expanding clients",
+              ]}
+              rows={csvServiceRows}
+            />
+          </div>
+        </CardHeader>
+        <CardContent className="overflow-x-auto">
+          <table className="w-full border-separate border-spacing-0 text-right text-xs tabular-nums">
+            <thead>
+              <tr className="text-muted-foreground">
+                <th className="sticky left-0 z-10 bg-card px-2 py-2 text-left">Service</th>
+                {view === "class" && <th className="px-2 py-2 text-left">Class</th>}
+                <th className="px-2 py-2">Total</th>
+                <th className="px-2 py-2">Acquisition</th>
+                <th className="px-2 py-2">Acq %</th>
+                <th className="px-2 py-2">Recurrent</th>
+                <th className="px-2 py-2">Rec %</th>
+                <th className="px-2 py-2">Expansion</th>
+                <th className="px-2 py-2">Exp %</th>
+                <th className="px-2 py-2">Cross-sell</th>
+                <th className="px-2 py-2">Clients</th>
+                <th className="px-2 py-2">New</th>
+                <th className="px-2 py-2">Expanding</th>
+              </tr>
+            </thead>
+            <tbody>
+              {serviceRows.map((r) => {
+                const acq = r.newAmount + r.reactivatedAmount;
+                return (
+                  <tr key={r.key} className="border-b">
+                    <td className="sticky left-0 z-10 bg-card px-2 py-1.5 text-left">
+                      <span className={`inline-flex rounded px-1.5 py-0.5 text-[11px] font-medium ${categoryClass(r.category)}`}>{r.category}</span>
+                    </td>
+                    {view === "class" && (
+                      <td className="px-2 py-1.5 text-left text-muted-foreground">{r.serviceClass}</td>
+                    )}
+                    <td className="px-2 py-1.5 font-semibold">{compactMoney(r.totalAmount, reporting)}</td>
+                    <td className="px-2 py-1.5">{compactMoney(acq, reporting)}</td>
+                    <td className="px-2 py-1.5 text-muted-foreground">{fmtPct(mixPct(acq, r.totalAmount), 0)}</td>
+                    <td className="px-2 py-1.5">{compactMoney(r.recurrentAmount, reporting)}</td>
+                    <td className="px-2 py-1.5 text-muted-foreground">{fmtPct(mixPct(r.recurrentAmount, r.totalAmount), 0)}</td>
+                    <td className="px-2 py-1.5">{compactMoney(r.expansionAmount, reporting)}</td>
+                    <td className="px-2 py-1.5 text-muted-foreground">{fmtPct(mixPct(r.expansionAmount, r.totalAmount), 0)}</td>
+                    <td className="px-2 py-1.5">{r.crossSellAmount > 0 ? compactMoney(r.crossSellAmount, reporting) : "·"}</td>
+                    <td className="px-2 py-1.5">{r.clientCount}</td>
+                    <td className="px-2 py-1.5">{r.newClients}</td>
+                    <td className="px-2 py-1.5">{r.expandingClients}</td>
+                  </tr>
+                );
+              })}
+              {serviceRows.length === 0 && (
+                <tr><td colSpan={view === "class" ? 13 : 12} className="py-8 text-center text-muted-foreground">No issued revenue in {selectedYear}.</td></tr>
+              )}
+            </tbody>
+            {serviceRows.length > 0 && selectedSummary && (
+              <tfoot>
+                <tr className="border-t font-semibold">
+                  <td className="sticky left-0 z-10 bg-card px-2 py-2 text-left">Total</td>
+                  {view === "class" && <td />}
+                  <td className="px-2 py-2">{compactMoney(selectedSummary.mix.totalAmount, reporting)}</td>
+                  <td className="px-2 py-2">{compactMoney(selectedSummary.acquisition, reporting)}</td>
+                  <td className="px-2 py-2">{fmtPct(selectedSummary.newPct, 0)}</td>
+                  <td className="px-2 py-2">{compactMoney(selectedSummary.mix.recurrentAmount, reporting)}</td>
+                  <td className="px-2 py-2">{fmtPct(selectedSummary.recurrentPct, 0)}</td>
+                  <td className="px-2 py-2">{compactMoney(selectedSummary.mix.expansionAmount, reporting)}</td>
+                  <td className="px-2 py-2">{fmtPct(selectedSummary.expansionPct, 0)}</td>
+                  <td className="px-2 py-2">{compactMoney(selectedSummary.mix.crossSellAmount, reporting)}</td>
+                  <td className="px-2 py-2">{selectedSummary.activeClients}</td>
+                  <td className="px-2 py-2">{selectedSummary.newClients + selectedSummary.reactivatedClients}</td>
+                  <td className="px-2 py-2">{selectedSummary.expandingClients}</td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function GrowthKpi({
+  label,
+  value,
+  hint,
+  tone,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  tone?: "new" | "recurrent" | "expansion" | "warn";
+}) {
+  const bar =
+    tone === "new"
+      ? "border-l-[var(--chart-2)]"
+      : tone === "recurrent"
+        ? "border-l-[var(--chart-1)]"
+        : tone === "expansion"
+          ? "border-l-[var(--chart-3)]"
+          : tone === "warn"
+            ? "border-l-destructive"
+            : "border-l-border";
+  return (
+    <div className={`rounded-lg border border-l-4 bg-card px-3 py-2.5 ${bar}`}>
+      <div className="text-[11px] text-muted-foreground">{label}</div>
+      <div className="mt-0.5 text-sm font-semibold tabular-nums">{value}</div>
+      {hint && <div className="mt-0.5 text-[10px] text-muted-foreground">{hint}</div>}
+    </div>
   );
 }
 
