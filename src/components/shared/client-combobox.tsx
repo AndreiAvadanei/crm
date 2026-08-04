@@ -51,6 +51,24 @@ export function ClientCombobox({
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState("");
   const [creating, setCreating] = React.useState(false);
+  const listRef = React.useRef<HTMLDivElement | null>(null);
+
+  // Inside a Radix Dialog, the dialog's scroll lock (react-remove-scroll)
+  // listens on `document` and cancels wheel/touch events from portalled content
+  // like this popover, which blocks scrolling the option list (search still
+  // works). Stopping the events before they reach `document` restores native
+  // scrolling in every context.
+  React.useEffect(() => {
+    const el = listRef.current;
+    if (!open || !el) return;
+    const stop = (e: Event) => e.stopPropagation();
+    el.addEventListener("wheel", stop, { passive: false });
+    el.addEventListener("touchmove", stop, { passive: false });
+    return () => {
+      el.removeEventListener("wheel", stop);
+      el.removeEventListener("touchmove", stop);
+    };
+  }, [open]);
 
   const selected = options.find((o) => o.value === value);
   const trimmedQuery = query.trim();
@@ -134,7 +152,7 @@ export function ClientCombobox({
               className="h-9 w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
             />
           </div>
-          <div className="max-h-64 overflow-y-auto p-1">
+          <div ref={listRef} className="max-h-64 overflow-y-auto p-1">
             <Item label={placeholder} muted selected={!value} onSelect={() => select("")} wrap={wrapLabels} />
             {filtered.map((o) => (
               <Item

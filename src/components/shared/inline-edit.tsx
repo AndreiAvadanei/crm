@@ -357,8 +357,28 @@ export function InlineTagEditor({
   const [busy, setBusy] = React.useState(false);
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState("");
+  const listRef = React.useRef<HTMLDivElement | null>(null);
 
   React.useEffect(() => setSelected(value), [value]);
+
+  // When this popover is opened from inside a Radix Dialog (e.g. the deal
+  // modal), the dialog's scroll lock (react-remove-scroll) listens on
+  // `document` and preventDefaults wheel/touch events coming from portalled
+  // content like this popover — which silently blocks scrolling the tag list
+  // (typing still works, which is why search kept working). Stopping the events
+  // before they reach `document` lets the browser scroll the list natively, in
+  // or out of a dialog.
+  React.useEffect(() => {
+    const el = listRef.current;
+    if (!open || !el) return;
+    const stop = (e: Event) => e.stopPropagation();
+    el.addEventListener("wheel", stop, { passive: false });
+    el.addEventListener("touchmove", stop, { passive: false });
+    return () => {
+      el.removeEventListener("wheel", stop);
+      el.removeEventListener("touchmove", stop);
+    };
+  }, [open]);
 
   async function toggle(id: string) {
     const next = selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id];
@@ -418,7 +438,7 @@ export function InlineTagEditor({
               className="h-9 w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
             />
           </div>
-          <div className="max-h-64 overflow-y-auto p-1">
+          <div ref={listRef} className="max-h-64 overflow-y-auto p-1">
             {filtered.map((t) => {
               const on = selected.includes(t.id);
               return (

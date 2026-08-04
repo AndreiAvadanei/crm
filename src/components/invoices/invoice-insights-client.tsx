@@ -15,8 +15,9 @@ import {
   Cell,
 } from "recharts";
 import Link from "next/link";
-import { ChevronRight, ExternalLink, TrendingDown, TrendingUp } from "lucide-react";
+import { ChevronRight, Download, ExternalLink, TrendingDown, TrendingUp } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { INVOICE_STATUS_LABELS } from "@/lib/invoice-constants";
 import type {
   CategoryMonthCell,
@@ -108,6 +109,65 @@ function compactMoney(value: number, currency: string): string {
   }
   const symbol = CURRENCY_SYMBOLS[currency];
   return symbol ? `${symbol}${sign}${numStr}${suffix}` : `${sign}${currency} ${numStr}${suffix}`;
+}
+
+/** Escape a single CSV field (RFC 4180). */
+function csvCell(value: string | number | null | undefined): string {
+  if (value == null) return "";
+  const s = typeof value === "number" ? String(value) : value;
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+/** Build a CSV string from a header row + data rows. */
+function toCsv(headers: string[], rows: Array<Array<string | number | null | undefined>>): string {
+  const lines = [headers.map(csvCell).join(",")];
+  for (const row of rows) lines.push(row.map(csvCell).join(","));
+  return lines.join("\n");
+}
+
+/** Trigger a browser download of a CSV blob. */
+function downloadCsv(filename: string, headers: string[], rows: Array<Array<string | number | null | undefined>>) {
+  const csv = toCsv(headers, rows);
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename.endsWith(".csv") ? filename : `${filename}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/** Round converted amounts for CSV (matches on-screen money formatting). */
+function csvAmount(value: number): number {
+  return Math.round(value);
+}
+
+function CsvDownloadButton({
+  filename,
+  headers,
+  rows,
+  disabled,
+}: {
+  filename: string;
+  headers: string[];
+  rows: Array<Array<string | number | null | undefined>>;
+  disabled?: boolean;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      disabled={disabled || rows.length === 0}
+      onClick={() => downloadCsv(filename, headers, rows)}
+      title="Download as CSV"
+    >
+      <Download /> CSV
+    </Button>
+  );
 }
 
 function Delta({ value, pctValue }: { value: number; pctValue: number | null }) {
@@ -760,11 +820,28 @@ function HistoryHeatmap({
   });
   const maxSemester = Math.max(1, ...semesterRows.flatMap((r) => [splitValue(r.s1, includeScheduled), splitValue(r.s2, includeScheduled)]));
 
+  const csvRows = years.map((y) => {
+    const m = byYear.get(y)!;
+    const total = sumSplit(m);
+    return [
+      y,
+      ...m.map((s) => csvAmount(splitValue(s, includeScheduled))),
+      csvAmount(splitValue(total, includeScheduled)),
+    ];
+  });
+
   return (
     <Card>
       <CardHeader className="gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <CardTitle>Revenue by year × month (full history)</CardTitle>
-        {includeScheduled && <PredictedLegend active />}
+        <div className="flex items-center gap-3">
+          <CardTitle>Revenue by year × month (full history)</CardTitle>
+          {includeScheduled && <PredictedLegend active />}
+        </div>
+        <CsvDownloadButton
+          filename={`revenue-by-year-month-${reporting}`}
+          headers={["Year", ...MONTH_LABELS, "Total"]}
+          rows={csvRows}
+        />
       </CardHeader>
       <CardContent className="space-y-6">
         <div className="overflow-x-auto">
@@ -964,6 +1041,17 @@ function ClientActivityMatrix({
     return max;
   }, [rows, includeScheduled]);
 
+  const csvRows = sorted.map((r) => {
+    const inactiveYears = Math.max(0, latestYear - r.lastActive);
+    return [
+      r.name,
+      r.lastActive || "",
+      inactivityBadge(inactiveYears).label,
+      ...visibleYears.map((y) => csvAmount(valFor(r, y))),
+      csvAmount(r.total),
+    ];
+  });
+
   return (
     <Card>
       <CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -972,6 +1060,11 @@ function ClientActivityMatrix({
           {includeScheduled && <PredictedLegend active />}
         </div>
         <div className="flex flex-wrap items-center gap-3">
+          <CsvDownloadButton
+            filename={`client-activity-${reporting}`}
+            headers={["Company", "Active until", "Inactive", ...visibleYears.map(String), "Total"]}
+            rows={csvRows}
+          />
           {yearOptions.length > 0 && (
             <label className="flex items-center gap-2 text-xs text-muted-foreground">
               Years
@@ -1196,11 +1289,33 @@ function CategoryYearMatrix({
     return { rows, totalsByYear, grandTotal, maxCell };
   }, [categoryMonthly, convert, years, includeScheduled]);
 
+  const csvRows = [
+    ...rows.map((r) => [
+      r.category,
+      ...years.map((y) => csvAmount(splitValue(r.byYear.get(y) ?? { inv: 0, sched: 0 }, includeScheduled))),
+      csvAmount(r.total),
+    ]),
+    ...(rows.length > 0
+      ? [[
+          "Total",
+          ...years.map((y) => csvAmount(splitValue(totalsByYear.get(y) ?? { inv: 0, sched: 0 }, includeScheduled))),
+          csvAmount(splitValue(grandTotal, includeScheduled)),
+        ]]
+      : []),
+  ];
+
   return (
     <Card>
       <CardHeader className="gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <CardTitle>Revenue by category × year</CardTitle>
-        {includeScheduled && <PredictedLegend active />}
+        <div className="flex items-center gap-3">
+          <CardTitle>Revenue by category × year</CardTitle>
+          {includeScheduled && <PredictedLegend active />}
+        </div>
+        <CsvDownloadButton
+          filename={`revenue-by-category-year-${reporting}`}
+          headers={["Category", ...years.map(String), "Total"]}
+          rows={csvRows}
+        />
       </CardHeader>
       <CardContent className="overflow-x-auto">
         <table className="w-full border-separate border-spacing-0 text-right text-xs tabular-nums">
@@ -1295,11 +1410,26 @@ function ClassYearMatrix({
     return { rows, maxCell };
   }, [classYearly, convert, includeScheduled]);
 
+  const csvRows = rows.map((r) => [
+    `${r.category}-${r.serviceClass}`,
+    r.category,
+    r.serviceClass,
+    ...years.map((y) => csvAmount(splitValue(r.byYear.get(y) ?? { inv: 0, sched: 0 }, includeScheduled))),
+    csvAmount(r.total),
+  ]);
+
   return (
     <Card>
       <CardHeader className="gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <CardTitle>Revenue by service class × year</CardTitle>
-        {includeScheduled && <PredictedLegend active />}
+        <div className="flex items-center gap-3">
+          <CardTitle>Revenue by service class × year</CardTitle>
+          {includeScheduled && <PredictedLegend active />}
+        </div>
+        <CsvDownloadButton
+          filename={`revenue-by-service-class-year-${reporting}`}
+          headers={["Clasa servicii", "Categorie", "Clasa", ...years.map(String), "Total"]}
+          rows={csvRows}
+        />
       </CardHeader>
       <CardContent className="overflow-x-auto">
         <table className="w-full border-separate border-spacing-0 text-right text-xs tabular-nums">
@@ -1391,6 +1521,28 @@ function CategoryMonthlyMatrix({
     return max;
   }, [byCategory, shown, includeScheduled]);
 
+  const csvRows: Array<Array<string | number | null | undefined>> = [];
+  for (const cat of shown) {
+    const byYear = byCategory.get(cat);
+    if (!byYear) continue;
+    const catYears = Array.from(byYear.keys())
+      .filter((y) => byYear.get(y)!.some((s) => splitValue(s, includeScheduled) > 0))
+      .sort((a, b) => a - b);
+    for (const y of catYears) {
+      const months = byYear.get(y)!;
+      const total = months.reduce((a, b) => a + splitValue(b, includeScheduled), 0);
+      const activeMonths = months.filter((s) => splitValue(s, includeScheduled) > 0).length;
+      const avg = activeMonths > 0 ? total / activeMonths : null;
+      csvRows.push([
+        cat,
+        y,
+        ...months.map((s) => csvAmount(splitValue(s, includeScheduled))),
+        csvAmount(total),
+        avg == null ? "" : csvAmount(avg),
+      ]);
+    }
+  }
+
   return (
     <Card>
       <CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1398,19 +1550,26 @@ function CategoryMonthlyMatrix({
           <CardTitle>Category by year & month (with monthly average)</CardTitle>
           {includeScheduled && <PredictedLegend active />}
         </div>
-        <label className="flex items-center gap-2 text-xs text-muted-foreground">
-          Category
-          <select
-            value={selected}
-            onChange={(e) => setSelected(e.target.value)}
-            className="h-8 rounded-md border border-input bg-background px-2 text-sm"
-          >
-            <option value="all">All ({categories.length})</option>
-            {categories.map((c) => (
-              <option key={c} value={c}>{c}</option>
-            ))}
-          </select>
-        </label>
+        <div className="flex flex-wrap items-center gap-3">
+          <CsvDownloadButton
+            filename={`category-by-year-month-${reporting}`}
+            headers={["Category", "Year", ...MONTH_LABELS, "Total", "Avg"]}
+            rows={csvRows}
+          />
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            Category
+            <select
+              value={selected}
+              onChange={(e) => setSelected(e.target.value)}
+              className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+            >
+              <option value="all">All ({categories.length})</option>
+              {categories.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </label>
+        </div>
       </CardHeader>
       <CardContent className="overflow-x-auto">
         <table className="w-full border-separate border-spacing-0 text-right text-xs tabular-nums">
@@ -1537,6 +1696,16 @@ function PaymentsDueTable({
   const grandTotal = React.useMemo(() => companies.reduce((sum, c) => sum + c.total, 0), [companies]);
   const invoiceCount = React.useMemo(() => companies.reduce((sum, c) => sum + c.count, 0), [companies]);
 
+  const csvRows = companies.map((c) => [
+    c.name,
+    c.count,
+    fmtDay(c.firstDue),
+    c.oldestAge,
+    fmtDay(c.lastDue),
+    c.newestAge,
+    csvAmount(c.total),
+  ]);
+
   function toggle(id: string) {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -1555,18 +1724,25 @@ function PaymentsDueTable({
             {companies.length} companies · {invoiceCount} invoices · {money(grandTotal, reporting)} outstanding (converted to {reporting}). Per-invoice amounts are the outstanding balance in the invoice currency.
           </p>
         </div>
-        <label className="flex items-center gap-2 text-xs text-muted-foreground">
-          Invoices older than
-          <input
-            type="number"
-            min={0}
-            step={1}
-            value={minAge}
-            onChange={(e) => setMinAge(Math.max(0, Math.floor(Number(e.target.value) || 0)))}
-            className="h-8 w-20 rounded-md border border-input bg-background px-2 text-sm tabular-nums"
+        <div className="flex flex-wrap items-center gap-3">
+          <CsvDownloadButton
+            filename={`payments-due-by-company-${reporting}`}
+            headers={["Company", "Invoices", "First due", "First due age (days)", "Last due", "Last due age (days)", `Total due (${reporting})`]}
+            rows={csvRows}
           />
-          days
-        </label>
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            Invoices older than
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={minAge}
+              onChange={(e) => setMinAge(Math.max(0, Math.floor(Number(e.target.value) || 0)))}
+              className="h-8 w-20 rounded-md border border-input bg-background px-2 text-sm tabular-nums"
+            />
+            days
+          </label>
+        </div>
       </CardHeader>
       <CardContent className="overflow-x-auto">
         <table className="w-full border-separate border-spacing-0 text-xs tabular-nums">
