@@ -4,7 +4,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { DashboardTaskList } from "@/components/dashboard/dashboard-task-list";
 import { type TaskItemData } from "@/components/tasks/task-common";
-import { formatCurrency, formatDate } from "@/lib/utils";
+import { cn, formatCurrency, formatDate } from "@/lib/utils";
+
+/** Local yyyy-mm-dd for date-only comparisons (matches task due helpers). */
+function todayStr(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 export type OverdueDeal = {
   id: string;
@@ -64,15 +70,19 @@ function SectionCard({
 }
 
 function DealRow({ deal, tone }: { deal: OverdueDeal; tone: "danger" | "muted" }) {
+  const dueToday = tone !== "danger" && deal.dueDate === todayStr();
   return (
     <Link
       href={`/deals/${deal.salesId}`}
-      className="flex items-center gap-3 rounded-lg border px-3 py-2 transition-colors hover:border-primary hover:bg-accent/50"
+      className={cn(
+        "flex items-center gap-3 rounded-lg border px-3 py-2 transition-colors hover:border-primary hover:bg-accent/50",
+        dueToday && "border-l-2 border-l-warning"
+      )}
     >
       {tone === "danger" ? (
         <AlertTriangle className="h-4 w-4 shrink-0 text-destructive" />
       ) : (
-        <CalendarDays className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <CalendarDays className={cn("h-4 w-4 shrink-0", dueToday ? "text-warning" : "text-muted-foreground")} />
       )}
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-medium">{deal.title}</div>
@@ -86,11 +96,12 @@ function DealRow({ deal, tone }: { deal: OverdueDeal; tone: "danger" | "muted" }
         </span>
       )}
       <span
-        className={`w-24 shrink-0 text-right text-xs font-medium ${
-          tone === "danger" ? "text-destructive" : "text-muted-foreground"
-        }`}
+        className={cn(
+          "w-24 shrink-0 text-right text-xs font-medium",
+          tone === "danger" ? "text-destructive" : dueToday ? "text-warning" : "text-muted-foreground"
+        )}
       >
-        {formatDate(deal.dueDate)}
+        {dueToday ? "Today" : formatDate(deal.dueDate)}
       </span>
     </Link>
   );

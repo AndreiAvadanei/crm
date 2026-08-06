@@ -13,6 +13,7 @@ import {
   UrgencyBadge,
   DueBadge,
   isTaskOverdue,
+  isTaskDueToday,
   type TaskItemData,
 } from "@/components/tasks/task-common";
 import { cn } from "@/lib/utils";
@@ -49,6 +50,7 @@ export function TaskItem({
   const selectable = onSelectChange !== undefined;
   const isDone = task.status === "DONE";
   const overdue = isTaskOverdue(task.dueDate, task.status);
+  const dueToday = isTaskDueToday(task.dueDate, task.status);
 
   function complete() {
     startTransition(async () => {
@@ -63,7 +65,8 @@ export function TaskItem({
       className={cn(
         "group flex items-start gap-2.5 rounded-lg border px-2.5 py-2 transition-colors",
         selected ? "border-primary bg-primary/5" : "border-border hover:border-foreground/20 hover:bg-accent/40",
-        overdue && !selected && "border-l-2 border-l-destructive"
+        overdue && !selected && "border-l-2 border-l-destructive",
+        dueToday && !selected && "border-l-2 border-l-warning"
       )}
     >
       <div className="pt-0.5">

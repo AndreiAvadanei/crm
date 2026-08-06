@@ -63,14 +63,27 @@ export function isTaskOverdue(dueDate: string | null, status: string): boolean {
   return dueDate < todayStr();
 }
 
+export function isTaskDueToday(dueDate: string | null, status: string): boolean {
+  if (!dueDate || status === "DONE") return false;
+  return dueDate === todayStr();
+}
+
 /** Smart, compact due-date descriptor (Today / Tomorrow / Overdue …). */
 export function dueMeta(dueDate: string | null, status: string) {
-  if (!dueDate) return { label: "No date", overdue: false, muted: true, soon: false };
+  if (!dueDate) return { label: "No date", overdue: false, today: false, muted: true, soon: false };
   const diff = daysBetween(dueDate, todayStr());
   const overdue = status !== "DONE" && diff < 0;
+  const today = status !== "DONE" && diff === 0;
   const label =
     diff === 0 ? "Today" : diff === 1 ? "Tomorrow" : diff === -1 ? "Yesterday" : formatDate(dueDate);
-  return { label, overdue, muted: false, soon: status !== "DONE" && diff >= 0 && diff <= 2 };
+  return {
+    label,
+    overdue,
+    today,
+    muted: false,
+    // Tomorrow / day-after — today has its own highlight.
+    soon: status !== "DONE" && diff >= 1 && diff <= 2,
+  };
 }
 
 export function UrgencyBadge({ urgency, className }: { urgency: TaskUrgency; className?: string }) {
@@ -103,7 +116,13 @@ export function DueBadge({
     <span
       className={cn(
         "inline-flex items-center gap-1 whitespace-nowrap text-xs",
-        meta.overdue ? "font-medium text-destructive" : meta.soon ? "text-foreground" : "text-muted-foreground",
+        meta.overdue
+          ? "font-medium text-destructive"
+          : meta.today
+            ? "font-medium text-warning"
+            : meta.soon
+              ? "text-foreground"
+              : "text-muted-foreground",
         className
       )}
     >
