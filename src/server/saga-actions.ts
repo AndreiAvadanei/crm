@@ -127,27 +127,19 @@ export async function bulkSendInvoicesEmailAction(invoiceIds: string[]): Promise
     return { error: `Could not build the Saga XML: ${(err as Error).message}` };
   }
 
-  // Load a compact summary for the email body (post-numbering).
-  const rows = await prisma.invoice.findMany({
-    where: { id: { in: ids } },
-    select: {
-      id: true,
-      number: true,
-      currency: true,
-      totalAmount: true,
-      issuerName: true,
-      organization: { select: { sourceName: true } },
-    },
-    orderBy: [{ issuerName: "asc" }, { number: "asc" }],
-  });
+  // Summarize straight from the XML build, so the table shows the amounts and
+  // currency accounting will import (RON for a Romanian client priced in EUR).
+  const rows = [...combined.invoices].sort(
+    (a, b) => a.supplierName.localeCompare(b.supplierName) || a.number.localeCompare(b.number)
+  );
 
   const tableRows = rows
     .map(
       (r) => `<tr>
         <td style="padding:6px 10px;border:1px solid #e5e7eb;font-family:monospace;">${esc(r.number || "(fără număr)")}</td>
-        <td style="padding:6px 10px;border:1px solid #e5e7eb;">${esc(r.organization.sourceName)}</td>
-        <td style="padding:6px 10px;border:1px solid #e5e7eb;">${esc(r.issuerName ?? "")}</td>
-        <td style="padding:6px 10px;border:1px solid #e5e7eb;text-align:right;white-space:nowrap;">${esc(fmtAmount(r.totalAmount, r.currency))}</td>
+        <td style="padding:6px 10px;border:1px solid #e5e7eb;">${esc(r.clientName)}</td>
+        <td style="padding:6px 10px;border:1px solid #e5e7eb;">${esc(r.supplierName)}</td>
+        <td style="padding:6px 10px;border:1px solid #e5e7eb;text-align:right;white-space:nowrap;">${esc(fmtAmount(r.total, r.currency))}</td>
       </tr>`
     )
     .join("");

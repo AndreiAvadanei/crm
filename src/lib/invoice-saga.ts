@@ -5,6 +5,7 @@ import { getBnrRonRate } from "@/lib/bnr";
 import { countryCodeForName, countyCodeForName, isEuCountry, isRomania } from "@/lib/ro-geo";
 import { resolveInvoiceVatPercent } from "@/lib/invoice-vat";
 import { resolveBillingCurrency } from "@/lib/invoice-currency";
+import { round2 } from "@/lib/invoice-totals";
 import { DEFAULT_INVOICE_ISSUER } from "@/lib/invoice-constants";
 import {
   buildSagaFacturiXml,
@@ -204,6 +205,20 @@ export type SagaConversion = {
  * so callers (the accounting email) can show exactly what the XML contains. */
 export type SingleSagaXmlResult = SagaXmlResult & { conversion: SagaConversion; vatPercent: number };
 
+/** One line of the combined build, as written to the XML (billing currency). */
+export type SagaInvoiceSummary = {
+  id: string;
+  number: string;
+  clientName: string;
+  supplierName: string;
+  currency: string;
+  base: number;
+  vat: number;
+  total: number;
+};
+
+export type MultiSagaXmlResult = SagaXmlResult & { invoices: SagaInvoiceSummary[] };
+
 /** Map a loaded invoice to the Saga model, applying VAT and BNR conversion rules. */
 async function buildSagaModel(
   invoiceId: string
@@ -300,8 +315,9 @@ export async function buildInvoiceSagaXml(invoiceId: string): Promise<SingleSaga
 }
 
 /** Build a single combined <Facturi> document from multiple invoice ids. */
-export async function buildInvoicesSagaXml(invoiceIds: string[]): Promise<SagaXmlResult> {
+export async function buildInvoicesSagaXml(invoiceIds: string[]): Promise<MultiSagaXmlResult> {
   const models: SagaInvoice[] = [];
+  const invoices: SagaInvoiceSummary[] = [];
   const warnings: string[] = [];
   for (const id of invoiceIds) {
     let built;
@@ -311,6 +327,7 @@ export async function buildInvoicesSagaXml(invoiceIds: string[]): Promise<SagaXm
       throw new Error(`Invoice ${id}: ${(err as Error).message}`);
     }
     models.push(built.model);
+    invoices.push(summarize(id, built.model));
     for (const msg of built.warnings) warnings.push(`${built.model.numar || built.model.client.nume}: ${msg}`);
   }
   const xml = buildSagaFacturiXml(models);
@@ -319,5 +336,21 @@ export async function buildInvoicesSagaXml(invoiceIds: string[]): Promise<SagaXm
   const suppliers = new Set(models.map((m) => m.supplier.nume.trim()).filter(Boolean));
   const namePart = suppliers.size === 1 ? [...suppliers][0] : `Facturi_${models.length}`;
   const filename = `F_${sanitizeFilePart(namePart)}_${datePart}.xml`;
-  return { filename, xml, warnings };
+  return { filename, xml, warnings, invoices };
+}
+
+/** Totals exactly as they appear in the XML, for the accompanying email. */
+function summarize(id: string, model: SagaInvoice): SagaInvoiceSummary {
+  const base = round2(model.lines.reduce((sum, line) => sum + line.valoare, 0));
+  const vat = round2(model.lines.reduce((sum, line) => sum + line.tva, 0));
+  return {
+    id,
+    number: model.numar,
+    clientName: model.client.nume,
+    supplierName: model.supplier.nume,
+    currency: model.moneda,
+    base,
+    vat,
+    total: round2(base + vat),
+  };
 }
