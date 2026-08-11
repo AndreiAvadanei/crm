@@ -269,7 +269,7 @@ export async function buildInvoiceSagaXml(invoiceId: string): Promise<SagaXmlRes
   const { invoice, model, warnings } = await buildSagaModel(invoiceId);
   const xml = buildSagaFacturiXml([model]);
   const datePart = model.data.toISOString().slice(0, 10);
-  const filename = `Factura_${sanitizeFilePart(invoice.number || invoice.id)}_${datePart}.xml`;
+  const filename = `F_${sanitizeFilePart(model.client.nume || invoice.number || invoice.id)}_${datePart}.xml`;
   return { filename, xml, warnings };
 }
 
@@ -289,6 +289,9 @@ export async function buildInvoicesSagaXml(invoiceIds: string[]): Promise<SagaXm
   }
   const xml = buildSagaFacturiXml(models);
   const datePart = new Date().toISOString().slice(0, 10);
-  const filename = `Facturi_${models.length}_${datePart}.xml`;
+  // A combined file is named after the issuing company; mixed issuers keep a count instead.
+  const suppliers = new Set(models.map((m) => m.supplier.nume.trim()).filter(Boolean));
+  const namePart = suppliers.size === 1 ? [...suppliers][0] : `Facturi_${models.length}`;
+  const filename = `F_${sanitizeFilePart(namePart)}_${datePart}.xml`;
   return { filename, xml, warnings };
 }

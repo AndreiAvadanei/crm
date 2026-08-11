@@ -40,4 +40,4 @@ jira.csv
 clienti.csv
 facturi.csv
 /data-init/
-/scripts/*.csv
+*.csv
