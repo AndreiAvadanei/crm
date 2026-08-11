@@ -23,7 +23,7 @@ import {
   type InvoiceImportPreviewRow,
 } from "@/server/invoice-import-actions";
 
-type RowStatusFilter = "all" | "ready" | "warning" | "error" | "new-org";
+type RowStatusFilter = "all" | "ready" | "warning" | "error" | "new-org" | "self-issued";
 
 function originalTitle(row: InvoiceImportPreviewRow, keys: string[]): string {
   return keys.map((key) => `${key}: ${row.originalValues[key] ?? "—"}`).join("\n");
@@ -46,14 +46,17 @@ function hasBlockingErrors(preview: InvoiceImportPreview | null): boolean {
   return preview.errors.length > 0 || preview.invoices.some((row) => row.errors.length > 0);
 }
 
-function importFileNameError(fileName: string): string | null {
-  if (!/\.(xls|xlsx)$/i.test(fileName)) return "Only .xls and .xlsx files are supported.";
+type WorkbookKind = "ron" | "valuta";
+
+/** Export type read from the file name; "" when it doesn't say, "conflict" when it says both. */
+function detectWorkbookKind(fileName: string): WorkbookKind | "" | "conflict" {
   const lower = fileName.toLowerCase();
   const hasRon = /\b(?:ron|lei)\b/.test(lower) || lower.includes("ron -") || lower.includes("- ron");
   const hasValuta = lower.includes("valuta");
-  if (hasRon && hasValuta) return "File name must identify only one export type: RON or valuta.";
-  if (!hasRon && !hasValuta) return 'File name must include "ron", "lei", or "valuta" so the importer can validate it.';
-  return null;
+  if (hasRon && hasValuta) return "conflict";
+  if (hasRon) return "ron";
+  if (hasValuta) return "valuta";
+  return "";
 }
 
 function rowStatus(row: InvoiceImportPreviewRow): "ready" | "warning" | "error" {
@@ -65,12 +68,16 @@ function rowStatus(row: InvoiceImportPreviewRow): "ready" | "warning" | "error" 
 function matchesStatus(row: InvoiceImportPreviewRow, filter: RowStatusFilter): boolean {
   if (filter === "all") return true;
   if (filter === "new-org") return row.willCreateOrganization;
+  if (filter === "self-issued") return row.willAdoptSelfIssued;
   return rowStatus(row) === filter;
 }
 
 function PreviewMessages({ preview }: { preview: InvoiceImportPreview }) {
   const rowErrors = preview.invoices.flatMap((row) => row.errors.map((error) => `${row.number}: ${error}`));
-  const warnings = preview.invoices.flatMap((row) => row.warnings.map((warning) => `${row.number}: ${warning}`));
+  const warnings = [
+    ...preview.warnings,
+    ...preview.invoices.flatMap((row) => row.warnings.map((warning) => `${row.number}: ${warning}`)),
+  ];
   if (preview.errors.length === 0 && rowErrors.length === 0 && warnings.length === 0) return null;
   return (
     <div className="space-y-2">
@@ -88,8 +95,10 @@ function PreviewMessages({ preview }: { preview: InvoiceImportPreview }) {
       )}
       {warnings.length > 0 && (
         <div className="rounded-md border bg-muted/30 p-3 text-sm">
-          <div className="mb-1 font-medium">Warnings</div>
-          <ul className="max-h-24 space-y-1 overflow-auto text-xs text-muted-foreground">
+          <div className="mb-1 flex items-center gap-2 font-medium">
+            <AlertTriangle className="h-4 w-4 text-amber-500" /> Warnings ({warnings.length}) — these still import
+          </div>
+          <ul className="max-h-32 space-y-1 overflow-auto text-xs text-muted-foreground">
             {warnings.map((warning, index) => (
               <li key={index}>{warning}</li>
             ))}
@@ -110,6 +119,11 @@ export function InvoiceImportDialog({ issuers = [] }: { issuers?: { id: string; 
   const [busy, setBusy] = React.useState<"preview" | "apply" | null>(null);
   const [statusFilter, setStatusFilter] = React.useState<RowStatusFilter>("all");
   const [issuerId, setIssuerId] = React.useState("");
+  const [fileChosen, setFileChosen] = React.useState(false);
+  const [kind, setKind] = React.useState<WorkbookKind | "">("");
+  // Set when the file name itself identifies the export type; the picker is then
+  // just showing what was detected.
+  const [detectedKind, setDetectedKind] = React.useState<WorkbookKind | "">("");
   const filteredInvoices = React.useMemo(
     () => preview?.invoices.filter((row) => matchesStatus(row, statusFilter)) ?? [],
     [preview, statusFilter]
@@ -119,10 +133,12 @@ export function InvoiceImportDialog({ issuers = [] }: { issuers?: { id: string; 
     e.preventDefault();
     const file = fileRef.current?.files?.[0];
     if (!file) return toast({ title: "Choose a file first", variant: "error" });
-    const fileError = importFileNameError(file.name);
-    if (fileError) return toast({ title: fileError, variant: "error" });
+    if (!/\.(xls|xlsx)$/i.test(file.name)) return toast({ title: "Only .xls and .xlsx files are supported.", variant: "error" });
+    if (!kind) return toast({ title: "Pick the export type for this file", variant: "error" });
     const fd = new FormData();
     fd.set("file", file);
+    fd.set("kind", kind);
+    if (issuerId) fd.set("issuerId", issuerId);
     setBusy("preview");
     const res = await previewInvoiceWorkbookAction(fd);
     setBusy(null);
@@ -144,6 +160,7 @@ export function InvoiceImportDialog({ issuers = [] }: { issuers?: { id: string; 
     setBusy("apply");
     const fd = new FormData();
     fd.set("file", importFile);
+    fd.set("kind", kind);
     if (issuerId) fd.set("issuerId", issuerId);
     const res = await applyInvoiceWorkbookImportAction(fd);
     setBusy(null);
@@ -183,8 +200,19 @@ export function InvoiceImportDialog({ issuers = [] }: { issuers?: { id: string; 
               setPreview(null);
               setImportFile(null);
               const file = e.currentTarget.files?.[0];
-              const fileError = file ? importFileNameError(file.name) : null;
-              if (fileError) toast({ title: fileError, variant: "error" });
+              setFileChosen(!!file);
+              setDetectedKind("");
+              setKind("");
+              if (!file) return;
+              if (!/\.(xls|xlsx)$/i.test(file.name)) {
+                return toast({ title: "Only .xls and .xlsx files are supported.", variant: "error" });
+              }
+              const detected = detectWorkbookKind(file.name);
+              if (detected === "conflict") {
+                return toast({ title: "File name must identify only one export type: RON or valuta.", variant: "error" });
+              }
+              setDetectedKind(detected);
+              setKind(detected);
             }}
           />
           <Button type="submit" disabled={busy != null}>
@@ -192,6 +220,30 @@ export function InvoiceImportDialog({ issuers = [] }: { issuers?: { id: string; 
             Preview
           </Button>
         </form>
+
+        {fileChosen && (
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <label htmlFor="import-kind" className="font-medium">
+              Export type {!detectedKind && <span className="text-destructive">*</span>}
+            </label>
+            <select
+              id="import-kind"
+              value={kind}
+              onChange={(e) => setKind(e.target.value as WorkbookKind | "")}
+              disabled={!!detectedKind}
+              className="flex h-9 rounded-md border border-input bg-background px-3 text-sm disabled:opacity-70"
+            >
+              <option value="">Select type…</option>
+              <option value="ron">RON / lei</option>
+              <option value="valuta">Valuta</option>
+            </select>
+            <span className="text-xs text-muted-foreground">
+              {detectedKind
+                ? "Detected from the file name."
+                : 'The file name doesn\u2019t mention "ron", "lei" or "valuta" — pick the type this export uses.'}
+            </span>
+          </div>
+        )}
 
         {issuers.length > 0 ? (
           <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -201,7 +253,12 @@ export function InvoiceImportDialog({ issuers = [] }: { issuers?: { id: string; 
             <select
               id="import-issuer"
               value={issuerId}
-              onChange={(e) => setIssuerId(e.target.value)}
+              onChange={(e) => {
+                setIssuerId(e.target.value);
+                // The self-issued matches in the preview are per issuer.
+                setPreview(null);
+                setImportFile(null);
+              }}
               className="flex h-9 rounded-md border border-input bg-background px-3 text-sm"
             >
               <option value="">Select issuer…</option>
@@ -227,6 +284,9 @@ export function InvoiceImportDialog({ issuers = [] }: { issuers?: { id: string; 
               <Badge variant={preview.createdOrganizationCount ? "warning" : "secondary"}>
                 {preview.createdOrganizationCount} new organizations
               </Badge>
+              <Badge variant="secondary">
+                {preview.invoices.filter((row) => row.willAdoptSelfIssued).length} update invoices you issued
+              </Badge>
               <span className="text-muted-foreground">
                 {preview.fileName} · {preview.sheetName}
               </span>
@@ -244,6 +304,9 @@ export function InvoiceImportDialog({ issuers = [] }: { issuers?: { id: string; 
                 <option value="warning">Warnings ({preview.invoices.filter((row) => rowStatus(row) === "warning").length})</option>
                 <option value="error">Errors ({preview.invoices.filter((row) => rowStatus(row) === "error").length})</option>
                 <option value="new-org">New organizations ({preview.invoices.filter((row) => row.willCreateOrganization).length})</option>
+                <option value="self-issued">
+                  Updates invoices you issued ({preview.invoices.filter((row) => row.willAdoptSelfIssued).length})
+                </option>
               </select>
               <span className="text-xs text-muted-foreground">
                 {filteredInvoices.length} visible
@@ -274,6 +337,11 @@ export function InvoiceImportDialog({ issuers = [] }: { issuers?: { id: string; 
                         <span className="inline-flex items-center gap-1">
                           {row.number}
                           <OriginalInfo title={originalTitle(row, ["nr_iesire", "id_iesire", "id_solicit"])} />
+                          {row.willAdoptSelfIssued && (
+                            <Badge variant="secondary" title="Updates the invoice you issued with this number instead of creating a second record.">
+                              ours
+                            </Badge>
+                          )}
                         </span>
                       </td>
                       <td className="px-3 py-2.5 align-middle">

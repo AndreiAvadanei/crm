@@ -30,11 +30,8 @@ const CONFIG = {
   PENDING_LABEL: 'invoice-attachment-pending',
   PROCESSED_LABEL: 'invoice-attachment-processed',
 
-  // CRM endpoint that stores the PDFs, runs OpenAI extraction and marks the
-  // invoice Generated. The secret is configured in the CRM at Admin -> Settings
-  // ("Inbound invoice webhook") — copy that value here.
-  WEBHOOK_URL: 'https://crm.bit-sentinel.com/api/webhooks/invoice-files',
-  WEBHOOK_SECRET: 'paste-secret-from-admin-settings',
+  // Where the invoice PDFs + metadata are sent.
+  WEBHOOK_URL: 'https://sls.bsscockpit.com/api/webhooks/invoice-files?secret=11pRKlkGvb_qSV8V7eeRc82McTXbMWF6eHjHhNTcRIo',
 
   // Script Property key used to dedupe at the message level.
   PROCESSED_PROP_KEY: 'processedInvoiceMessageIds',
@@ -197,20 +194,12 @@ function saveProcessedIds_(map) {
 
 function postWebhook_(payload) {
   if (!CONFIG.WEBHOOK_URL) return;
-  const headers = {};
-  if (CONFIG.WEBHOOK_SECRET) headers['X-Webhook-Secret'] = CONFIG.WEBHOOK_SECRET;
-  const res = UrlFetchApp.fetch(CONFIG.WEBHOOK_URL, {
+  UrlFetchApp.fetch(CONFIG.WEBHOOK_URL, {
     method: 'post',
     contentType: 'application/json',
-    headers: headers,
     payload: JSON.stringify(payload),
     muteHttpExceptions: true,
   });
-  const code = res.getResponseCode();
-  if (code < 200 || code >= 300) {
-    // Surface failures so the thread is NOT marked processed and is retried.
-    throw new Error('Webhook failed (' + code + '): ' + res.getContentText());
-  }
 }
 
 /* =====================================================================

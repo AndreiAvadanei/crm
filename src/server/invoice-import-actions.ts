@@ -31,6 +31,8 @@ export type InvoiceImportPreviewRow = {
   organizationName: string;
   organizationExists: boolean;
   willCreateOrganization: boolean;
+  /** True when this row updates an invoice we issued ourselves instead of creating one. */
+  willAdoptSelfIssued: boolean;
   issueDate: string | null;
   currency: string | null;
   totalBaseAmount: string | null;
@@ -61,14 +63,26 @@ export type InvoiceImportPreview = {
 const REQUIRED_COLUMNS = ["id_iesire", "nr_iesire", "denumire", "data", "baza_tva", "tva", "neachitat", "denumire1"];
 const VALUTA_REQUIRED_COLUMNS = ["cod_valuta", "val_val", "tva_val", "pu_val", "val_val1", "tva_val1"];
 
-function inferWorkbookKind(fileName: string): { kind?: InvoiceWorkbookKind; error?: string } {
+/**
+ * Export type, taken from the file name when it says so. A name that doesn't
+ * mention ron/lei or valuta falls back to the type picked in the dialog; the
+ * header validation then still rejects a workbook that isn't of that type.
+ */
+function inferWorkbookKind(fileName: string, picked?: string | null): { kind?: InvoiceWorkbookKind; error?: string } {
   const lower = fileName.toLowerCase();
   const hasRon = /\b(?:ron|lei)\b/.test(lower) || lower.includes("ron -") || lower.includes("- ron");
   const hasValuta = lower.includes("valuta");
   if (hasRon && hasValuta) return { error: "File name must identify only one export type: RON or valuta." };
   if (hasRon) return { kind: "ron" };
   if (hasValuta) return { kind: "valuta" };
-  return { error: 'File name must include "ron", "lei", or "valuta" so the importer can validate the export type.' };
+  if (picked === "ron" || picked === "valuta") return { kind: picked };
+  return { error: 'File name must include "ron", "lei", or "valuta", or pick the export type before importing.' };
+}
+
+/** The export type chosen in the dialog, when the file name doesn't say. */
+function pickedKind(formData: FormData): string | null {
+  const value = formData.get("kind");
+  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 function clean(value: unknown): string | null {
@@ -275,6 +289,7 @@ function parseWorkbook(buffer: Buffer, fileName: string, kind: InvoiceWorkbookKi
       organizationName: organizationName ?? "",
       organizationExists,
       willCreateOrganization: !!organizationName && !organizationExists,
+      willAdoptSelfIssued: false,
       issueDate,
       currency,
       totalBaseAmount,
@@ -326,7 +341,7 @@ export async function previewInvoiceWorkbookAction(formData: FormData): Promise<
   if (!(file instanceof File) || file.size === 0) return { error: "Choose an XLS/XLSX invoice file first." };
   const allowed = /\.(xls|xlsx)$/i.test(file.name);
   if (!allowed) return { error: "Only .xls and .xlsx files are supported." };
-  const kind = inferWorkbookKind(file.name);
+  const kind = inferWorkbookKind(file.name, pickedKind(formData));
   if (kind.error || !kind.kind) return { error: kind.error ?? "Could not detect invoice export type." };
 
   const existingOrganizations = await prisma.organization.findMany({ select: { sourceName: true } });
@@ -334,6 +349,28 @@ export async function previewInvoiceWorkbookAction(formData: FormData): Promise<
   const buffer = Buffer.from(await file.arrayBuffer());
   const preview = parseWorkbook(buffer, file.name, kind.kind, existingOrgNames);
   if (preview.errors.length > 0) return { error: preview.errors.join(" ") };
+
+  // Flag the rows that will update an invoice we issued ourselves. Needs the
+  // issuer, since that plus the number is what identifies our own invoices.
+  const issuerIdRaw = formData.get("issuerId");
+  const issuerId = typeof issuerIdRaw === "string" && issuerIdRaw.length > 0 ? issuerIdRaw : null;
+  if (issuerId) {
+    const index = await selfIssuedNumberIndex(issuerId);
+    for (const row of preview.invoices) {
+      const matches = index.get(normalizeInvoiceNumber(row.number)) ?? [];
+      if (matches.length === 1) {
+        row.willAdoptSelfIssued = true;
+        row.warnings.push("Matches an invoice you issued yourself — it will be updated in place instead of adding a second record.");
+      } else if (matches.length > 1) {
+        row.warnings.push(
+          `${matches.length} invoices you issued share this number, so none is updated — this row imports as a separate record.`
+        );
+      }
+    }
+  } else {
+    preview.warnings.push("Select the issuer to see which rows match invoices you issued yourself.");
+  }
+
   return { ok: true, preview };
 }
 
@@ -365,12 +402,44 @@ function toJson(value: Record<string, string | null>): Prisma.InputJsonValue {
   return value as Prisma.InputJsonObject;
 }
 
+/** Compare invoice numbers ignoring spacing and case, e.g. "BT.R.BIT  310". */
+function normalizeInvoiceNumber(value: string | null): string {
+  return (value ?? "").replace(/\s+/g, " ").trim().toUpperCase();
+}
+
+/**
+ * An invoice we issued ourselves is already in the CRM under a "manual-" key, so
+ * the export describes a record we own and must update it instead of creating a
+ * twin. Matched on the issuer plus the number we assigned from our own series —
+ * safe precisely because we generated that number. An ambiguous match is left
+ * alone, so the row imports separately rather than merging into the wrong invoice.
+ */
+async function selfIssuedNumberIndex(issuerId: string): Promise<Map<string, string[]>> {
+  const candidates = await prisma.invoice.findMany({
+    where: { selfIssued: true, issuerId, externalRecordId: { startsWith: "manual-" } },
+    select: { id: true, number: true },
+  });
+  const index = new Map<string, string[]>();
+  for (const candidate of candidates) {
+    const key = normalizeInvoiceNumber(candidate.number);
+    if (!key) continue;
+    index.set(key, [...(index.get(key) ?? []), candidate.id]);
+  }
+  return index;
+}
+
+async function findSelfIssuedInvoice(number: string, issuerId: string): Promise<string | null> {
+  const target = normalizeInvoiceNumber(number);
+  if (!target) return null;
+  const matches = (await selfIssuedNumberIndex(issuerId)).get(target) ?? [];
+  return matches.length === 1 ? matches[0] : null;
+}
+
 async function upsertPreviewInvoice(
   row: InvoiceImportPreviewRow,
   userName: string,
   issuer: { id: string; name: string }
 ): Promise<string> {
-  const org = await getOrCreateOrganization(row.organizationName);
   const importKey = `accounting:${issuer.id}:${row.workbookKind}:${row.sourceInvoiceId}`;
   let existing = await prisma.invoice.findUnique({
     where: { externalRecordId: importKey },
@@ -392,13 +461,23 @@ async function upsertPreviewInvoice(
     if (legacy && legacySourceId === row.sourceInvoiceId) existing = { id: legacy.id };
   }
 
+  // Adopt the invoice we issued ourselves: it takes over the accounting key, so
+  // every later import of this export updates it through the normal path.
+  const adoptedId = existing ? null : await findSelfIssuedInvoice(row.number, issuer.id);
+  if (adoptedId) existing = { id: adoptedId };
+
+  // An adopted invoice keeps the organization it was created against (resolving it
+  // by name here could point it at a freshly created duplicate) and its creator.
+  const org = adoptedId ? null : await getOrCreateOrganization(row.organizationName);
+  const ownership = org
+    ? { organizationId: org.organizationId, clientId: org.clientId, createdByName: userName }
+    : null;
+
   const data = {
     externalRecordId: importKey,
     externalRef: row.originalValues.id_iesire ?? row.originalValues.id_solicit ?? null,
     number: row.number,
     status: InvoiceStatus.GENERATA,
-    organizationId: org.organizationId,
-    clientId: org.clientId,
     servicesDescription: row.servicesPreview,
     amountRaw: row.totalAmount ? `${row.totalAmount} ${row.currency ?? ""}`.trim() : null,
     currency: row.currency,
@@ -413,15 +492,32 @@ async function upsertPreviewInvoice(
     totalRaw: row.totalAmount,
     invoiceInfo: row.invoiceInfo,
     originalValues: toJson(row.originalValues),
-    createdByName: userName,
     issuerId: issuer.id,
     issuerName: issuer.name,
   };
 
   const invoice = await prisma.$transaction(async (tx) => {
-    const saved = existing
-      ? await tx.invoice.update({ where: { id: existing.id }, data, select: { id: true } })
-      : await tx.invoice.create({ data, select: { id: true } });
+    let saved: { id: string };
+    if (existing) {
+      saved = await tx.invoice.update({
+        where: { id: existing.id },
+        data: ownership ? { ...data, ...ownership } : data,
+        select: { id: true },
+      });
+    } else if (ownership) {
+      saved = await tx.invoice.create({ data: { ...data, ...ownership }, select: { id: true } });
+    } else {
+      throw new Error(`Invoice "${row.number}": no organization could be resolved.`);
+    }
+
+    // The export's articles replace ours, but per-line part numbers are ours to
+    // keep: carry them over by position whenever the article count still matches.
+    const previous = await tx.invoiceLine.findMany({
+      where: { invoiceId: saved.id },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      select: { partNumberId: true, partNumberCode: true, partNumberValues: true },
+    });
+    const keepPartNumbers = previous.length === row.lines.length;
 
     await tx.invoiceLine.deleteMany({ where: { invoiceId: saved.id } });
     if (row.lines.length > 0) {
@@ -437,6 +533,11 @@ async function upsertPreviewInvoice(
           value: toNullableDecimal(line.value),
           total: toNullableDecimal(line.total),
           originalValues: toJson(line.originalValues),
+          partNumberId: keepPartNumbers ? previous[index].partNumberId : null,
+          partNumberCode: keepPartNumbers ? previous[index].partNumberCode : null,
+          partNumberValues: keepPartNumbers
+            ? previous[index].partNumberValues ?? Prisma.JsonNull
+            : Prisma.JsonNull,
         })),
       });
     }
@@ -454,7 +555,7 @@ export async function applyInvoiceWorkbookImportAction(
   const file = formData.get("file");
   if (!(file instanceof File) || file.size === 0) return { error: "Choose an XLS/XLSX invoice file first." };
   if (!/\.(xls|xlsx)$/i.test(file.name)) return { error: "Only .xls and .xlsx files are supported." };
-  const kind = inferWorkbookKind(file.name);
+  const kind = inferWorkbookKind(file.name, pickedKind(formData));
   if (kind.error || !kind.kind) return { error: kind.error ?? "Could not detect invoice export type." };
 
   const issuerIdRaw = formData.get("issuerId");
