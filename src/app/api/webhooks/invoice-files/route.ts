@@ -7,8 +7,9 @@ import { saveFile } from "@/lib/storage";
 import { logActivity } from "@/lib/activity";
 import { getInvoiceWebhookSecret } from "@/lib/settings";
 import { extractInvoiceFromPdf, parseInvoiceDate, parseInvoiceTotal } from "@/lib/openai-invoice";
-import { splitGrossTotal } from "@/lib/invoice-totals";
+import { lineNetValue, round2, splitGrossTotal, type LineAmountInput } from "@/lib/invoice-totals";
 import { resolveInvoiceVatPercent } from "@/lib/invoice-vat";
+import { DEFAULT_BILLING_CURRENCY, resolveBillingCurrency } from "@/lib/invoice-currency";
 
 export const runtime = "nodejs";
 // Inbound PDFs are base64 in the JSON body — allow a generous time budget for
@@ -48,6 +49,13 @@ function presentedSecret(req: NextRequest): string | null {
   return query ? query.trim() : null;
 }
 
+const round4 = (n: number): number => Math.round((n + Number.EPSILON) * 10000) / 10000;
+
+/** Existing JSON audit blob as a spreadable object (Prisma JSON can be any value). */
+function asJsonObject(value: Prisma.JsonValue | null): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
 /** Append new download URLs to the existing free-text documents field, deduped. */
 function mergeFileUrls(existing: string | null, added: string[]): string {
   const prev = (existing ?? "")
@@ -81,7 +89,10 @@ export async function POST(req: NextRequest) {
   // The CRM emits REF-<Invoice.id>-REF; also accept the import keys as a fallback.
   const invoice = await prisma.invoice.findFirst({
     where: { OR: [{ id: ref }, { externalRecordId: ref }, { externalRef: ref }] },
-    include: { organization: { select: { clientId: true, sourceName: true, country: true, tvaPercent: true } } },
+    include: {
+      organization: { select: { clientId: true, sourceName: true, country: true, tvaPercent: true } },
+      lines: true,
+    },
   });
   if (!invoice) return NextResponse.json({ error: "Invoice not found" }, { status: 404 });
 
@@ -130,22 +141,69 @@ export async function POST(req: NextRequest) {
   };
   if (numbers.length) data.number = numbers.join("\n");
   const parsedTotal = parseInvoiceTotal(totals[0] ?? null);
+  const vatPercent = resolveInvoiceVatPercent(invoice, invoice.organization);
+  // Currency the PDF is in: the invoice was issued in the billing currency, which
+  // for a Romanian client priced in EUR/USD is RON. Same rule as the Saga export.
+  const pricedCurrency = (invoice.currency || DEFAULT_BILLING_CURRENCY).toUpperCase();
+  const billingCurrency = resolveBillingCurrency(invoice.organization.country, pricedCurrency);
+  let conversionRate: number | null = null;
   if (parsedTotal != null) {
     // The PDF total is the authoritative gross amount. Split it back into base +
     // VAT at the client's rate so the stored breakdown stays consistent
     // (base + VAT = total), and refresh the outstanding amount when unpaid.
-    const vatPercent = resolveInvoiceVatPercent(invoice, invoice.organization);
     const split = splitGrossTotal(parsedTotal, vatPercent);
     data.totalAmount = new Prisma.Decimal(split.total);
     data.totalBaseAmount = new Prisma.Decimal(split.base);
     data.vatAmount = new Prisma.Decimal(split.vat);
     data.totalRaw = totals[0];
     if (!invoice.paid) data.unpaidAmount = new Prisma.Decimal(split.total);
+
+    // Record the invoice as issued: the amounts above are in the billing currency,
+    // so the record switches to it and the articles are restated at the rate the
+    // document itself implies. Idempotent — a second delivery finds the invoice
+    // already in its billing currency and leaves the articles alone.
+    if (billingCurrency !== pricedCurrency) {
+      data.currency = billingCurrency;
+      const pricedNet = invoice.lines.reduce((sum, line) => sum + lineNetValue(line as LineAmountInput), 0);
+      conversionRate = pricedNet > 0 ? split.base / pricedNet : null;
+      data.originalValues = {
+        ...asJsonObject(invoice.originalValues),
+        pricedCurrency,
+        pricedTotalAmount: invoice.totalAmount == null ? null : Number(invoice.totalAmount),
+        conversionRate,
+      };
+    }
   }
+
   const parsedDate = parseInvoiceDate(dates[0] ?? null);
   if (parsedDate) data.issueDate = parsedDate;
 
   await prisma.invoice.update({ where: { id: invoice.id }, data });
+
+  // Restate the articles in the currency the invoice now carries, so a line never
+  // shows a EUR figure under a RON invoice.
+  if (conversionRate != null) {
+    for (const line of invoice.lines) {
+      const pricedValue = lineNetValue(line as LineAmountInput);
+      const pricedUnitPrice = line.unitPrice == null ? null : Number(line.unitPrice);
+      const value = round2(pricedValue * conversionRate);
+      await prisma.invoiceLine.update({
+        where: { id: line.id },
+        data: {
+          unitPrice: pricedUnitPrice == null ? null : new Prisma.Decimal(round4(pricedUnitPrice * conversionRate)),
+          value: new Prisma.Decimal(value),
+          total: new Prisma.Decimal(round2(value * (1 + vatPercent / 100))),
+          originalValues: {
+            ...asJsonObject(line.originalValues),
+            pricedCurrency,
+            pricedUnitPrice,
+            pricedValue,
+            conversionRate,
+          },
+        },
+      });
+    }
+  }
 
   await logActivity({
     action: "invoice_files_received",

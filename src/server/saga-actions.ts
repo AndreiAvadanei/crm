@@ -7,7 +7,7 @@ import { requireUser } from "@/lib/auth/guards";
 import { canEditClient, isAdmin } from "@/lib/rbac";
 import { logActivity } from "@/lib/activity";
 import { sendEmail, renderEmailLayout } from "@/lib/email";
-import { assignInvoiceNumber } from "@/lib/invoice-numbering";
+import { assignInvoiceIssueDate, assignInvoiceNumber } from "@/lib/invoice-numbering";
 import { buildInvoiceSagaXml, buildInvoicesSagaXml } from "@/lib/invoice-saga";
 import { personalizationBlockMessage } from "@/lib/invoice-issue-guard";
 
@@ -77,6 +77,7 @@ export async function downloadInvoiceSagaXmlAction(invoiceId: string): Promise<X
   try {
     await authorizeInvoices(user, [invoiceId]);
     await assignInvoiceNumber(invoiceId);
+    await assignInvoiceIssueDate(invoiceId);
     const { filename, xml, warnings } = await buildInvoiceSagaXml(invoiceId);
     revalidatePath("/invoices");
     revalidatePath(`/invoices/${invoiceId}`);
@@ -91,7 +92,10 @@ export async function bulkDownloadInvoicesSagaXmlAction(invoiceIds: string[]): P
   const user = await requireUser();
   try {
     const invoices = await authorizeInvoices(user, invoiceIds);
-    for (const inv of invoices) await assignInvoiceNumber(inv.id);
+    for (const inv of invoices) {
+      await assignInvoiceNumber(inv.id);
+      await assignInvoiceIssueDate(inv.id);
+    }
     const { filename, xml, warnings } = await buildInvoicesSagaXml(invoices.map((i) => i.id));
     revalidatePath("/invoices");
     return { ok: true, filename, xml, warnings };
@@ -111,7 +115,10 @@ export async function bulkSendInvoicesEmailAction(invoiceIds: string[]): Promise
   }
 
   const ids = authorized.map((i) => i.id);
-  for (const id of ids) await assignInvoiceNumber(id);
+  for (const id of ids) {
+    await assignInvoiceNumber(id);
+    await assignInvoiceIssueDate(id);
+  }
 
   let combined;
   try {

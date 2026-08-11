@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { getBnrRonRate } from "@/lib/bnr";
 import { countryCodeForName, countyCodeForName, isEuCountry, isRomania } from "@/lib/ro-geo";
 import { resolveInvoiceVatPercent } from "@/lib/invoice-vat";
+import { resolveBillingCurrency } from "@/lib/invoice-currency";
 import { DEFAULT_INVOICE_ISSUER } from "@/lib/invoice-constants";
 import {
   buildSagaFacturiXml,
@@ -167,7 +168,7 @@ function buildLines(
     const tva = (tvaRate / 100) * valoare;
     let infSupl = line.textSupplement;
     if (converted) {
-      const note = `${trimNum(line.value)} ${contractCurrency} + TVA la cursul BNR ${trimNum(rate)}`;
+      const note = bnrConversionNote(line.value, contractCurrency, rate);
       infSupl = infSupl ? `${infSupl}, ${note}` : note;
     }
     return {
@@ -184,12 +185,29 @@ function buildLines(
   });
 }
 
+/** Note kept on converted lines, e.g. "2400 EUR + TVA la cursul BNR 5.2396". */
+export function bnrConversionNote(value: number, sourceCurrency: string, rate: number): string {
+  return `${trimNum(value)} ${sourceCurrency} + TVA la cursul BNR ${trimNum(rate)}`;
+}
+
 export type SagaXmlResult = { filename: string; xml: string; warnings: string[] };
+
+/** How the invoice was priced vs. billed. `rate` is 1 when no conversion applies. */
+export type SagaConversion = {
+  currency: string;
+  sourceCurrency: string;
+  rate: number;
+  rateDate: string | null;
+};
+
+/** The single-invoice build also reports the billing currency and VAT it applied,
+ * so callers (the accounting email) can show exactly what the XML contains. */
+export type SingleSagaXmlResult = SagaXmlResult & { conversion: SagaConversion; vatPercent: number };
 
 /** Map a loaded invoice to the Saga model, applying VAT and BNR conversion rules. */
 async function buildSagaModel(
   invoiceId: string
-): Promise<{ invoice: LoadedInvoice; model: SagaInvoice; warnings: string[] }> {
+): Promise<{ invoice: LoadedInvoice; model: SagaInvoice; warnings: string[]; conversion: SagaConversion }> {
   const invoice = await loadInvoice(invoiceId);
   if (!invoice) throw new Error("Invoice not found.");
 
@@ -225,17 +243,24 @@ async function buildSagaModel(
     warnings.push("Romanian client has no VAT % set — invoiced at 0%. Set the organization's VAT % if this is wrong.");
   }
 
-  const issueDate = invoice.issueDate ?? invoice.expectedInvoiceDate ?? new Date();
+  // An already-issued invoice keeps its stored date; a new one is dated today,
+  // the day it goes to accounting. expectedInvoiceDate is only a plan (often in
+  // the past or future), so it never becomes the invoice date. Scadența below
+  // follows from whichever date applies.
+  const now = new Date();
+  const issueDate = invoice.issueDate ?? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const scadenta = invoice.paymentTermDays != null ? addDays(issueDate, invoice.paymentTermDays) : null;
 
   // Romanian client billed in RON but priced in a foreign currency -> convert at
   // the BNR reference rate. Foreign clients are invoiced in the contract currency.
-  let moneda = isRo ? "RON" : contractCurrency;
+  let moneda = resolveBillingCurrency(country, contractCurrency);
   let rate = 1;
+  let rateDate: string | null = null;
   if (isRo && contractCurrency !== "RON") {
     try {
       const bnr = await getBnrRonRate(contractCurrency, issueDate);
       rate = bnr.rate;
+      rateDate = bnr.rateDate;
       moneda = "RON";
       warnings.push(`Converted ${contractCurrency} → RON at BNR rate ${trimNum(rate)} (${bnr.rateDate}).`);
     } catch (err) {
@@ -261,16 +286,17 @@ async function buildSagaModel(
     lines: buildLines(invoice, tvaRate, rate, contractCurrency),
   };
 
-  return { invoice, model: sagaInvoice, warnings };
+  const conversion: SagaConversion = { currency: moneda, sourceCurrency: contractCurrency, rate, rateDate };
+  return { invoice, model: sagaInvoice, warnings, conversion };
 }
 
 /** Build the Saga XML for a single invoice id, applying BNR conversion as needed. */
-export async function buildInvoiceSagaXml(invoiceId: string): Promise<SagaXmlResult> {
-  const { invoice, model, warnings } = await buildSagaModel(invoiceId);
+export async function buildInvoiceSagaXml(invoiceId: string): Promise<SingleSagaXmlResult> {
+  const { invoice, model, warnings, conversion } = await buildSagaModel(invoiceId);
   const xml = buildSagaFacturiXml([model]);
   const datePart = model.data.toISOString().slice(0, 10);
   const filename = `F_${sanitizeFilePart(model.client.nume || invoice.number || invoice.id)}_${datePart}.xml`;
-  return { filename, xml, warnings };
+  return { filename, xml, warnings, conversion, vatPercent: model.cotaTVA };
 }
 
 /** Build a single combined <Facturi> document from multiple invoice ids. */

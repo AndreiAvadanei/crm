@@ -9,8 +9,8 @@ import { canEditClient, isAdmin } from "@/lib/rbac";
 import { logActivity } from "@/lib/activity";
 import { changeList, diffBool, diffCurrency, diffDate, diffPlain, diffText, type ActivityChange } from "@/lib/activity-diff";
 import { sendEmail } from "@/lib/email";
-import { buildInvoiceSagaXml } from "@/lib/invoice-saga";
-import { assignInvoiceNumber } from "@/lib/invoice-numbering";
+import { bnrConversionNote, buildInvoiceSagaXml, type SingleSagaXmlResult } from "@/lib/invoice-saga";
+import { assignInvoiceIssueDate, assignInvoiceNumber } from "@/lib/invoice-numbering";
 import { PERSONALIZATION_BLOCK_MESSAGE } from "@/lib/invoice-issue-guard";
 import { computeInvoiceTotals, lineNetValue, round2, type LineAmountInput } from "@/lib/invoice-totals";
 import { resolveOrgVatPercent, resolveInvoiceVatPercent, parseVatPercentInput, inferVatPercentFromAmounts } from "@/lib/invoice-vat";
@@ -1164,18 +1164,33 @@ export async function prepareGenerateInvoiceAction(invoiceId: string): Promise<R
   if (!(await canEditOrgInvoices(user, inv.clientId ?? inv.organization.clientId))) return { error: "Not allowed." };
   if (inv.status !== InvoiceStatus.IN_ASTEPTARE) return { error: "Only pending invoices can be generated." };
   if (inv.needsPersonalization) return { error: PERSONALIZATION_BLOCK_MESSAGE };
-  // Assign the next FacturaNumar from the series (no-op if already numbered).
+  // Assign the next FacturaNumar from the series (no-op if already numbered) and
+  // date the invoice today unless it already carries an issue date.
   const assignedNumber = await assignInvoiceNumber(invoiceId);
+  const issueDate = await assignInvoiceIssueDate(invoiceId);
+
+  // Build the Saga-import XML first: it decides the billing currency (RON at the
+  // BNR rate for a Romanian client priced in EUR/USD) and the effective VAT, and
+  // the email must show the same amounts accounting will import.
+  let sagaXml: SingleSagaXmlResult;
+  try {
+    sagaXml = await buildInvoiceSagaXml(invoiceId);
+  } catch (err) {
+    return { error: `Could not build the Saga XML: ${(err as Error).message}` };
+  }
+  const { rate, currency: billingCurrency, sourceCurrency } = sagaXml.conversion;
+  const vatPercent = sagaXml.vatPercent;
 
   // Roll the articles up into the email's line table + totals.
-  const vatPercent = resolveInvoiceVatPercent(inv, inv.organization);
   const emailArticles = inv.lines.map((line) => {
     const quantity = line.quantity == null ? 1 : Number(line.quantity);
-    const unitPrice = line.unitPrice == null ? null : Number(line.unitPrice);
-    const value = lineNetValue({ quantity: line.quantity as unknown as number, unitPrice: line.unitPrice as unknown as number, value: line.value as unknown as number });
+    const unitPrice = line.unitPrice == null ? null : Number(line.unitPrice) * rate;
+    const netValue = lineNetValue({ quantity: line.quantity as unknown as number, unitPrice: line.unitPrice as unknown as number, value: line.value as unknown as number });
+    const value = netValue * rate;
+    const note = rate === 1 ? "" : bnrConversionNote(netValue, sourceCurrency, rate);
     return {
       description: line.serviceDescription ?? "",
-      textSupplement: line.textSupplement ?? "",
+      textSupplement: [line.textSupplement ?? "", note].filter(Boolean).join(", "),
       um: line.unitOfMeasure ?? "buc",
       quantity,
       unitPrice,
@@ -1186,7 +1201,7 @@ export async function prepareGenerateInvoiceAction(invoiceId: string): Promise<R
     };
   });
   const emailTotals = computeInvoiceTotals(
-    inv.lines.map((l) => ({ quantity: l.quantity as unknown as number, unitPrice: l.unitPrice as unknown as number, value: l.value as unknown as number })),
+    emailArticles.map((a) => ({ value: a.value })),
     vatPercent
   );
 
@@ -1204,20 +1219,13 @@ export async function prepareGenerateInvoiceAction(invoiceId: string): Promise<R
     articles: emailArticles,
     totals: emailTotals,
     vatPercent,
-    currency: inv.currency,
+    currency: billingCurrency,
     paymentTermDays: inv.paymentTermDays,
     initiatedByName: user.name,
     initiatedByEmail: user.email,
   });
 
-  // Attach the Saga-import XML so accounting can import the invoice directly.
-  let sagaXml: { filename: string; xml: string; warnings: string[] };
-  try {
-    sagaXml = await buildInvoiceSagaXml(invoiceId);
-  } catch (err) {
-    return { error: `Could not build the Saga XML: ${(err as Error).message}` };
-  }
-
+  // The Saga-import XML (built above) rides along so accounting can import directly.
   await sendEmail({
     from: BILLING_EMAIL_FROM,
     to: BILLING_EMAIL_TO,
@@ -1235,6 +1243,7 @@ export async function prepareGenerateInvoiceAction(invoiceId: string): Promise<R
     entityId: invoiceId,
     meta: {
       number: assignedNumber ?? inv.number,
+      issueDate: issueDate ? issueDate.toISOString().slice(0, 10) : null,
       organization: inv.organization.sourceName,
       client: inv.client?.name,
       salesId: inv.deal?.salesId ?? inv.salesIdSnapshot,

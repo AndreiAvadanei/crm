@@ -13,6 +13,21 @@ import { prisma } from "@/lib/db";
  * accounting firm generates the invoice and assigns the number, so we leave it
  * untouched (returns null).
  */
+/**
+ * Stamp the invoice date the first time an invoice goes to accounting. Dates are
+ * stored at UTC midnight, like every other date in the app. Idempotent: an
+ * invoice that already has a date keeps it, so re-sends (and the date later
+ * extracted from the issued PDF) never move it.
+ */
+export async function assignInvoiceIssueDate(invoiceId: string, when: Date = new Date()): Promise<Date | null> {
+  const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId }, select: { issueDate: true } });
+  if (!invoice) return null;
+  if (invoice.issueDate) return invoice.issueDate;
+  const issueDate = new Date(Date.UTC(when.getUTCFullYear(), when.getUTCMonth(), when.getUTCDate()));
+  await prisma.invoice.update({ where: { id: invoiceId }, data: { issueDate } });
+  return issueDate;
+}
+
 export async function assignInvoiceNumber(invoiceId: string): Promise<string | null> {
   return prisma.$transaction(async (tx) => {
     const invoice = await tx.invoice.findUnique({
