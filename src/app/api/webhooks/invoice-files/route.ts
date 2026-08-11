@@ -90,7 +90,7 @@ export async function POST(req: NextRequest) {
   const invoice = await prisma.invoice.findFirst({
     where: { OR: [{ id: ref }, { externalRecordId: ref }, { externalRef: ref }] },
     include: {
-      organization: { select: { clientId: true, sourceName: true, country: true, tvaPercent: true } },
+      organization: { select: { clientId: true, sourceName: true, country: true, tara: true, tvaPercent: true } },
       lines: true,
     },
   });
@@ -145,7 +145,10 @@ export async function POST(req: NextRequest) {
   // Currency the PDF is in: the invoice was issued in the billing currency, which
   // for a Romanian client priced in EUR/USD is RON. Same rule as the Saga export.
   const pricedCurrency = (invoice.currency || DEFAULT_BILLING_CURRENCY).toUpperCase();
-  const billingCurrency = resolveBillingCurrency(invoice.organization.country, pricedCurrency);
+  const billingCurrency = resolveBillingCurrency(
+    invoice.organization.country || invoice.organization.tara,
+    pricedCurrency
+  );
   let conversionRate: number | null = null;
   if (parsedTotal != null) {
     // The PDF total is the authoritative gross amount. Split it back into base +
