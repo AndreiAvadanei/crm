@@ -54,6 +54,11 @@ function sanitizeFilePart(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "") || "factura";
 }
 
+/** Issuer name as used in file names: the first 10 characters, e.g. "Bit_Sentin". */
+function issuerFilePart(name: string): string {
+  return sanitizeFilePart(name).slice(0, 10).replace(/[._-]+$/, "") || "factura";
+}
+
 function tara(countryName: string | null | undefined): string {
   const code = countryCodeForName(countryName);
   if (code) return code;
@@ -307,10 +312,10 @@ async function buildSagaModel(
 
 /** Build the Saga XML for a single invoice id, applying BNR conversion as needed. */
 export async function buildInvoiceSagaXml(invoiceId: string): Promise<SingleSagaXmlResult> {
-  const { invoice, model, warnings, conversion } = await buildSagaModel(invoiceId);
+  const { model, warnings, conversion } = await buildSagaModel(invoiceId);
   const xml = buildSagaFacturiXml([model]);
   const datePart = model.data.toISOString().slice(0, 10);
-  const filename = `F_${sanitizeFilePart(model.client.nume || invoice.number || invoice.id)}_${datePart}.xml`;
+  const filename = `F_${issuerFilePart(model.supplier.nume)}_${datePart}.xml`;
   return { filename, xml, warnings, conversion, vatPercent: model.cotaTVA };
 }
 
@@ -334,7 +339,7 @@ export async function buildInvoicesSagaXml(invoiceIds: string[]): Promise<MultiS
   const datePart = new Date().toISOString().slice(0, 10);
   // A combined file is named after the issuing company; mixed issuers keep a count instead.
   const suppliers = new Set(models.map((m) => m.supplier.nume.trim()).filter(Boolean));
-  const namePart = suppliers.size === 1 ? [...suppliers][0] : `Facturi_${models.length}`;
+  const namePart = suppliers.size === 1 ? issuerFilePart([...suppliers][0]) : `Facturi_${models.length}`;
   const filename = `F_${sanitizeFilePart(namePart)}_${datePart}.xml`;
   return { filename, xml, warnings, invoices };
 }
