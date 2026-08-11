@@ -8,8 +8,10 @@ import "server-only";
 
 type Cube = { date: string; rates: Record<string, number> };
 
-const YEAR_FEED = (year: number) => `https://www.bnr.ro/files/xml/years/nbrfxrates${year}.xml`;
-const LATEST_FEED = "https://www.bnr.ro/nbrfxrates.xml";
+// BNR serves these files only from curs.bnr.ro since 2026-08-06; the old
+// www.bnr.ro addresses redirect to the site's HTML home page.
+const YEAR_FEED = (year: number) => `https://curs.bnr.ro/files/xml/years/nbrfxrates${year}.xml`;
+const LATEST_FEED = "https://curs.bnr.ro/nbrfxrates.xml";
 
 // Cache parsed cubes per source URL for the process lifetime (rates are
 // immutable once published; the latest feed is re-fetched after a short TTL).
@@ -44,6 +46,11 @@ async function loadCubes(url: string): Promise<Cube[]> {
   if (!res.ok) throw new Error(`BNR feed ${url} returned ${res.status}`);
   const xml = await res.text();
   const cubes = parseCubes(xml);
+  // A feed that moved answers 200 with an HTML page, which parses to nothing.
+  // Fail loudly instead of caching an empty result for the whole TTL.
+  if (cubes.length === 0) {
+    throw new Error(`BNR feed ${url} returned no rates${res.redirected ? ` (redirected to ${res.url})` : ""}`);
+  }
   cache.set(url, { at: Date.now(), cubes });
   return cubes;
 }
