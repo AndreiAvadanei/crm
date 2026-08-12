@@ -45,13 +45,22 @@ const adminNav: NavItem[] = [
   { href: "/activity", label: "Activity", icon: Activity },
 ];
 
-function NavLink({ item, active }: { item: NavItem; active: boolean }) {
+function NavLink({
+  item,
+  active,
+  onNavigate,
+}: {
+  item: NavItem;
+  active: boolean;
+  onNavigate?: () => void;
+}) {
   const Icon = item.icon;
   return (
     <Link
       href={item.href}
+      onClick={onNavigate}
       className={cn(
-        "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+        "flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium transition-colors md:py-2",
         active
           ? "bg-sidebar-accent text-sidebar-accent-foreground"
           : "text-sidebar-foreground/65 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
@@ -60,6 +69,47 @@ function NavLink({ item, active }: { item: NavItem; active: boolean }) {
       <Icon className="h-4 w-4 shrink-0" />
       {item.label}
     </Link>
+  );
+}
+
+/** Shared nav list used by the desktop sidebar and the mobile drawer. */
+export function AppNav({
+  isAdmin,
+  onNavigate,
+  className,
+}: {
+  isAdmin: boolean;
+  onNavigate?: () => void;
+  className?: string;
+}) {
+  const pathname = usePathname();
+  // Pick the single most specific (longest) matching nav href so overlapping
+  // prefixes like /invoices and /invoices/insights don't both highlight.
+  const allHrefs = [...mainNav, ...adminNav].map((i) => i.href);
+  const bestMatch = allHrefs
+    .filter((href) => pathname === href || pathname.startsWith(href + "/"))
+    .sort((a, b) => b.length - a.length)[0];
+  const isActive = (href: string) => href === bestMatch;
+
+  return (
+    <nav className={cn("flex-1 space-y-1 overflow-y-auto p-3", className)}>
+      {mainNav.map((item) => (
+        <NavLink key={item.href} item={item} active={isActive(item.href)} onNavigate={onNavigate} />
+      ))}
+      {isAdmin && (
+        <>
+          <div className="px-3 pb-1 pt-5 text-xs font-medium text-sidebar-foreground/45">Admin</div>
+          {adminNav.map((item) => (
+            <NavLink
+              key={item.href}
+              item={item}
+              active={isActive(item.href)}
+              onNavigate={onNavigate}
+            />
+          ))}
+        </>
+      )}
+    </nav>
   );
 }
 
@@ -72,35 +122,12 @@ export function Sidebar({
   logoLightVersion?: number;
   logoDarkVersion?: number;
 }) {
-  const pathname = usePathname();
-  // Pick the single most specific (longest) matching nav href so overlapping
-  // prefixes like /invoices and /invoices/insights don't both highlight.
-  const allHrefs = [...mainNav, ...adminNav].map((i) => i.href);
-  const bestMatch = allHrefs
-    .filter((href) => pathname === href || pathname.startsWith(href + "/"))
-    .sort((a, b) => b.length - a.length)[0];
-  const isActive = (href: string) => href === bestMatch;
-
   return (
     <aside className="hidden w-60 shrink-0 flex-col border-r bg-sidebar md:flex">
       <div className="flex h-14 items-center gap-2 border-b px-5 text-base font-semibold">
         <SidebarLogo lightVersion={logoLightVersion} darkVersion={logoDarkVersion} />
       </div>
-      <nav className="flex-1 space-y-1 overflow-y-auto p-3">
-        {mainNav.map((item) => (
-          <NavLink key={item.href} item={item} active={isActive(item.href)} />
-        ))}
-        {isAdmin && (
-          <>
-            <div className="px-3 pb-1 pt-5 text-xs font-medium text-sidebar-foreground/45">
-              Admin
-            </div>
-            {adminNav.map((item) => (
-              <NavLink key={item.href} item={item} active={isActive(item.href)} />
-            ))}
-          </>
-        )}
-      </nav>
+      <AppNav isAdmin={isAdmin} />
     </aside>
   );
 }

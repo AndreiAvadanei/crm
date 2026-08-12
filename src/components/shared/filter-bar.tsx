@@ -386,7 +386,10 @@ export function FilterPopover({
       </PopoverTrigger>
       <PopoverContent
         align={align}
-        className={cn("max-w-[92vw]", columns === 2 ? "w-[34rem]" : "w-80")}
+        className={cn(
+          "w-[min(100%,20rem)] max-w-[calc(100vw-1.5rem)]",
+          columns === 2 && "sm:w-[min(100%,34rem)]"
+        )}
       >
         <div className="flex items-center justify-between pb-2">
           <span className="text-sm font-semibold">{label}</span>

@@ -22,7 +22,7 @@ export function DealModal({ children }: { children: React.ReactNode }) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[98vw] max-w-[1600px]">
+      <DialogContent className="max-w-[1600px] sm:w-[98vw] max-sm:inset-0 max-sm:left-0 max-sm:top-0 max-sm:h-dvh max-sm:max-h-dvh max-sm:w-screen max-sm:max-w-none max-sm:translate-x-0 max-sm:translate-y-0 max-sm:rounded-none max-sm:p-3">
         <DialogTitle className="sr-only">Deal details</DialogTitle>
         {children}
       </DialogContent>
