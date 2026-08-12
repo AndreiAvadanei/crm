@@ -87,38 +87,61 @@ export function TaskItem({
         className="flex min-w-0 flex-1 items-start gap-2.5 text-left"
       >
         <TaskTypeIcon type={task.type} className="mt-0.5 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1">
-          <span
-            className={cn(
-              "block text-sm font-medium [overflow-wrap:anywhere]",
-              isDone && "text-muted-foreground line-through"
-            )}
-          >
-            {task.title}
-          </span>
-          {showDeal && task.dealSalesId && (
-            <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-              <span className="font-mono">{task.dealSalesId}</span>
-              {task.dealTitle ? ` · ${task.dealTitle}` : ""}
+        {compact ? (
+          // Two fixed lines: title + urgency/due, then deal context + assignee.
+          <span className="min-w-0 flex-1">
+            <span className="flex items-center gap-2">
+              <span
+                className={cn(
+                  "min-w-0 flex-1 truncate text-sm font-medium",
+                  isDone && "text-muted-foreground line-through"
+                )}
+              >
+                {task.title}
+              </span>
+              <UrgencyBadge urgency={task.urgency} className="shrink-0" />
+              <DueBadge dueDate={task.dueDate} status={task.status} className="shrink-0" />
             </span>
-          )}
-          {/* Meta under the title: always on mobile; always in compact mode */}
-          <span
-            className={cn(
-              "mt-1 flex flex-wrap items-center gap-x-2 gap-y-1",
-              compact ? "flex" : "sm:hidden"
-            )}
-          >
-            <UrgencyBadge urgency={task.urgency} />
-            <DueBadge dueDate={task.dueDate} status={task.status} />
-            {compact && task.assigneeName && (
-              <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                <Avatar name={task.assigneeName} color={task.assigneeColor} className="h-4 w-4 text-[8px]" />
-                {task.assigneeName}
+            {(showDeal && task.dealSalesId) || task.assigneeName ? (
+              <span className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
+                {showDeal && task.dealSalesId && (
+                  <span className="min-w-0 flex-1 truncate">
+                    <span className="font-mono">{task.dealSalesId}</span>
+                    {task.dealTitle ? ` · ${task.dealTitle}` : ""}
+                  </span>
+                )}
+                {task.assigneeName && (
+                  <span className="ml-auto inline-flex shrink-0 items-center gap-1">
+                    <Avatar name={task.assigneeName} color={task.assigneeColor} className="h-4 w-4 text-[8px]" />
+                    {task.assigneeName}
+                  </span>
+                )}
+              </span>
+            ) : null}
+          </span>
+        ) : (
+          <span className="min-w-0 flex-1">
+            <span
+              className={cn(
+                "block text-sm font-medium [overflow-wrap:anywhere]",
+                isDone && "text-muted-foreground line-through"
+              )}
+            >
+              {task.title}
+            </span>
+            {showDeal && task.dealSalesId && (
+              <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+                <span className="font-mono">{task.dealSalesId}</span>
+                {task.dealTitle ? ` · ${task.dealTitle}` : ""}
               </span>
             )}
+            {/* Meta under the title on mobile only; desktop uses the right cluster */}
+            <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 sm:hidden">
+              <UrgencyBadge urgency={task.urgency} />
+              <DueBadge dueDate={task.dueDate} status={task.status} />
+            </span>
           </span>
-        </span>
+        )}
       </button>
 
       {/* Right-side meta cluster (hidden in compact / on mobile) */}

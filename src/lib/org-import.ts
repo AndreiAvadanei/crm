@@ -1,7 +1,7 @@
 import "server-only";
 import * as XLSX from "xlsx";
 import { prisma } from "@/lib/db";
-import { countryToStorageCode } from "@/lib/ro-geo";
+import { countryToStorageCode, normalizeCountyValue } from "@/lib/ro-geo";
 
 // Importer for the SAGA/WinMentor "clienti" export (.xls/.xlsx). Each row is a
 // company that maps to a billing Organization (and its owning Client). Upsert is
@@ -126,7 +126,7 @@ function mapRow(r: Row) {
       address: adresa,
       // Romanian "tert" fields.
       tara,
-      judet: clean(r.judet),
+      judet: normalizeCountyValue(clean(r.judet)) || null,
       localitate: clean(r.localitate),
       adresa,
       cont_banca,

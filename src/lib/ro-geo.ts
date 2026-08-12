@@ -206,7 +206,7 @@ function foldDiacritics(value: string): string {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     // Romanian comma-below s/t sometimes normalize oddly; force-fold them too.
-    .replace(/[șş ]/gi, "s")
+    .replace(/[șş]/gi, "s")
     .replace(/[țţ]/gi, "t")
     .toLowerCase()
     .trim();
@@ -227,6 +227,26 @@ export function countyCodeForName(county: string | null | undefined): string {
   const upper = value.toUpperCase();
   if (Object.values(RO_COUNTY_CODE).includes(upper)) return upper;
   return RO_COUNTY_CODE_FOLDED[foldDiacritics(value)] ?? "";
+}
+
+const RO_COUNTY_BY_FOLDED_NAME: Record<string, string> = Object.fromEntries(
+  RO_COUNTIES.map((name) => [foldDiacritics(name), name])
+);
+
+const RO_COUNTY_BY_CODE: Record<string, string> = Object.fromEntries(
+  Object.entries(RO_COUNTY_CODE).map(([name, code]) => [code, name])
+);
+
+/**
+ * Resolve a county to the exact `RO_COUNTIES` spelling so it matches the county
+ * picker. External sources spell diacritics with cedillas ("Iaşi", ANAF) or use
+ * codes ("IS"), while our list uses comma-below ("Iași"). Unknown values are
+ * returned trimmed so foreign regions and free text survive unchanged.
+ */
+export function normalizeCountyValue(county: string | null | undefined): string {
+  const value = county?.trim();
+  if (!value) return "";
+  return RO_COUNTY_BY_FOLDED_NAME[foldDiacritics(value)] ?? RO_COUNTY_BY_CODE[value.toUpperCase()] ?? value;
 }
 
 const COUNTRY_NAME_TO_CODE_FOLDED: Record<string, string> = Object.fromEntries(

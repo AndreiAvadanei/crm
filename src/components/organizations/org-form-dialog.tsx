@@ -26,6 +26,7 @@ import {
   countryCodeForName,
   isRomania,
   normalizeCountryValue,
+  normalizeCountyValue,
 } from "@/lib/ro-geo";
 import {
   createOrganizationAction,
@@ -155,7 +156,8 @@ export function OrgFormDialog({
       if (res.error || !res.org) return toast({ title: res.error ?? "Load failed", variant: "error" });
       const { clientId: cid, ...rest } = res.org;
       setClientId(cid);
-      setForm({ ...rest, tara: normalizeCountryValue(rest.tara) || ROMANIA });
+      const tara = normalizeCountryValue(rest.tara) || ROMANIA;
+      setForm({ ...rest, tara, judet: isRomania(tara) ? normalizeCountyValue(rest.judet) : rest.judet });
       setReady(true);
     });
     return () => {

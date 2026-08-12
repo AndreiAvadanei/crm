@@ -14,6 +14,7 @@ import { DeleteButton } from "@/components/shared/delete-button";
 import { ClientCombobox } from "@/components/shared/client-combobox";
 import { GenerateInvoiceDialog } from "@/components/invoices/generate-invoice-dialog";
 import { DuplicateInvoiceButton } from "@/components/invoices/duplicate-invoice-button";
+import { EditInvoiceButton } from "@/components/invoices/edit-invoice-button";
 import { saveXmlFile } from "@/components/invoices/saga-xml-button";
 import type { PartNumberOption } from "@/lib/part-numbers";
 import { personalizationBlockMessage } from "@/lib/invoice-issue-guard";
@@ -832,6 +833,15 @@ function InvoiceTableRow({
               finalClients={finalClients}
             />
             {i.status === "IN_ASTEPTARE" && <GenerateInvoiceDialog invoice={i} />}
+            <EditInvoiceButton
+              invoiceId={i.id}
+              organizations={formOptions.organizations}
+              deals={deals}
+              issuers={formOptions.issuers}
+              series={formOptions.series}
+              partNumbers={formOptions.partNumbers}
+              finalClients={finalClients}
+            />
             <DeleteButton
               iconOnly
               onDelete={deleteInvoiceAction.bind(null, i.id)}

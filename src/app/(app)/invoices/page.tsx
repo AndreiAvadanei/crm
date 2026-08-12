@@ -9,6 +9,7 @@ import { resolveOrgVatPercent } from "@/lib/invoice-vat";
 import { getActiveSeries } from "@/lib/series";
 import { getActivePartNumbers } from "@/lib/part-number-catalog";
 import { InvoiceStatus } from "@/generated/prisma";
+import { ALL_DATES_VALUE, currentMonthRange } from "@/lib/invoice-date-filter";
 import { CLIENTS_PAGE_SIZE, LIST_FETCH_CAP } from "@/lib/app-constants";
 import { PageHeader } from "@/components/app/page-header";
 import { Button } from "@/components/ui/button";
@@ -30,10 +31,10 @@ function parseStatus(v?: string): InvoiceStatus | undefined {
 export default async function InvoicesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; status?: string; client?: string; organization?: string; currency?: string; issuer?: string; dateField?: string; from?: string; to?: string; noDates?: string; unpaid?: string; unpaidDays?: string; noPartNumber?: string; groupBy?: string; tab?: string; sort?: string; dir?: string; page?: string }>;
+  searchParams: Promise<{ q?: string; status?: string; client?: string; organization?: string; currency?: string; issuer?: string; dateField?: string; from?: string; to?: string; dates?: string; noDates?: string; unpaid?: string; unpaidDays?: string; noPartNumber?: string; groupBy?: string; tab?: string; sort?: string; dir?: string; page?: string }>;
 }) {
   const user = await requireFullAuth();
-  const { q, status, client, organization, currency, issuer, dateField, from, to, noDates, unpaid, unpaidDays, noPartNumber, groupBy, tab, sort, dir, page } = await searchParams;
+  const { q, status, client, organization, currency, issuer, dateField, from, to, dates, noDates, unpaid, unpaidDays, noPartNumber, groupBy, tab, sort, dir, page } = await searchParams;
   const dateFieldOpt: "expected" | "issued" | undefined = dateField === "expected" || dateField === "issued" ? dateField : undefined;
   const noDatesOpt = noDates === "1";
   const unpaidDaysOpt = (() => {
@@ -45,6 +46,10 @@ export default async function InvoicesPage({
   const tabOpt: InvoiceTab = tab === "invoiced" ? "invoiced" : "to_invoice";
   const dirOpt = dir === "asc" ? "asc" : dir === "desc" ? "desc" : undefined;
   const groupByOrganization = groupBy === "organization";
+  // The list opens on the current month unless the URL asks for another range,
+  // for the undated invoices, or explicitly for every date.
+  const defaultRange =
+    from || to || noDatesOpt || dates === ALL_DATES_VALUE ? null : currentMonthRange();
 
   const filterOpts = {
     search: q,
@@ -54,8 +59,8 @@ export default async function InvoicesPage({
     currency,
     issuer,
     dateField: dateFieldOpt,
-    from,
-    to,
+    from: defaultRange?.from ?? from,
+    to: defaultRange?.to ?? to,
     noDates: noDatesOpt,
     unpaidOnly: unpaidOnlyOpt,
     unpaidMinDays: unpaidDaysOpt,
@@ -146,7 +151,13 @@ export default async function InvoicesPage({
         <div className="flex flex-wrap items-center gap-2">
           <InvoiceTabs tab={tabOpt} toInvoiceCount={tabCounts.toInvoice} invoicedCount={tabCounts.invoiced} />
           <SearchInput placeholder="Search number, SAL, services…" wrapperClassName="w-full sm:max-w-xs" />
-          <InvoiceFilters currencies={currencies} issuers={issuerNames} appliedOrgName={appliedOrgName} tab={tabOpt} />
+          <InvoiceFilters
+            currencies={currencies}
+            issuers={issuerNames}
+            appliedOrgName={appliedOrgName}
+            tab={tabOpt}
+            defaultRange={defaultRange}
+          />
         </div>
         <IssuerTotals totals={issuerTotals} />
         <InvoicesTable
@@ -163,7 +174,7 @@ export default async function InvoicesPage({
         {total > CLIENTS_PAGE_SIZE && (
           <Pagination
             pathname="/invoices"
-            params={{ q, status, client, organization, currency, issuer, dateField, from, to, noDates, unpaid: unpaidOnlyOpt ? "1" : undefined, unpaidDays: unpaidDaysOpt != null ? String(unpaidDaysOpt) : undefined, noPartNumber: noPartNumberOpt ? "1" : undefined, groupBy: groupByOrganization ? "organization" : undefined, tab, sort, dir, page }}
+            params={{ q, status, client, organization, currency, issuer, dateField, from, to, dates, noDates, unpaid: unpaidOnlyOpt ? "1" : undefined, unpaidDays: unpaidDaysOpt != null ? String(unpaidDaysOpt) : undefined, noPartNumber: noPartNumberOpt ? "1" : undefined, groupBy: groupByOrganization ? "organization" : undefined, tab, sort, dir, page }}
             page={invoicePage.page}
             total={total}
             pageSize={invoicePage.pageSize}

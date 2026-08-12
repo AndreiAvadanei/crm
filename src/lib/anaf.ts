@@ -1,5 +1,5 @@
 import "server-only";
-import { ROMANIA } from "@/lib/ro-geo";
+import { ROMANIA, normalizeCountyValue } from "@/lib/ro-geo";
 
 // Lookup of Romanian company data by CUI/VAT through the demoanaf.ro proxy of
 // the official ANAF registry. Returns a normalized subset mapped to our org
@@ -88,7 +88,7 @@ export async function fetchAnafCompany(rawCui: string): Promise<AnafCompany | nu
       taxId: trim(d.cui) ?? cui,
       reg_com: trim(d.registrationNumber),
       tara: trim(hq.country) ?? ROMANIA,
-      judet: trim(hq.county),
+      judet: trim(normalizeCountyValue(hq.county)),
       localitate: trim(hq.locality),
       adresa: trim(d.address) ?? trim([hq.street, hq.number].filter(Boolean).join(" ")),
       cod_post: trim(hq.postalCode) ?? trim(d.postalCode),

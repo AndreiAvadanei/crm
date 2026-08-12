@@ -487,6 +487,71 @@ export async function createInvoiceAction(formData: FormData): Promise<Result> {
   return { ok: true, id: firstId };
 }
 
+const invoiceFormInclude = {
+  organization: { select: { clientId: true, country: true, tvaPercent: true } },
+  finalClient: { select: { id: true, name: true } },
+  deal: { select: { salesId: true } },
+  lines: { orderBy: { createdAt: "asc" } },
+} as const;
+
+function toFormLines(lines: { serviceDescription: string | null; textSupplement: string | null; unitOfMeasure: string | null; quantity: Prisma.Decimal | null; unitPrice: Prisma.Decimal | null; value: Prisma.Decimal | null; total: Prisma.Decimal | null; partNumberId: string | null; partNumberValues: Prisma.JsonValue }[]) {
+  return lines.map((line) => ({
+    serviceDescription: line.serviceDescription ?? "",
+    textSupplement: line.textSupplement ?? "",
+    unitOfMeasure: line.unitOfMeasure ?? "",
+    quantity: line.quantity == null ? "" : String(line.quantity),
+    unitPrice: line.unitPrice == null ? "" : String(line.unitPrice),
+    value: line.value == null ? "" : String(line.value),
+    total: line.total == null ? "" : String(line.total),
+    partNumberOverride: !!line.partNumberId,
+    partNumberId: line.partNumberId ?? "",
+    partNumberValues: asStringMap(line.partNumberValues) ?? {},
+  }));
+}
+
+/**
+ * Load an invoice as-is for the edit dialog, so the invoices list can open the
+ * same form the detail page uses without navigating away.
+ */
+export async function getInvoiceForEditAction(invoiceId: string): Promise<{ invoice?: InvoiceData; error?: string }> {
+  const user = await requireUser();
+  const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId }, include: invoiceFormInclude });
+  if (!invoice) return { error: "Invoice not found." };
+  if (!(await canEditOrgInvoices(user, invoice.clientId ?? invoice.organization.clientId))) {
+    return { error: "Not allowed." };
+  }
+
+  return {
+    invoice: {
+      id: invoice.id,
+      organizationId: invoice.organizationId,
+      salesId: invoice.deal?.salesId ?? invoice.salesIdSnapshot ?? null,
+      finalClientId: invoice.finalClientId,
+      finalClientName: invoice.finalClient?.name ?? null,
+      number: invoice.number,
+      status: invoice.status,
+      currency: invoice.currency,
+      totalAmount: invoice.totalAmount == null ? null : Number(invoice.totalAmount),
+      paymentTermDays: invoice.paymentTermDays,
+      issueDate: invoice.issueDate ? invoice.issueDate.toISOString().slice(0, 10) : null,
+      expectedInvoiceDate: invoice.expectedInvoiceDate ? invoice.expectedInvoiceDate.toISOString().slice(0, 10) : null,
+      issuerName: invoice.issuerName,
+      issuerId: invoice.issuerId,
+      partNumberId: invoice.partNumberId,
+      partNumberValues: asStringMap(invoice.partNumberValues),
+      relatedInvoiceId: invoice.relatedInvoiceId,
+      selfIssued: invoice.selfIssued,
+      seriesId: invoice.seriesId,
+      contractRef: invoice.contractRef,
+      fileUrls: invoice.fileUrls,
+      paid: invoice.paid,
+      needsPersonalization: invoice.needsPersonalization,
+      vatPercent: resolveInvoiceVatPercent(invoice, invoice.organization),
+      lines: toFormLines(invoice.lines),
+    },
+  };
+}
+
 /**
  * Load an existing invoice's settings as a pre-filled template for creating a copy.
  * Every setting and article is preserved, but identity/issuance fields (number,
@@ -497,15 +562,7 @@ export async function getInvoiceForDuplicateAction(
   invoiceId: string
 ): Promise<{ invoice?: InvoiceData; error?: string }> {
   const user = await requireUser();
-  const invoice = await prisma.invoice.findUnique({
-    where: { id: invoiceId },
-    include: {
-      organization: { select: { clientId: true, country: true, tvaPercent: true } },
-      finalClient: { select: { id: true, name: true } },
-      deal: { select: { salesId: true } },
-      lines: { orderBy: { createdAt: "asc" } },
-    },
-  });
+  const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId }, include: invoiceFormInclude });
   if (!invoice) return { error: "Invoice not found." };
   if (!(await canEditOrgInvoices(user, invoice.clientId ?? invoice.organization.clientId))) {
     return { error: "Not allowed." };
@@ -539,18 +596,7 @@ export async function getInvoiceForDuplicateAction(
     paid: false,
     needsPersonalization: invoice.needsPersonalization,
     vatPercent,
-    lines: invoice.lines.map((line) => ({
-      serviceDescription: line.serviceDescription ?? "",
-      textSupplement: line.textSupplement ?? "",
-      unitOfMeasure: line.unitOfMeasure ?? "",
-      quantity: line.quantity == null ? "" : String(line.quantity),
-      unitPrice: line.unitPrice == null ? "" : String(line.unitPrice),
-      value: line.value == null ? "" : String(line.value),
-      total: line.total == null ? "" : String(line.total),
-      partNumberOverride: !!line.partNumberId,
-      partNumberId: line.partNumberId ?? "",
-      partNumberValues: asStringMap(line.partNumberValues) ?? {},
-    })),
+    lines: toFormLines(invoice.lines),
   };
   return { invoice: template };
 }

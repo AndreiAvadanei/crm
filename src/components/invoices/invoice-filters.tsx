@@ -9,6 +9,7 @@ import {
   FilterChips,
   type FilterChip,
 } from "@/components/shared/filter-bar";
+import { ALL_DATES_PARAM, ALL_DATES_VALUE, monthBounds } from "@/lib/invoice-date-filter";
 import { cn } from "@/lib/utils";
 
 const STATUS_OPTIONS = [
@@ -28,13 +29,6 @@ const DATE_FIELD_OPTIONS = [
 const STATUS_LABELS: Record<string, string> = Object.fromEntries(
   STATUS_OPTIONS.filter((s) => s.value).map((s) => [s.value, s.label])
 );
-
-/** First/last day (yyyy-mm-dd) of a yyyy-mm month string. */
-function monthBounds(m: string): { from: string; to: string } {
-  const [y, mo] = m.split("-").map(Number);
-  const last = new Date(Date.UTC(y, mo, 0)).getUTCDate();
-  return { from: `${m}-01`, to: `${m}-${String(last).padStart(2, "0")}` };
-}
 
 /** If from/to span exactly one whole month, return that yyyy-mm; else "". */
 function deriveMonth(from: string, to: string): string {
@@ -135,11 +129,14 @@ export function InvoiceFilters({
   issuers = [],
   appliedOrgName,
   tab,
+  defaultRange = null,
 }: {
   currencies: string[];
   issuers?: string[];
   appliedOrgName?: string | null;
   tab?: "to_invoice" | "invoiced";
+  /** Range the server applied because the URL carries none; removing it shows all dates. */
+  defaultRange?: { from: string; to: string } | null;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -168,9 +165,14 @@ export function InvoiceFilters({
   const currency = params.get("currency") ?? "";
   const issuer = params.get("issuer") ?? "";
   const dateField = params.get("dateField") ?? "";
-  const from = params.get("from") ?? "";
-  const to = params.get("to") ?? "";
+  const from = params.get("from") ?? defaultRange?.from ?? "";
+  const to = params.get("to") ?? defaultRange?.to ?? "";
   const month = deriveMonth(from, to);
+  // Dropping the range has to be recorded explicitly, otherwise the server would
+  // just apply the default month again.
+  const showAllDates = { from: "", to: "", [ALL_DATES_PARAM]: ALL_DATES_VALUE };
+  const setRange = (next: { from: string; to: string }) =>
+    setParams(next.from || next.to ? { ...next, [ALL_DATES_PARAM]: "" } : showAllDates);
   const noDates = params.get("noDates") === "1";
   const unpaidDaysRaw = params.get("unpaidDays") ?? "";
   const unpaidDays = unpaidDaysRaw && Number.parseInt(unpaidDaysRaw, 10) > 0 ? unpaidDaysRaw : "";
@@ -198,7 +200,7 @@ export function InvoiceFilters({
     chips.push({
       key: "date",
       label: `${datePrefix}: ${dateValueLabel}`,
-      onRemove: () => setParams({ from: "", to: "", dateField: "" }),
+      onRemove: () => setParams({ ...showAllDates, dateField: "" }),
     });
   if (groupByOrg) chips.push({ key: "groupBy", label: "Grouped by org", onRemove: () => setParam("groupBy", "") });
 
@@ -206,7 +208,7 @@ export function InvoiceFilters({
   const activeCount = chips.filter((c) => c.key !== "groupBy").length;
 
   const clearAll = () =>
-    setParams({ status: "", currency: "", issuer: "", dateField: "", from: "", to: "", noDates: "", unpaid: "", unpaidDays: "", noPartNumber: "" });
+    setParams({ ...showAllDates, status: "", currency: "", issuer: "", dateField: "", noDates: "", unpaid: "", unpaidDays: "", noPartNumber: "" });
 
   return (
     <div className="flex flex-1 flex-wrap items-center gap-2">
@@ -355,11 +357,8 @@ export function InvoiceFilters({
               value={month}
               disabled={noDates}
               onChange={(e) => {
-                if (!e.target.value) setParams({ from: "", to: "" });
-                else {
-                  const b = monthBounds(e.target.value);
-                  setParams({ from: b.from, to: b.to });
-                }
+                if (!e.target.value) setParams(showAllDates);
+                else setRange(monthBounds(e.target.value));
               }}
             />
           </div>
@@ -367,9 +366,23 @@ export function InvoiceFilters({
           <div className="space-y-1.5">
             <span className="text-xs text-muted-foreground">Custom range</span>
             <div className="flex items-center gap-1 text-sm text-muted-foreground">
-              <input type="date" className={cn(inputClass, "disabled:opacity-50")} value={from} title="From" disabled={noDates} onChange={(e) => setParam("from", e.target.value)} />
+              <input
+                type="date"
+                className={cn(inputClass, "disabled:opacity-50")}
+                value={from}
+                title="From"
+                disabled={noDates}
+                onChange={(e) => setRange({ from: e.target.value, to })}
+              />
               <span>–</span>
-              <input type="date" className={cn(inputClass, "disabled:opacity-50")} value={to} title="To" disabled={noDates} onChange={(e) => setParam("to", e.target.value)} />
+              <input
+                type="date"
+                className={cn(inputClass, "disabled:opacity-50")}
+                value={to}
+                title="To"
+                disabled={noDates}
+                onChange={(e) => setRange({ from, to: e.target.value })}
+              />
             </div>
           </div>
 
@@ -384,7 +397,7 @@ export function InvoiceFilters({
                   className={`inline-flex h-8 items-center rounded-md border px-2.5 text-sm disabled:opacity-50 ${
                     active ? "border-primary/40 bg-primary/10 text-primary" : "border-input text-muted-foreground hover:bg-muted"
                   }`}
-                  onClick={() => setParams({ from: p.from, to: p.to })}
+                  onClick={() => setRange({ from: p.from, to: p.to })}
                 >
                   {p.label}
                 </button>
