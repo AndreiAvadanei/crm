@@ -57,8 +57,8 @@ const DialogContent = React.forwardRef<
       className={cn(
         // Viewport-capped width so consumer max-w-* still applies on desktop
         // without overflowing phones. dvh keeps iOS chrome from clipping.
-        "fixed left-1/2 top-1/2 z-50 grid w-[calc(100vw-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 rounded-lg border bg-card p-4 shadow-md sm:p-6",
-        "max-h-[min(90dvh,calc(100dvh-2rem))] overflow-y-auto overscroll-contain",
+        "fixed left-1/2 top-1/2 z-50 grid min-w-0 w-[calc(100vw-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 rounded-lg border bg-card p-4 shadow-md sm:p-6",
+        "max-h-[min(90dvh,calc(100dvh-2rem))] overflow-y-auto overflow-x-hidden overscroll-contain",
         className
       )}
       {...props}

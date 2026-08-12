@@ -243,9 +243,9 @@ export async function DealDetail({
   );
 
   const body = (
-    <div className="grid gap-6 lg:grid-cols-3">
+    <div className="grid min-w-0 gap-6 lg:grid-cols-3">
       {/* Main column — description, tasks, files, comments, then tabs */}
-      <div className="space-y-6 lg:col-span-2">
+      <div className="min-w-0 space-y-6 lg:col-span-2">
         <Card>
           <CardHeader>
             <CardTitle>Description</CardTitle>
@@ -368,7 +368,7 @@ export async function DealDetail({
       </div>
 
       {/* Right column — deal properties + custom fields */}
-      <div className="space-y-6">
+      <div className="min-w-0 space-y-6">
         <DealHeader
           dealId={deal.id}
           salesId={deal.salesId}
@@ -405,13 +405,13 @@ export async function DealDetail({
   // render a visible title row (title + SAL id + actions) and the body here.
   if (variant === "modal") {
     return (
-      <div className="space-y-6">
+      <div className="min-w-0 space-y-6 overflow-x-hidden">
         <div className="flex flex-col gap-3 border-b pb-4 pr-8 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0 space-y-1">
             <h2 className="truncate text-xl font-medium tracking-tight">{deal.title}</h2>
             <DealCopyLinks salesId={deal.salesId} />
           </div>
-          <div className="flex flex-wrap items-center gap-2 sm:justify-end">{actions}</div>
+          <div className="flex min-w-0 flex-wrap items-center gap-2 sm:justify-end">{actions}</div>
         </div>
         {body}
       </div>

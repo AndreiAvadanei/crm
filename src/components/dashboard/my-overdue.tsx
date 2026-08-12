@@ -40,13 +40,19 @@ function SectionCard({
   children: React.ReactNode;
 }) {
   return (
-    <Card className={tone === "danger" ? "border-destructive/30" : undefined}>
+    <Card
+      className={cn("min-w-0 overflow-hidden", tone === "danger" && "border-destructive/30")}
+    >
       <CardHeader className="pb-3">
-        <div className="flex items-center justify-between gap-2">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Icon className={`h-4 w-4 ${tone === "danger" ? "text-destructive" : "text-muted-foreground"}`} />
-            {title}
-            <Badge variant={tone === "danger" ? "destructive" : "secondary"}>{count}</Badge>
+        <div className="flex min-w-0 items-center justify-between gap-2">
+          <CardTitle className="flex min-w-0 items-center gap-2 text-base">
+            <Icon
+              className={`h-4 w-4 shrink-0 ${tone === "danger" ? "text-destructive" : "text-muted-foreground"}`}
+            />
+            <span className="truncate">{title}</span>
+            <Badge variant={tone === "danger" ? "destructive" : "secondary"} className="shrink-0">
+              {count}
+            </Badge>
           </CardTitle>
           {count > 0 && (
             <Link
@@ -58,11 +64,13 @@ function SectionCard({
           )}
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="min-w-0">
         {count === 0 ? (
           <p className="text-sm text-muted-foreground">{empty}</p>
         ) : (
-          <div className="max-h-[22rem] space-y-2 overflow-y-auto pr-1">{children}</div>
+          <div className="max-h-[22rem] min-w-0 space-y-2 overflow-y-auto overflow-x-hidden pr-1">
+            {children}
+          </div>
         )}
       </CardContent>
     </Card>
@@ -75,34 +83,43 @@ function DealRow({ deal, tone }: { deal: OverdueDeal; tone: "danger" | "muted" }
     <Link
       href={`/deals/${deal.salesId}`}
       className={cn(
-        "flex items-center gap-3 rounded-lg border px-3 py-2 transition-colors hover:border-primary hover:bg-accent/50",
+        "flex min-w-0 items-start gap-3 rounded-lg border px-3 py-2 transition-colors hover:border-primary hover:bg-accent/50",
         dueToday && "border-l-2 border-l-warning"
       )}
     >
       {tone === "danger" ? (
-        <AlertTriangle className="h-4 w-4 shrink-0 text-destructive" />
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
       ) : (
-        <CalendarDays className={cn("h-4 w-4 shrink-0", dueToday ? "text-warning" : "text-muted-foreground")} />
+        <CalendarDays
+          className={cn(
+            "mt-0.5 h-4 w-4 shrink-0",
+            dueToday ? "text-warning" : "text-muted-foreground"
+          )}
+        />
       )}
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 flex-1 overflow-hidden">
         <div className="truncate text-sm font-medium">{deal.title}</div>
         <div className="truncate text-xs text-muted-foreground">
           <span className="font-mono">{deal.salesId}</span> · {deal.stageName}
         </div>
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+          {deal.amountEur != null && (
+            <span className="tabular-nums text-muted-foreground">{formatCurrency(deal.amountEur)}</span>
+          )}
+          <span
+            className={cn(
+              "font-medium",
+              tone === "danger"
+                ? "text-destructive"
+                : dueToday
+                  ? "text-warning"
+                  : "text-muted-foreground"
+            )}
+          >
+            {dueToday ? "Today" : formatDate(deal.dueDate)}
+          </span>
+        </div>
       </div>
-      {deal.amountEur != null && (
-        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-          {formatCurrency(deal.amountEur)}
-        </span>
-      )}
-      <span
-        className={cn(
-          "w-24 shrink-0 text-right text-xs font-medium",
-          tone === "danger" ? "text-destructive" : dueToday ? "text-warning" : "text-muted-foreground"
-        )}
-      >
-        {dueToday ? "Today" : formatDate(deal.dueDate)}
-      </span>
     </Link>
   );
 }
@@ -136,8 +153,8 @@ export function MyWork({
   if (nothing) return null;
 
   return (
-    <div className="space-y-4">
-      <div className="grid gap-4 md:grid-cols-2">
+    <div className="min-w-0 space-y-4">
+      <div className="grid min-w-0 gap-4 md:grid-cols-2">
         <SectionCard
           title="My overdue tasks"
           icon={ListTodo}
@@ -161,7 +178,7 @@ export function MyWork({
         </SectionCard>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
+      <div className="grid min-w-0 gap-4 md:grid-cols-2">
         <SectionCard
           title="My overdue deals"
           icon={CalendarClock}

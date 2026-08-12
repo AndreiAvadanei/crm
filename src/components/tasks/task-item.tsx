@@ -63,7 +63,7 @@ export function TaskItem({
   return (
     <div
       className={cn(
-        "group flex items-start gap-2.5 rounded-lg border px-2.5 py-2 transition-colors",
+        "group flex min-w-0 items-start gap-2.5 overflow-hidden rounded-lg border px-2.5 py-2 transition-colors",
         selected ? "border-primary bg-primary/5" : "border-border hover:border-foreground/20 hover:bg-accent/40",
         overdue && !selected && "border-l-2 border-l-destructive",
         dueToday && !selected && "border-l-2 border-l-warning"
@@ -88,22 +88,23 @@ export function TaskItem({
       >
         <TaskTypeIcon type={task.type} className="mt-0.5 shrink-0 text-muted-foreground" />
         {compact ? (
-          // Two fixed lines: title + urgency/due, then deal context + assignee.
-          <span className="min-w-0 flex-1">
-            <span className="flex items-center gap-2">
-              <span
-                className={cn(
-                  "min-w-0 flex-1 truncate text-sm font-medium",
-                  isDone && "text-muted-foreground line-through"
-                )}
-              >
-                {task.title}
-              </span>
+          // Stack meta under the title so narrow columns (dashboard cards) never
+          // force horizontal page scroll.
+          <span className="min-w-0 flex-1 overflow-hidden">
+            <span
+              className={cn(
+                "block truncate text-sm font-medium",
+                isDone && "text-muted-foreground line-through"
+              )}
+            >
+              {task.title}
+            </span>
+            <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">
               <UrgencyBadge urgency={task.urgency} className="shrink-0" />
               <DueBadge dueDate={task.dueDate} status={task.status} className="shrink-0" />
             </span>
             {(showDeal && task.dealSalesId) || task.assigneeName ? (
-              <span className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
+              <span className="mt-0.5 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
                 {showDeal && task.dealSalesId && (
                   <span className="min-w-0 flex-1 truncate">
                     <span className="font-mono">{task.dealSalesId}</span>
@@ -111,9 +112,9 @@ export function TaskItem({
                   </span>
                 )}
                 {task.assigneeName && (
-                  <span className="ml-auto inline-flex shrink-0 items-center gap-1">
+                  <span className="inline-flex max-w-[40%] shrink-0 items-center gap-1 truncate">
                     <Avatar name={task.assigneeName} color={task.assigneeColor} className="h-4 w-4 text-[8px]" />
-                    {task.assigneeName}
+                    <span className="truncate">{task.assigneeName}</span>
                   </span>
                 )}
               </span>
