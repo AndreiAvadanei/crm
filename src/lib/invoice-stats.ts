@@ -29,7 +29,7 @@ export interface InvoiceListOpts {
   unpaidMinDays?: number;
   /** Only invoices with no part number assigned (neither invoice-level nor on any line). */
   noPartNumber?: boolean;
-  /** Workflow tab: "to_invoice" (not issued) | "invoiced" (issued) | undefined (all). */
+  /** Workflow tab: "to_invoice" (not issued, or sent to accounting) | "invoiced" (issued) | undefined (all). */
   tab?: InvoiceTab;
   /** Column to sort by (defaults to tab-aware smart ordering). */
   sort?: string;
@@ -207,10 +207,25 @@ async function buildInvoiceWhere(user: User, opts: InvoiceListOpts): Promise<Pri
   return { AND: and };
 }
 
-/** Tab constraint: not-yet-issued vs already issued. */
+/**
+ * Tab constraint: still in the invoicing pipeline vs already issued.
+ *
+ * Sending to accounting stamps an issue date (needed for Saga XML), but the
+ * invoice is not done until accounting generates it — so TRIMISA_LA_CONTABILITATE
+ * stays on "To invoice" and only leaves once the status is no longer that.
+ */
 function tabWhere(tab?: InvoiceTab): Prisma.InvoiceWhereInput | null {
-  if (tab === "to_invoice") return { issueDate: null };
-  if (tab === "invoiced") return { issueDate: { not: null } };
+  if (tab === "to_invoice") {
+    return {
+      OR: [{ issueDate: null }, { status: InvoiceStatus.TRIMISA_LA_CONTABILITATE }],
+    };
+  }
+  if (tab === "invoiced") {
+    return {
+      issueDate: { not: null },
+      status: { not: InvoiceStatus.TRIMISA_LA_CONTABILITATE },
+    };
+  }
   return null;
 }
 
