@@ -2,7 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ChevronDown, ChevronRight, ListPlus, Loader2, Share2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Handshake, ListPlus, Loader2, Share2 } from "lucide-react";
 import { quickUpdateDealAction } from "@/server/quick-actions";
 import { deleteDealAction } from "@/server/deal-actions";
 import { loadStageDealsAction } from "@/server/deal-load-actions";
@@ -15,6 +15,7 @@ import type { TagView } from "@/components/shared/tag-badge";
 import { InlineInput, InlineSelect, InlineTagEditor } from "@/components/shared/inline-edit";
 import { ConfirmDeleteButton } from "@/components/shared/confirm-delete-button";
 import { ShareControl } from "@/components/deals/share-control";
+import { TableEmpty } from "@/components/shared/empty-state";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
 
 export type DealRow = {
@@ -252,7 +253,7 @@ export function DealsTable({
   const anyRows = rows.length > 0 || Object.values(totals).some((t) => t.count > 0);
 
   return (
-    <div className="rounded-lg border bg-card">
+    <div className="surface-panel">
       <Table>
         <TableHeader>
           <TableRow>
@@ -375,11 +376,12 @@ export function DealsTable({
           ))}
 
           {!anyRows && (
-            <TableRow>
-              <TableCell colSpan={colCount} className="py-10 text-center text-sm text-muted-foreground">
-                No deals found.
-              </TableCell>
-            </TableRow>
+            <TableEmpty
+              colSpan={colCount}
+              icon={Handshake}
+              title="No deals found"
+              description="Adjust filters or create a deal to start filling the pipeline."
+            />
           )}
         </TableBody>
       </Table>

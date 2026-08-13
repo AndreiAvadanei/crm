@@ -68,7 +68,7 @@ export default async function InvoiceInsightsPage({
         </Button>
       </PageHeader>
 
-      <div className="px-4 pt-2 md:px-6">
+      <div className="page-body pt-0 pb-4">
         <InsightsIssuerSwitcher issuers={issuers} selected={selected} />
       </div>
 

@@ -97,7 +97,7 @@ export function InvoiceTabs({
   ];
 
   return (
-    <div className="inline-flex shrink-0 rounded-lg border bg-card p-1">
+    <div className="segment-track shrink-0">
       {tabs.map((t) => {
         const active = tab === t.value;
         return (
@@ -105,14 +105,14 @@ export function InvoiceTabs({
             key={t.value}
             type="button"
             onClick={() => go(t.value)}
-            className={`inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-              active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+            className={`inline-flex items-center gap-2 rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors ${
+              active ? "segment-active" : "segment-inactive"
             }`}
           >
             {t.label}
             <span
               className={`rounded-full px-1.5 text-xs ${
-                active ? "bg-primary-foreground/20" : "bg-muted text-muted-foreground"
+                active ? "bg-muted text-foreground" : "bg-muted/80 text-muted-foreground"
               }`}
             >
               {t.count}

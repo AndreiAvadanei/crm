@@ -10,7 +10,9 @@ import { InlineInput, InlineSelect, InlineTagEditor } from "@/components/shared/
 import { DealBreakdownCell, ActivityCell } from "@/components/clients/client-stats-cells";
 import { NewDealButton } from "@/components/clients/new-deal-button";
 import type { ClientStats } from "@/lib/client-stats";
+import { TableEmpty } from "@/components/shared/empty-state";
 import { formatDate } from "@/lib/utils";
+import { Building2 } from "lucide-react";
 
 export type ClientRow = {
   id: string;
@@ -47,7 +49,7 @@ export function ClientsTable({
   };
 }) {
   return (
-    <div className="rounded-lg border bg-card">
+    <div className="surface-panel">
       <Table>
         <TableHeader>
           <TableRow>
@@ -144,11 +146,12 @@ export function ClientsTable({
             </TableRow>
           ))}
           {clients.length === 0 && (
-            <TableRow>
-              <TableCell colSpan={dealForm ? 9 : 8} className="py-10 text-center text-sm text-muted-foreground">
-                No clients found.
-              </TableCell>
-            </TableRow>
+            <TableEmpty
+              colSpan={dealForm ? 9 : 8}
+              icon={Building2}
+              title="No clients found"
+              description="Try a different search or clear filters to see everyone in your workspace."
+            />
           )}
         </TableBody>
       </Table>

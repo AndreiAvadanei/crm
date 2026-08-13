@@ -194,7 +194,7 @@ export default async function InvoiceDetailPage({ params }: Props) {
   const fileUrls = (invoice.fileUrls ?? "").split(/[\r\n,]+/).map((s) => s.trim()).filter(Boolean);
 
   return (
-    <div className="pb-10">
+    <div>
       <PageHeader
         title={invoice.number || invoice.externalRef || "Invoice"}
         description={invoice.organization.sourceName}
@@ -265,7 +265,7 @@ export default async function InvoiceDetailPage({ params }: Props) {
         )}
       </PageHeader>
 
-      <div className="grid gap-6 p-4 md:grid-cols-3 md:p-6">
+      <div className="page-body grid gap-6 pt-0 md:grid-cols-3">
         <div className="space-y-6 md:col-span-1">
           <Card>
             <CardHeader>

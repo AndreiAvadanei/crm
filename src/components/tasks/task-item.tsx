@@ -63,7 +63,7 @@ export function TaskItem({
   return (
     <div
       className={cn(
-        "group flex min-w-0 items-start gap-2.5 overflow-hidden rounded-lg border px-2.5 py-2 transition-colors",
+        "group flex min-w-0 items-start gap-2.5 overflow-hidden rounded-xl border px-3 py-2.5 transition-colors",
         selected ? "border-primary bg-primary/5" : "border-border hover:border-foreground/20 hover:bg-accent/40",
         overdue && !selected && "border-l-2 border-l-destructive",
         dueToday && !selected && "border-l-2 border-l-warning"

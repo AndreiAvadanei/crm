@@ -27,7 +27,7 @@ export function InsightsIssuerSwitcher({
   const options = [{ key: "all", label: "Overall" }, ...issuers.map((i) => ({ key: i.name, label: i.name }))];
 
   return (
-    <div className="inline-flex flex-wrap gap-1 rounded-lg border bg-card p-1">
+    <div className="segment-track flex-wrap">
       {options.map((opt) => {
         const active = selected === opt.key;
         return (
@@ -35,8 +35,8 @@ export function InsightsIssuerSwitcher({
             key={opt.key}
             type="button"
             onClick={() => go(opt.key)}
-            className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-              active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+            className={`rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors ${
+              active ? "segment-active" : "segment-inactive"
             }`}
           >
             {opt.label}

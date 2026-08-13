@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { Pencil } from "lucide-react";
+import { Building, Pencil } from "lucide-react";
+import { TableEmpty } from "@/components/shared/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -24,7 +25,7 @@ export function OrganizationsTable({
   defaultTvaPercent: string;
 }) {
   return (
-    <div className="rounded-lg border bg-card">
+    <div className="surface-panel">
       <Table>
         <TableHeader>
           <TableRow>
@@ -121,11 +122,12 @@ export function OrganizationsTable({
             );
           })}
           {organizations.length === 0 && (
-            <TableRow>
-              <TableCell colSpan={canManage ? 9 : 8} className="py-10 text-center text-sm text-muted-foreground">
-                No organizations found.
-              </TableCell>
-            </TableRow>
+            <TableEmpty
+              colSpan={canManage ? 9 : 8}
+              icon={Building}
+              title="No organizations found"
+              description="Search by name, CUI, or IBAN, or add a billing entity."
+            />
           )}
         </TableBody>
       </Table>

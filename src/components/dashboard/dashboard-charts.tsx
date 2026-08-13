@@ -34,7 +34,7 @@ export type LeaderRow = { name: string; color: string; wonValue: number; wonCoun
 function ValueTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="rounded-lg border bg-popover px-3 py-2 text-xs shadow-sm">
+    <div className="rounded-2xl border border-border/80 bg-popover/95 px-3 py-2 text-xs shadow-[var(--shadow-md)] backdrop-blur-xl">
       <div className="mb-1 font-medium">{label}</div>
       {payload.map((p: any) => (
         <div key={p.name} className="flex items-center gap-2">
@@ -55,7 +55,7 @@ function ValueTooltip({ active, payload, label }: any) {
 function CountTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="rounded-lg border bg-popover px-3 py-2 text-xs shadow-sm">
+    <div className="rounded-2xl border border-border/80 bg-popover/95 px-3 py-2 text-xs shadow-[var(--shadow-md)] backdrop-blur-xl">
       <div className="mb-1 font-medium">{label}</div>
       {payload.map((p: any) => (
         <div key={p.name} className="flex items-center gap-2">
@@ -257,8 +257,9 @@ export function SellerCompareChart({
 
 function EmptyChart({ label }: { label: string }) {
   return (
-    <div className="flex h-[240px] items-center justify-center text-sm text-muted-foreground">
-      {label}
+    <div className="flex h-[240px] flex-col items-center justify-center gap-1.5 text-center">
+      <p className="text-sm font-medium tracking-tight">{label}</p>
+      <p className="text-xs text-muted-foreground">Try a wider date range or clear filters.</p>
     </div>
   );
 }

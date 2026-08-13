@@ -17,9 +17,9 @@ export default async function SecurityPage() {
   });
 
   return (
-    <div className="pb-10">
+    <div>
       <PageHeader title="Security" description="Manage your password and two-factor methods." />
-      <div className="grid gap-6 p-4 md:grid-cols-2 md:p-6">
+      <div className="page-body grid gap-6 pt-0 md:grid-cols-2">
         <Card>
           <CardHeader>
             <CardTitle>Password</CardTitle>

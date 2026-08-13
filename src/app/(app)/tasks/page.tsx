@@ -148,7 +148,7 @@ export default async function TasksPage({
   ]);
 
   return (
-    <div className="pb-10">
+    <div>
       <PageHeader title="Tasks" description={admin ? "All open next-actions on visible deals" : "Your open next-actions"} />
       <TasksBoard
         overdue={overdueRows.map(toRow)}

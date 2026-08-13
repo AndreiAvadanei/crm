@@ -11,7 +11,9 @@ import {
   activityEntityName,
   activityEntityHref,
 } from "@/lib/activity-format";
+import { EmptyState } from "@/components/shared/empty-state";
 import { formatDateTime, relativeTime } from "@/lib/utils";
+import { Activity } from "lucide-react";
 
 export const metadata = {
   title: "Activity",
@@ -28,14 +30,18 @@ export default async function ActivityPage() {
   });
 
   return (
-    <div className="pb-10">
+    <div>
       <PageHeader title="Activity" description="Recent actions across the whole system." />
 
-      <div className="p-4 md:p-6">
+      <div className="page-body pt-0">
         <Card>
           <CardContent className="divide-y p-0">
             {events.length === 0 && (
-              <div className="p-6 text-sm text-muted-foreground">No activity yet.</div>
+              <EmptyState
+                icon={Activity}
+                title="No activity yet"
+                description="Actions across deals, clients, and invoices will show up here."
+              />
             )}
             {events.map((e) => {
               const meta = e.meta as Record<string, unknown> | null;
@@ -43,7 +49,7 @@ export default async function ActivityPage() {
               const name = activityEntityName(meta);
               const href = activityEntityHref(e.entity, e.entityId, meta);
               return (
-                <div key={e.id} className="flex items-start gap-3 px-4 py-3">
+                <div key={e.id} className="flex items-start gap-3 px-5 py-3.5">
                   <Avatar
                     name={e.actor?.name ?? "System"}
                     color={e.actor?.avatarColor ?? "#64748b"}

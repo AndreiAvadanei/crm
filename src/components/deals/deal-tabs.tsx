@@ -21,14 +21,14 @@ export type DealTab = {
 export function DealTabs({ tabs, defaultValue }: { tabs: DealTab[]; defaultValue?: string }) {
   if (tabs.length === 0) return null;
   return (
-    <Card className="p-4 md:p-5">
+    <Card className="p-5 md:p-6">
       <Tabs defaultValue={defaultValue ?? tabs[0].value}>
         <TabsList className="h-auto w-full flex-wrap justify-start gap-1 bg-transparent p-0">
           {tabs.map((t) => (
             <TabsTrigger
               key={t.value}
               value={t.value}
-              className="rounded-md border border-transparent px-2.5 py-1.5 text-muted-foreground data-[state=active]:border-border data-[state=active]:bg-muted data-[state=active]:text-foreground"
+              className="rounded-full border border-transparent px-3 py-1.5 text-muted-foreground data-[state=active]:border-border/80 data-[state=active]:bg-muted data-[state=active]:text-foreground data-[state=active]:shadow-[var(--shadow-sm)]"
             >
               {t.icon}
               {t.label}

@@ -96,7 +96,7 @@ export default async function ClientsPage({
         />
       </PageHeader>
 
-      <div className="space-y-4 p-4 md:p-6">
+      <div className="page-body space-y-5 pt-0">
         <ClientsToolbar
           owners={owners}
           tags={tags}

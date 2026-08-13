@@ -82,14 +82,14 @@ function StatCard({
     <Card className="card-interactive">
       <CardContent className="flex items-start justify-between p-5">
         <div>
-          <div className="text-sm font-medium text-muted-foreground">{label}</div>
-          <div className="mt-1 text-2xl font-semibold tabular-nums text-foreground">{value}</div>
+          <div className="text-[13px] font-medium text-muted-foreground">{label}</div>
+          <div className="mt-1.5 text-[1.65rem] font-semibold tracking-tight tabular-nums text-foreground">{value}</div>
           {sub && <div className="mt-0.5 text-xs text-muted-foreground">{sub}</div>}
           <DeltaBadge delta={delta} invert={invert} />
         </div>
         {/* Tinted icon chip adds color without overwhelming the card. */}
         <div
-          className="flex h-10 w-10 items-center justify-center rounded-lg"
+          className="flex h-11 w-11 items-center justify-center rounded-2xl"
           style={{ backgroundColor: `color-mix(in oklch, ${tone} 16%, transparent)`, color: tone }}
         >
           <Icon className="h-5 w-5" />
@@ -118,14 +118,14 @@ function StatusCard({
         <div>
           <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
             <span
-              className="flex h-6 w-6 items-center justify-center rounded-md"
+              className="flex h-7 w-7 items-center justify-center rounded-xl"
               style={{ backgroundColor: `color-mix(in oklch, ${tone} 16%, transparent)`, color: tone }}
             >
               <Icon className="h-3.5 w-3.5" />
             </span>
             {label}
           </div>
-          <div className="mt-1 text-2xl font-semibold tabular-nums text-foreground">{count}</div>
+          <div className="mt-1.5 text-[1.65rem] font-semibold tracking-tight tabular-nums text-foreground">{count}</div>
           <div className="mt-0.5 text-xs text-muted-foreground">{formatCurrency(value)}</div>
         </div>
       </CardContent>
@@ -242,9 +242,9 @@ export default async function DashboardPage({
   const myUpcomingDeals = upcomingDealRows.map(toDealRow);
 
   return (
-    <div className="pb-10">
+    <div>
       <PageHeader title="Dashboard" description={`Welcome back, ${user.name.split(" ")[0]}.`} />
-      <div className="space-y-6 p-4 md:p-6">
+      <div className="page-body space-y-6 pt-0">
         <MyWork
           overdueTasks={myOverdueTasks}
           upcomingTasks={myUpcomingTasks}

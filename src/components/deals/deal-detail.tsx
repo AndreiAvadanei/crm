@@ -419,12 +419,12 @@ export async function DealDetail({
   }
 
   return (
-    <div className="pb-10">
+    <div>
       <PageHeader title={deal.title} description={undefined}>
         <DealCopyLinks salesId={deal.salesId} />
         {actions}
       </PageHeader>
-      <div className="p-4 md:p-6">{body}</div>
+      <div className="page-body pt-0">{body}</div>
     </div>
   );
 }

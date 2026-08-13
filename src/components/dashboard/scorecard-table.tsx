@@ -51,14 +51,14 @@ export function GranularityToggle({
   );
 
   return (
-    <div className={cn("inline-flex rounded-md border p-0.5", pending && "opacity-60")}>
+    <div className={cn("segment-track", pending && "opacity-60")}>
       {GRAN_OPTIONS.map((o) => (
         <button
           key={o.value}
           type="button"
           onClick={() => setGran(o.value)}
           className={cn(
-            "rounded font-medium transition-colors",
+            "rounded-full font-medium transition-colors",
             size === "sm" ? "px-2.5 py-1 text-[11px]" : "px-3 py-1 text-xs",
             granularity === o.value ? "segment-active" : "segment-inactive"
           )}
@@ -121,8 +121,9 @@ export function ScorecardGrid({
 }) {
   if (scorecard.rows.length === 0) {
     return (
-      <div className="py-8 text-center text-sm text-muted-foreground">
-        {emptyLabel}
+      <div className="py-12 text-center">
+        <p className="text-sm font-medium tracking-tight">{emptyLabel}</p>
+        <p className="mt-1 text-xs text-muted-foreground">Closed deals will populate this grid automatically.</p>
       </div>
     );
   }

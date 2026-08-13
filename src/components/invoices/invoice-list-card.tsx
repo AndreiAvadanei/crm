@@ -79,7 +79,9 @@ export function InvoiceListCard({
           </div>
         </Link>
       ))}
-      {invoices.length === 0 && <p className="text-sm text-muted-foreground">No invoices yet.</p>}
+      {invoices.length === 0 && (
+        <p className="py-3 text-sm leading-relaxed text-muted-foreground">No invoices yet.</p>
+      )}
     </div>
   );
 

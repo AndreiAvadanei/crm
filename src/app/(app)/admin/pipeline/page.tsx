@@ -36,9 +36,9 @@ export default async function PipelinePage() {
   }));
 
   return (
-    <div className="pb-10">
+    <div>
       <PageHeader title="Pipeline & tags" description="Configure deal stages and tags." />
-      <div className="grid gap-6 p-4 md:grid-cols-2 md:p-6">
+      <div className="page-body grid gap-6 pt-0 md:grid-cols-2">
         <Card>
           <CardHeader>
             <CardTitle>Stages</CardTitle>
@@ -79,7 +79,11 @@ export default async function PipelinePage() {
                 </div>
               </div>
             ))}
-            {tags.length === 0 && <p className="text-sm text-muted-foreground">No tags.</p>}
+            {tags.length === 0 && (
+              <p className="py-6 text-center text-sm leading-relaxed text-muted-foreground">
+                No tags yet. Create one to organize deals and clients.
+              </p>
+            )}
           </CardContent>
         </Card>
       </div>

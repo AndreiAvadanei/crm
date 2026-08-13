@@ -147,7 +147,7 @@ export default async function InvoicesPage({
         />
       </PageHeader>
 
-      <div className="space-y-3 p-4 md:px-6 md:py-4">
+      <div className="page-body space-y-4 pt-0">
         <div className="flex flex-wrap items-center gap-2">
           <InvoiceTabs tab={tabOpt} toInvoiceCount={tabCounts.toInvoice} invoicedCount={tabCounts.invoiced} />
           <SearchInput placeholder="Search number, SAL, services…" wrapperClassName="w-full sm:max-w-xs" />

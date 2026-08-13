@@ -179,7 +179,7 @@ export function DealsToolbar({
           </FilterField>
         </FilterPopover>
 
-        <div className="ml-auto flex shrink-0 items-center rounded-md border p-0.5">
+        <div className="segment-track ml-auto shrink-0">
           <Button
             variant={view === "board" ? "secondary" : "ghost"}
             size="sm"

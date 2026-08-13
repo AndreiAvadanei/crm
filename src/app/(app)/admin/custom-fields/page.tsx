@@ -56,7 +56,11 @@ function FieldList({ entity, defs }: { entity: CustomEntity; defs: CustomFieldDe
             </div>
           </div>
         ))}
-        {defs.length === 0 && <p className="text-sm text-muted-foreground">No fields yet.</p>}
+        {defs.length === 0 && (
+          <p className="py-6 text-center text-sm leading-relaxed text-muted-foreground">
+            No fields yet. Add one to capture extra data on this record.
+          </p>
+        )}
       </CardContent>
     </Card>
   );
@@ -69,9 +73,9 @@ export default async function CustomFieldsPage() {
   const clientDefs = defs.filter((d) => d.entity === "CLIENT");
 
   return (
-    <div className="pb-10">
+    <div>
       <PageHeader title="Custom fields" description="Configure extra fields for deals and clients." />
-      <div className="grid gap-6 p-4 md:grid-cols-2 md:p-6">
+      <div className="page-body grid gap-6 pt-0 md:grid-cols-2">
         <FieldList entity="DEAL" defs={dealDefs} />
         <FieldList entity="CLIENT" defs={clientDefs} />
       </div>

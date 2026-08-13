@@ -66,7 +66,7 @@ function SectionCard({
       </CardHeader>
       <CardContent className="min-w-0">
         {count === 0 ? (
-          <p className="text-sm text-muted-foreground">{empty}</p>
+          <p className="py-4 text-sm leading-relaxed text-muted-foreground">{empty}</p>
         ) : (
           <div className="max-h-[22rem] min-w-0 space-y-2 overflow-y-auto overflow-x-hidden pr-1">
             {children}

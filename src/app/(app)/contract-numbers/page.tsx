@@ -77,7 +77,7 @@ export default async function ContractNumbersPage({
         />
       </PageHeader>
 
-      <div className="space-y-4 p-4 md:p-6">
+      <div className="page-body space-y-5 pt-0">
         <div className="flex flex-wrap items-center gap-3">
           <SearchInput placeholder="Search number, client, comment…" />
           <FilterBar>

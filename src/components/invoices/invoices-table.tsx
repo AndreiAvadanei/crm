@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
-import { ArrowDown, ArrowUp, Check, ChevronsUpDown, Copy, Download, ExternalLink, Loader2, Mail, Pencil, Sparkles, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronsUpDown, Copy, Download, ExternalLink, Loader2, Mail, Pencil, Receipt, Sparkles, X } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { DeleteButton } from "@/components/shared/delete-button";
+import { TableEmpty } from "@/components/shared/empty-state";
 import { ClientCombobox } from "@/components/shared/client-combobox";
 import { GenerateInvoiceDialog } from "@/components/invoices/generate-invoice-dialog";
 import { DuplicateInvoiceButton } from "@/components/invoices/duplicate-invoice-button";
@@ -1028,7 +1029,7 @@ export function InvoicesTable({
           onRefresh={() => router.refresh()}
         />
       )}
-      <div className="rounded-lg border bg-card">
+      <div className="surface-panel">
       <Table>
         <TableHeader>
           <TableRow>
@@ -1090,11 +1091,12 @@ export function InvoicesTable({
                 />
               ))}
           {invoices.length === 0 && (
-            <TableRow>
-              <TableCell colSpan={colSpan} className="py-10 text-center text-sm text-muted-foreground">
-                No invoices found.
-              </TableCell>
-            </TableRow>
+            <TableEmpty
+              colSpan={colSpan}
+              icon={Receipt}
+              title="No invoices found"
+              description="Try another date range or clear filters to see invoices in this tab."
+            />
           )}
         </TableBody>
       </Table>

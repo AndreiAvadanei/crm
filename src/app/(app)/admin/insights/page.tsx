@@ -79,18 +79,19 @@ export default async function AdminInsightsPage({
   }));
 
   return (
-    <div className="pb-10">
+    <div>
       <PageHeader
         title="Seller insights"
         description="Compare sales performance across the team."
       />
-      <div className="space-y-6 p-4 md:p-6">
+      <div className="page-body space-y-6 pt-0">
         <DashboardFilters showComparison={false} sellerOptions={sellerOptions} />
 
         {sellers.length === 0 ? (
           <Card>
-            <CardContent className="py-12 text-center text-sm text-muted-foreground">
-              No deals in this window yet.
+            <CardContent className="py-16 text-center">
+              <p className="text-sm font-medium tracking-tight">No deals in this window yet</p>
+              <p className="mt-1 text-sm text-muted-foreground">Try a wider date range to compare seller performance.</p>
             </CardContent>
           </Card>
         ) : (

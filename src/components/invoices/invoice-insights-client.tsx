@@ -188,7 +188,7 @@ function Delta({ value, pctValue }: { value: number; pctValue: number | null }) 
 function ChartTooltip({ active, payload, label, currency }: any) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="rounded-lg border bg-popover px-3 py-2 text-xs shadow-md">
+    <div className="rounded-2xl border border-border/80 bg-popover/95 px-3 py-2 text-xs shadow-[var(--shadow-md)] backdrop-blur-xl">
       <div className="mb-1 font-medium">{label}</div>
       {payload.map((p: any) => (
         <div key={p.name} className="flex items-center gap-2">
@@ -349,7 +349,7 @@ export function InvoiceInsightsClient({ data }: { data: InsightsData }) {
   const tickMoney = (v: number) => compactMoney(v, reporting);
 
   return (
-    <div className="space-y-6 px-4 pb-6 md:px-6">
+    <div className="page-body space-y-6 pt-0">
       <Card>
         <CardContent className="flex flex-wrap items-end gap-4 py-4">
           <div className="space-y-1">

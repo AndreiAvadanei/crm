@@ -196,7 +196,7 @@ function DealCard({
         }
       }}
       className={cn(
-        "group rounded-lg border bg-card p-3 shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md cursor-grab active:cursor-grabbing",
+        "group rounded-2xl border border-border/80 bg-card p-3.5 shadow-[var(--shadow-sm)] transition-all hover:-translate-y-0.5 hover:border-primary/35 hover:shadow-[var(--shadow-md)] cursor-grab active:cursor-grabbing",
         // Overdue deals get a red left accent + tinted surface.
         overdue && "border-l-2 border-l-destructive bg-destructive/5",
         overlay && "rotate-1 shadow-lg ring-1 ring-primary/30",
@@ -209,7 +209,7 @@ function DealCard({
             {deal.salesId}
           </span>
           {overdue && (
-            <span className="rounded bg-destructive/15 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-destructive">
+            <span className="rounded-full bg-destructive/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-destructive">
               Overdue
             </span>
           )}
@@ -911,7 +911,7 @@ function StageColumn({
         {total.count === 0 && !adding && (
           <button
             onClick={() => setAdding(true)}
-            className="rounded-lg border border-dashed py-6 text-center text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+            className="rounded-2xl border border-dashed py-8 text-center text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
           >
             + Add a deal
           </button>

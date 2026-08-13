@@ -41,7 +41,7 @@ export function Topbar({
   const [navOpen, setNavOpen] = useState(false);
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between gap-2 border-b bg-background px-3 md:px-6">
+    <header className="flex h-16 shrink-0 items-center justify-between gap-2 border-b border-border/70 bg-background/75 px-3 backdrop-blur-xl md:px-6">
       <div className="flex min-w-0 items-center gap-1 md:hidden">
         <Button
           type="button"
@@ -52,7 +52,7 @@ export function Topbar({
         >
           <Menu />
         </Button>
-        <div className="truncate text-base font-semibold">
+        <div className="truncate text-[15px] font-semibold tracking-tight">
           <SidebarLogo lightVersion={logoLightVersion} darkVersion={logoDarkVersion} />
         </div>
       </div>
@@ -62,7 +62,7 @@ export function Topbar({
           side="left"
           className="w-[min(20rem,100vw)] gap-0 bg-sidebar p-0 sm:max-w-[20rem]"
         >
-          <div className="flex h-14 items-center gap-2 border-b px-5 pr-12 text-base font-semibold">
+          <div className="flex h-16 items-center gap-2.5 px-5 pr-12 text-[15px] font-semibold tracking-tight">
             <SheetTitle className="sr-only">Navigation</SheetTitle>
             <SidebarLogo lightVersion={logoLightVersion} darkVersion={logoDarkVersion} />
           </div>
@@ -71,13 +71,13 @@ export function Topbar({
       </Sheet>
 
       <div className="hidden flex-1 md:block" />
-      <div className="flex items-center gap-1 sm:gap-2">
+      <div className="flex items-center gap-1 sm:gap-1.5">
         <ThemeToggle />
         <DropdownMenu>
-          <DropdownMenuTrigger className="flex items-center gap-2 rounded-md px-1.5 py-1 hover:bg-accent">
-            <Avatar name={name} color={avatarColor} />
+          <DropdownMenuTrigger className="flex items-center gap-2.5 rounded-full px-1.5 py-1 hover:bg-accent">
+            <Avatar name={name} color={avatarColor} className="h-8 w-8 ring-2 ring-background" />
             <div className="hidden text-left sm:block">
-              <div className="text-sm font-medium leading-tight">{name}</div>
+              <div className="text-sm font-medium leading-tight tracking-tight">{name}</div>
               <div className="text-xs leading-tight text-muted-foreground">{email}</div>
             </div>
           </DropdownMenuTrigger>

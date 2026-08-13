@@ -13,7 +13,7 @@ export const metadata = {
 
 function CodeBlock({ children }: { children: string }) {
   return (
-    <pre className="overflow-x-auto rounded-lg border bg-muted px-4 py-3 text-xs">
+    <pre className="overflow-x-auto rounded-2xl border bg-muted px-4 py-3 text-xs">
       <code>{children}</code>
     </pre>
   );
@@ -38,9 +38,9 @@ export default async function ImportPage() {
   ]);
 
   return (
-    <div className="pb-10">
+    <div>
       <PageHeader title="Import from Jira" description="Bring your existing Jira Sales data into Bit Sentinel." />
-      <div className="grid gap-6 p-4 md:grid-cols-3 md:p-6">
+      <div className="page-body grid gap-6 pt-0 md:grid-cols-3">
         <div className="space-y-6 md:col-span-2">
           <Card className="border-warning/40">
             <CardHeader>

@@ -130,7 +130,7 @@ export default async function ClientDetailPage({ params }: ClientDetailPageProps
   });
 
   return (
-    <div className="pb-10">
+    <div>
       <PageHeader title={client.name} description={client.website ?? undefined}>
         <NewDealButton
           clientId={client.id}
@@ -190,7 +190,7 @@ export default async function ClientDetailPage({ params }: ClientDetailPageProps
         )}
       </PageHeader>
 
-      <div className="grid gap-6 p-4 md:grid-cols-3 md:p-6">
+      <div className="page-body grid gap-6 pt-0 md:grid-cols-3">
         <div className="space-y-6 md:col-span-1">
           <Card>
             <CardHeader>
@@ -307,7 +307,9 @@ export default async function ClientDetailPage({ params }: ClientDetailPageProps
                   </div>
                 </Link>
               ))}
-              {client.deals.length === 0 && <p className="text-sm text-muted-foreground">No deals yet.</p>}
+              {client.deals.length === 0 && (
+                <p className="py-3 text-sm leading-relaxed text-muted-foreground">No deals yet for this client.</p>
+              )}
             </CardContent>
           </Card>
 

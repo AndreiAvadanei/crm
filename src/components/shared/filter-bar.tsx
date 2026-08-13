@@ -19,7 +19,7 @@ import type { Option } from "@/lib/filter-helpers";
 import { parseCsvIds } from "@/lib/filter-helpers";
 import { cn } from "@/lib/utils";
 
-const selectCls = "form-control h-9 cursor-pointer px-3";
+const selectCls = "form-control h-9 cursor-pointer rounded-full px-3.5";
 
 /** Merge-and-replace hook: updates only the given keys, preserving everything else. */
 export function useFilterUrl() {
@@ -112,10 +112,10 @@ export function FilterToggleChip({
       aria-pressed={active}
       onClick={() => setParams({ [param]: active ? null : value })}
       className={cn(
-        "inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-md border px-3 text-sm font-medium transition-colors [&_svg]:size-4",
+        "inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-full border px-3.5 text-sm font-medium transition-colors [&_svg]:size-4",
         active
-          ? "border-foreground/25 bg-accent text-foreground"
-          : "border-input bg-background text-foreground hover:bg-accent/60",
+          ? "border-primary/25 bg-primary/10 text-primary"
+          : "border-input bg-background/70 text-foreground hover:bg-accent/60",
         className
       )}
     >
@@ -147,8 +147,8 @@ export function FilterNumberRange({
   const commit = () => setParams({ [minParam]: min || null, [maxParam]: max || null });
 
   const inputCls = cn(
-    "form-control h-9 w-24 px-2.5",
-    active && "border-foreground/25 bg-accent"
+    "form-control h-9 w-24 rounded-full px-2.5",
+    active && "border-primary/25 bg-primary/8"
   );
 
   return (
@@ -192,8 +192,8 @@ export function FilterDateRange({
   const from = params.get(fromParam) ?? "";
   const to = params.get(toParam) ?? "";
   const inputCls = cn(
-    "form-control h-9 px-2.5",
-    (from || to) && "border-foreground/25 bg-accent"
+    "form-control h-9 rounded-full px-2.5",
+    (from || to) && "border-primary/25 bg-primary/8"
   );
   return (
     <div className="inline-flex items-center gap-1">
@@ -246,10 +246,10 @@ export function FilterTagMulti({
         <button
           type="button"
           className={cn(
-            "inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-md border px-3 text-sm font-medium transition-colors",
+            "inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-full border px-3.5 text-sm font-medium transition-colors",
             count
-              ? "border-foreground/25 bg-accent text-foreground"
-              : "border-input bg-background text-foreground hover:bg-accent/60",
+              ? "border-primary/25 bg-primary/10 text-primary"
+              : "border-input bg-background/70 text-foreground hover:bg-accent/60",
             className
           )}
         >
@@ -271,7 +271,7 @@ export function FilterTagMulti({
               key={t.id}
               type="button"
               onClick={() => toggle(t.id)}
-              className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm outline-none transition-colors hover:bg-accent"
+              className="flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left text-sm outline-none transition-colors hover:bg-accent"
             >
               <span className="flex h-4 w-4 items-center justify-center">
                 {on && <Check className="h-4 w-4 text-primary" />}
@@ -367,10 +367,10 @@ export function FilterPopover({
         <button
           type="button"
           className={cn(
-            "inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-3 text-sm font-medium transition-colors [&_svg]:size-4",
+            "inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-3.5 text-sm font-medium transition-colors [&_svg]:size-4",
             activeCount > 0
-              ? "border-foreground/25 bg-accent text-foreground"
-              : "border-input bg-background text-foreground hover:bg-accent/60",
+              ? "border-primary/25 bg-primary/10 text-primary"
+              : "border-input bg-background/70 text-foreground hover:bg-accent/60",
             className
           )}
         >

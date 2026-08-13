@@ -2,7 +2,8 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { CheckCircle2, Loader2, X } from "lucide-react";
+import { CheckCircle2, CheckSquare, Loader2, X } from "lucide-react";
+import { EmptyState } from "@/components/shared/empty-state";
 import { bulkCompleteTasksAction } from "@/server/quick-actions";
 import { TaskItem } from "@/components/tasks/task-item";
 import { TaskSheet } from "@/components/tasks/task-sheet";
@@ -145,7 +146,7 @@ export function TasksBoard({
   return (
     <div>
       {/* Toolbar: backend search + filters + add task on one line (select-all lives per section) */}
-      <div className="flex flex-wrap items-center gap-2 px-4 pt-4 md:px-6">
+      <div className="page-body flex flex-wrap items-center gap-2 pb-0">
         <SearchInput
           placeholder="Search tasks, deals, assignees…"
           wrapperClassName="min-w-0 flex-1 sm:max-w-sm"
@@ -159,7 +160,7 @@ export function TasksBoard({
 
       {/* Sticky bulk action bar */}
       {selected.size > 0 && (
-        <div className="sticky top-2 z-10 mx-4 mt-3 flex items-center justify-between gap-3 rounded-lg border bg-card px-3 py-2 shadow-sm md:mx-6">
+        <div className="sticky top-2 z-10 mx-5 mt-3 flex items-center justify-between gap-3 rounded-full border border-border/80 bg-card/95 px-4 py-2 shadow-[var(--shadow-sm)] backdrop-blur-xl md:mx-8">
           <span className="text-sm font-medium">{selected.size} selected</span>
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="sm" onClick={clearSelection} disabled={pending}>
@@ -173,7 +174,7 @@ export function TasksBoard({
         </div>
       )}
 
-      <div className="grid gap-6 p-4 md:grid-cols-2 md:p-6">
+      <div className="page-body grid gap-6 md:grid-cols-2">
         {sections.map((section) => {
           const sectionIds = section.rows.map((t) => t.id);
           const selectedCount = sectionIds.filter((id) => selected.has(id)).length;
@@ -215,9 +216,12 @@ export function TasksBoard({
                 />
               ))}
               {section.rows.length === 0 && (
-                <p className="text-sm text-muted-foreground">
-                  {q ? "No matching tasks." : section.empty}
-                </p>
+                <EmptyState
+                  icon={CheckSquare}
+                  title={q ? "No matching tasks" : section.empty}
+                  description={q ? "Try a different search or clear filters." : undefined}
+                  className="py-10"
+                />
               )}
               {section.total > pageSize && (
                 <Pagination

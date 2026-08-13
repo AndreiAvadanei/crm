@@ -69,12 +69,12 @@ export function DashboardFilters({
 
       <div className="flex flex-col gap-1">
         <label className="text-xs font-medium text-muted-foreground">Scope</label>
-        <div className="inline-flex h-9 rounded-md border p-0.5">
+        <div className="segment-track h-9">
           <button
             type="button"
             onClick={() => setParam("active", null)}
             className={cn(
-              "rounded px-3 text-xs font-medium transition-colors",
+              "rounded-full px-3 text-xs font-medium transition-colors",
               !active ? "segment-active" : "segment-inactive"
             )}
           >
@@ -84,7 +84,7 @@ export function DashboardFilters({
             type="button"
             onClick={() => setParam("active", "1")}
             className={cn(
-              "rounded px-3 text-xs font-medium transition-colors",
+              "rounded-full px-3 text-xs font-medium transition-colors",
               active ? "segment-active" : "segment-inactive"
             )}
           >
@@ -126,7 +126,7 @@ export function DashboardFilters({
               p.delete("seller");
             })
           }
-          className="h-9 rounded-md px-3 text-xs font-medium text-muted-foreground hover:text-foreground"
+          className="h-9 rounded-full px-3 text-xs font-medium text-muted-foreground hover:text-foreground"
         >
           Reset
         </button>
@@ -136,12 +136,12 @@ export function DashboardFilters({
         <div className="ml-auto flex items-end gap-3">
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-muted-foreground">Compare</label>
-            <div className="inline-flex h-9 rounded-md border p-0.5">
+            <div className="segment-track h-9">
               <button
                 type="button"
                 onClick={() => setParam("cmp", null)}
                 className={cn(
-                  "rounded px-3 text-xs font-medium transition-colors",
+                  "rounded-full px-3 text-xs font-medium transition-colors",
                   !cmp ? "segment-active" : "segment-inactive"
                 )}
               >
@@ -151,7 +151,7 @@ export function DashboardFilters({
                 type="button"
                 onClick={() => setParam("cmp", "1")}
                 className={cn(
-                  "rounded px-3 text-xs font-medium transition-colors",
+                  "rounded-full px-3 text-xs font-medium transition-colors",
                   cmp ? "segment-active" : "segment-inactive"
                 )}
               >

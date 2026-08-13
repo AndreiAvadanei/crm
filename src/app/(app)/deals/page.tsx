@@ -230,7 +230,7 @@ export default async function DealsPage({
         />
       </PageHeader>
 
-      <div className="px-4 py-4 md:px-6">
+      <div className="page-body py-4">
         <DealsToolbar
           owners={owners}
           tags={tags}
@@ -261,7 +261,7 @@ export default async function DealsPage({
           />
         </div>
       ) : (
-        <div className="px-4 pb-6 md:px-6">
+        <div className="page-body pt-0">
           <DealsTable
             deals={dealRows}
             stages={stages.map((s) => ({ id: s.id, name: s.name, color: s.color, phase: s.phase }))}

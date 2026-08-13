@@ -27,7 +27,7 @@ export default async function UsersAdminPage() {
   ]);
 
   return (
-    <div className="pb-10">
+    <div>
       <PageHeader title="Users" description="Manage sales users, admins, access and onboarding.">
         <UserFormDialog
           trigger={
@@ -38,8 +38,8 @@ export default async function UsersAdminPage() {
         />
       </PageHeader>
 
-      <div className="p-4 md:p-6">
-        <div className="rounded-lg border bg-card">
+      <div className="page-body pt-0">
+        <div className="surface-panel">
           <Table>
             <TableHeader>
               <TableRow>

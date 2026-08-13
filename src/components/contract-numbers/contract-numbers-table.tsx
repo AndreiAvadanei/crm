@@ -1,7 +1,8 @@
 "use client";
 
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
-import { Pencil, Lock, ArrowUp, ArrowDown, ChevronsUpDown } from "lucide-react";
+import { Pencil, Lock, ArrowUp, ArrowDown, ChevronsUpDown, FileSignature } from "lucide-react";
+import { TableEmpty } from "@/components/shared/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -78,7 +79,7 @@ export function ContractNumbersTable({
 }) {
   const now = Date.now();
   return (
-    <div className="rounded-lg border bg-card">
+    <div className="surface-panel">
       <Table>
         <TableHeader>
           <TableRow>
@@ -157,11 +158,12 @@ export function ContractNumbersTable({
             );
           })}
           {contractNumbers.length === 0 && (
-            <TableRow>
-              <TableCell colSpan={9} className="py-10 text-center text-sm text-muted-foreground">
-                No contract numbers found.
-              </TableCell>
-            </TableRow>
+            <TableEmpty
+              colSpan={9}
+              icon={FileSignature}
+              title="No contract numbers found"
+              description="Try another search or filter, or create a new contract number."
+            />
           )}
         </TableBody>
       </Table>

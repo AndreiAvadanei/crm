@@ -70,7 +70,7 @@ export default async function SettingsPage() {
   return (
     <div>
       <PageHeader title="Settings" description="Workspace-wide defaults and automation." />
-      <div className="grid items-start gap-6 p-4 md:grid-cols-2 md:p-6">
+      <div className="page-body grid items-start gap-6 pt-0 md:grid-cols-2">
         <Card>
           <CardHeader>
             <CardTitle>Deal assignment</CardTitle>
